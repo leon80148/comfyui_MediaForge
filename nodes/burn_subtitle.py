@@ -1,9 +1,10 @@
 import os
 
 from ..utils.color import hex_to_ass_color
+from ..utils.encoder import build_encoder_args, get_available_codecs
 from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, run_ffmpeg
 from ..utils.output_path import resolve_output_path
-from ..utils.video_io import encode_tensor_to_tempfile
+from ..utils.video_io import encode_tensor_to_tempfile, write_audio_dict_to_wav
 
 
 # Plugin root = nodes/.. — used to locate the font/ subdirectory
@@ -77,6 +78,10 @@ class MF_BurnSubtitle:
         font_choices = fonts or [_NO_FONTS_PLACEHOLDER]
         # msjh.ttc = Microsoft JhengHei、常用中文字幕字型；有就帶為預設
         default_font = "msjh.ttc" if "msjh.ttc" in fonts else font_choices[0]
+        # Encoder catalog 與 SaveVideoFrames/ComposeFinalize 共用，NVENC variants 視 ffmpeg
+        # capability 動態加入；prores_ks 雖在 list 內但走 .mp4 容器會 mux fail — caller 自己決定。
+        codec_map = get_available_codecs()
+        codec_choices = list(codec_map.keys())
         return {
             "required": {
                 # === 影片來源（最頂、最先設定）===
@@ -89,6 +94,17 @@ class MF_BurnSubtitle:
                 # filename_prefix 是 ComfyUI SaveImage 慣例：每次跑 workflow 自動接 _00001/_00002...，
                 # 不會 silently 覆蓋舊輸出。子目錄 OK，如 "MediaForge/subtitled" → output/MediaForge/subtitled_00001.mp4
                 "filename_prefix": ("STRING", {"default": "MediaForge/subtitled"}),
+                # === 編碼控制（P1-1）===
+                # 跟 SaveVideoFrames / ComposeFinalize 共用 encoder catalog；
+                # 預設 libx264 / crf 18 / medium = 視覺無損 (~CRF 18) + 合理速度。
+                # NVENC 可用時自動進 dropdown — 對長片可大幅加速。
+                "codec": (codec_choices, {"default": "h264 (libx264)"}),
+                "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
+                "preset": (
+                    ["ultrafast", "superfast", "veryfast", "faster", "fast",
+                     "medium", "slow", "slower", "veryslow"],
+                    {"default": "medium"},
+                ),
 
                 # === 字型（user-prioritized，移到 styling block 開頭） ===
                 "font": (font_choices, {"default": default_font}),
@@ -102,6 +118,9 @@ class MF_BurnSubtitle:
                 "outline_color_hex": ("STRING", {"default": "#000000"}),
                 "outline_width": ("INT", {"default": 2, "min": 0, "max": 10}),
                 "shadow_depth": ("INT", {"default": 1, "min": 0, "max": 10}),
+                # ASS BorderStyle 規格：1 = outline+drop shadow，3 = opaque box。
+                # 值 2 在 ASS spec 不存在 → step=2 讓 INT widget 只能選 1 或 3，避免
+                # 使用者誤填 2 跑出 libass 警告。預設 1 = 透明描邊（最常見字幕樣式）。
                 "border_style": ("INT", {"default": 1, "min": 1, "max": 3, "step": 2}),
                 "back_color_hex": ("STRING", {"default": "#000000"}),
 
@@ -127,7 +146,9 @@ class MF_BurnSubtitle:
     FUNCTION = "burn"
     CATEGORY = "MediaForge/Subtitle"
 
-    def burn(self, video_path, srt_path, filename_prefix, font, font_size,
+    def burn(self, video_path, srt_path, filename_prefix,
+             codec, crf, preset,
+             font, font_size,
              font_color_hex, bold, italic, letter_spacing,
              outline_color_hex, outline_width, shadow_depth, border_style, back_color_hex,
              alignment, margin_v, margin_l, margin_r,
@@ -183,8 +204,10 @@ class MF_BurnSubtitle:
         )
 
         cleanup_tmp = None
+        cleanup_audio_tmp = None
         try:
-            # Dual-input dispatch：frames 接了 → 寫 temp mp4；沒接 → 用 video_path
+            # Dual-input dispatch：frames 接了 → 寫 temp mp4 (encode_tensor_to_tempfile 已
+            # 處理 audio mux)；沒接 → 用 video_path，audio dict (若有接) 需在這層額外 mux。
             if frames is not None:
                 source_path = encode_tensor_to_tempfile(frames, fps=tensor_fps, audio=audio)
                 cleanup_tmp = source_path
@@ -205,17 +228,34 @@ class MF_BurnSubtitle:
             vf_arg = ":".join(vf_parts)
 
             command = ["ffmpeg", "-y", "-i", source_path]
+
+            # Path mode + 使用者明確接了 audio dict → 走 second `-i` mux，獨立 audio 蓋過
+            # source 內嵌音軌。為什麼要這個分支：path mode 之前完全沒讀 audio 參數，使用者
+            # 把 video-only 上游 (e.g. LoopVideo with keep_audio=False) 接 video_path、
+            # 另接音樂到 audio pin，期待節點 mux — 實際是 silently 丟掉 audio。
+            if frames is None and audio is not None:
+                audio_wav = write_audio_dict_to_wav(audio)
+                cleanup_audio_tmp = audio_wav
+                command.extend(["-i", audio_wav])
+                audio_map = ["-map", "0:v", "-map", "1:a"]
+            else:
+                # 沒接 audio dict → 沿用 input 0 自身音軌 (若有)；`?` 讓 source 無音軌不 raise
+                audio_map = ["-map", "0:v", "-map", "0:a?"]
+
             if target_fps > 0:
                 command.extend(["-r", str(target_fps)])
-            # 顯式 -map 0:v -map 0:a? 鎖住 input 0 的 video + audio stream，
-            # 不依賴 ffmpeg 的 default stream selection — 後者在某些 filter graph /
-            # 容器組合下會 silently drop 非 selected stream type，使 -c:a aac 變成
-            # no-op、輸出沒有音軌。`?` 讓「source 沒有 audio」(純檔案路徑 + 沒接 audio
-            # 的情境) 不會 raise，仍能正常輸出純影像。
+            # 顯式 -map 鎖 stream，不依賴 ffmpeg 的 default stream selection — 後者在某些
+            # filter graph / 容器組合下會 silently drop 非 selected stream type，使 -c:a aac
+            # 變成 no-op、輸出沒有音軌。
             # R10 P2 fix：`-c:a copy` 跨容器 (e.g., MKV/WebM → MP4) mux fail，統一轉 AAC
+            # P1-1：codec / crf / preset 共用 encoder builder（含 NVENC 自動切到 -rc vbr -cq）
+            codec_map = get_available_codecs()
+            codec_id, default_pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+            command.extend(audio_map)
+            command.extend(["-vf", vf_arg])
+            command.extend(build_encoder_args(codec_id, crf=crf, preset=preset))
             command.extend([
-                "-map", "0:v", "-map", "0:a?",
-                "-vf", vf_arg,
+                "-pix_fmt", default_pix_fmt,
                 "-c:a", "aac", "-b:a", "192k",
                 output_path,
             ])
@@ -223,11 +263,12 @@ class MF_BurnSubtitle:
             if not run_ffmpeg(command, tag="Burn Subtitle"):
                 raise RuntimeError("[Burn Subtitle] FFmpeg 燒字幕失敗，請查看上方 stderr 輸出。")
         finally:
-            if cleanup_tmp:
-                try:
-                    os.unlink(cleanup_tmp)
-                except OSError:
-                    pass
+            for tmp in (cleanup_tmp, cleanup_audio_tmp):
+                if tmp:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
 
         print(f"[Burn Subtitle] 輸出成功: {output_path}")
         return (output_path,)

@@ -277,11 +277,14 @@ def encode_tensor_to_video(
     return output_path
 
 
-def _audio_dict_to_pipe_args(audio_dict, cmd):
-    """Validate AUDIO dict and append a second `-i <tmpfile>` to cmd; returns tmp path for cleanup.
+def write_audio_dict_to_wav(audio_dict):
+    """Validate AUDIO dict and write a temp 16-bit PCM .wav; returns the temp path.
+
+    Caller decides how to feed the file to ffmpeg (e.g. `-i tmp.wav` for muxing)
+    and is responsible for `os.unlink()` in a finally block.
 
     為什麼用 tmpfile 不用 second pipe — FFmpeg subprocess.Popen 只能餵一個 stdin；
-    要同時 inject video raw + audio raw 得用 named pipe (Unix only) 或 tmp wav。tmp wav 跨平台、簡單可靠。
+    要同時 inject 兩路 raw stream 得用 named pipe (Unix only) 或 tmp wav。tmp wav 跨平台、簡單可靠。
     """
     import os
     import tempfile
@@ -311,6 +314,16 @@ def _audio_dict_to_pipe_args(audio_dict, cmd):
         w.setframerate(sr)
         w.writeframes(pcm16.tobytes())
 
+    return tmp_path
+
+
+def _audio_dict_to_pipe_args(audio_dict, cmd):
+    """Thin wrapper: write AUDIO dict to temp wav + append `-i <tmpfile>` to cmd.
+
+    Kept for encode_tensor_to_video's pipe-mux path. New callers that want to
+    build their own ffmpeg cmd should use write_audio_dict_to_wav() directly.
+    """
+    tmp_path = write_audio_dict_to_wav(audio_dict)
     cmd.extend(["-i", tmp_path])
     return tmp_path
 
