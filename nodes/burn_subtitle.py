@@ -207,8 +207,14 @@ class MF_BurnSubtitle:
             command = ["ffmpeg", "-y", "-i", source_path]
             if target_fps > 0:
                 command.extend(["-r", str(target_fps)])
+            # 顯式 -map 0:v -map 0:a? 鎖住 input 0 的 video + audio stream，
+            # 不依賴 ffmpeg 的 default stream selection — 後者在某些 filter graph /
+            # 容器組合下會 silently drop 非 selected stream type，使 -c:a aac 變成
+            # no-op、輸出沒有音軌。`?` 讓「source 沒有 audio」(純檔案路徑 + 沒接 audio
+            # 的情境) 不會 raise，仍能正常輸出純影像。
             # R10 P2 fix：`-c:a copy` 跨容器 (e.g., MKV/WebM → MP4) mux fail，統一轉 AAC
             command.extend([
+                "-map", "0:v", "-map", "0:a?",
                 "-vf", vf_arg,
                 "-c:a", "aac", "-b:a", "192k",
                 output_path,
