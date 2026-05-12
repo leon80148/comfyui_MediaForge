@@ -6,7 +6,7 @@ import os
 
 from ..utils.compose_ir import ComposeIR
 from ..utils.ffmpeg import ensure_ffmpeg, probe
-from ..utils.video_io import encode_tensor_to_tempfile
+from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
 
 
 class MF_ComposeStart:
@@ -42,13 +42,19 @@ class MF_ComposeStart:
         # ComposeFinalize 在 cleanup_paths loop 裡會自動 unlink（不需要本節點 try/finally）。
         # 為什麼不能本地 finally：temp 檔要活到下游 Finalize 跑完才能刪。
         tmp_source = None
+        # Dual-input dispatch（與 BurnSubtitle / LoopVideo / TrimByRanges 對稱）：
+        # path mode + audio dict 同時接時必須 pre-mux，否則 audio 在 ComposeFinalize 端 silent drop
         if frames is not None:
             source_path = encode_tensor_to_tempfile(frames, fps=fps, audio=audio)
             tmp_source = source_path
         else:
             if not os.path.exists(video_path):
                 raise FileNotFoundError(f"[Compose Start] 找不到影片：{video_path}")
-            source_path = video_path
+            if audio is not None:
+                source_path = mux_path_with_audio_dict(video_path, audio)
+                tmp_source = source_path
+            else:
+                source_path = video_path
 
         info = probe(source_path)
         has_audio = bool(info and any(s.get("codec_type") == "audio" for s in info.get("streams", [])))

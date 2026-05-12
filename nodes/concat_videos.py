@@ -72,6 +72,16 @@ class MF_ConcatVideos:
                 # tensor 進來 → 寫 temp mp4 prepend 成 path[0]
                 cleanup_tmp = encode_tensor_to_tempfile(frames, fps=tensor_fps, audio=audio)
                 paths = [cleanup_tmp] + paths
+            elif audio is not None:
+                # path mode + audio dict 的語意在 multi-path concat 下是 ambiguous：
+                # 該 audio 要接哪一段 clip？所有 clip？單獨 prepend 成新 audio clip？
+                # 沒有明顯正確答案 — 印 warn 提示使用者要嘛走 frames pipeline、要嘛
+                # 上游自己先把 audio mux 進對應的 video 檔再接給 ConcatVideos
+                print(
+                    "[Concat Videos] 注意：path mode 下 audio input 語意不明（接到哪段？），"
+                    "已忽略。若要 mux 獨立 audio，請走 frames+audio tensor pipeline、"
+                    "或上游先 mux 好 audio 再傳檔案路徑進來。"
+                )
             if len(paths) < 2:
                 raise ValueError(
                     f"[Concat Videos] 至少需要 2 個輸入，但只有 {len(paths)} 個"

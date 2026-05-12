@@ -317,6 +317,58 @@ def write_audio_dict_to_wav(audio_dict):
     return tmp_path
 
 
+def mux_path_with_audio_dict(video_path, audio_dict):
+    """Pre-mux 既有 video 檔案 + AUDIO dict → 一個 temp .mp4。
+
+    用途：dual-input file-consumer node 在 path mode 同時收到 `video_path` (檔案) 跟
+    `audio` (AUDIO dict) 時，原本 path-mode 分支完全忽略 audio dict → silent drop。
+    這個 helper 把兩者合成 temp.mp4，下游 filter graph 仍只需讀 `[0:v]` + `[0:a]`，
+    幾乎不用改動 — 跟 tensor mode 走 encode_tensor_to_tempfile 後的 source_path 對稱。
+
+    為什麼 `-c:v copy` + AAC encode audio：video stream container-mux 即可、零 transcode
+    開銷；audio 從 PCM WAV 一次轉 AAC 也很快。下游節點之後跑自己的 filter graph 才會
+    re-encode video — 這層的 video copy 是純 transit。
+
+    Caller 必須在 finally 裡 `os.unlink()` 回傳的 path（同 encode_tensor_to_tempfile 的契約）。
+    """
+    import os
+    import subprocess
+    import tempfile
+
+    from .ffmpeg import resolve_ffmpeg_cmd
+
+    wav_path = write_audio_dict_to_wav(audio_dict)
+    fd, tmp_mp4 = tempfile.mkstemp(suffix=".mp4", prefix="mf_path_audio_mux_")
+    os.close(fd)
+    try:
+        cmd = resolve_ffmpeg_cmd([
+            "ffmpeg", "-y", "-v", "error",
+            "-i", video_path,    # input 0：video (可能含 audio，但會被忽略)
+            "-i", wav_path,      # input 1：dict-supplied audio
+            "-map", "0:v",       # 拿 input 0 的 video
+            "-map", "1:a",       # 用 input 1 的 audio，丟掉 input 0 自帶的 audio (若有)
+            "-c:v", "copy",      # 零 transcode 開銷
+            "-c:a", "aac", "-b:a", "192k",
+            tmp_mp4,
+        ])
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+        if r.returncode != 0:
+            try:
+                os.unlink(tmp_mp4)
+            except OSError:
+                pass
+            tail = "\n".join((r.stderr or "").strip().splitlines()[-30:])
+            raise RuntimeError(
+                f"[MediaForge.video_io] path + audio dict 預合成失敗 (exit {r.returncode}):\n{tail}"
+            )
+    finally:
+        try:
+            os.unlink(wav_path)
+        except OSError:
+            pass
+    return tmp_mp4
+
+
 def _audio_dict_to_pipe_args(audio_dict, cmd):
     """Thin wrapper: write AUDIO dict to temp wav + append `-i <tmpfile>` to cmd.
 

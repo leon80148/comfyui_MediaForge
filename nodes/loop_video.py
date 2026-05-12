@@ -3,7 +3,7 @@ import os
 
 from ..utils.ffmpeg import ensure_ffmpeg, probe, probe_video_duration, run_ffmpeg
 from ..utils.output_path import resolve_output_path
-from ..utils.video_io import encode_tensor_to_tempfile
+from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
 
 
 # loop filter `size` 是「buffered frames 上限」(FFmpeg INT16_MAX 為 32767)；
@@ -78,13 +78,21 @@ class MF_LoopVideo:
 
         cleanup_tmp = None
         try:
+            # Dual-input dispatch（與 BurnSubtitle 的 source resolve 對稱）：
+            # 1. frames 接了 → encode_tensor_to_tempfile 已把 audio 一併 mux 進 temp.mp4
+            # 2. path mode + audio dict 接了 → pre-mux 兩者 (修 dangling-input bug)
+            # 3. 純 path mode → 沿用 source 自帶 audio (或無 audio)
             if frames is not None:
                 source_path = encode_tensor_to_tempfile(frames, fps=fps, audio=audio)
                 cleanup_tmp = source_path
             else:
                 if not os.path.exists(video_path):
                     raise FileNotFoundError(f"[Loop Video] 找不到影片：{video_path}")
-                source_path = video_path
+                if audio is not None:
+                    source_path = mux_path_with_audio_dict(video_path, audio)
+                    cleanup_tmp = source_path
+                else:
+                    source_path = video_path
 
             source_dur = probe_video_duration(source_path)
             if source_dur is None or source_dur <= 0:

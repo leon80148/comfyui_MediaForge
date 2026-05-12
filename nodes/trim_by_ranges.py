@@ -9,7 +9,7 @@ import os
 
 from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, probe, probe_video_duration, run_ffmpeg
 from ..utils.output_path import resolve_output_path
-from ..utils.video_io import encode_tensor_to_tempfile
+from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
 
 
 class MF_TrimByRanges:
@@ -51,13 +51,19 @@ class MF_TrimByRanges:
 
         cleanup_tmp = None
         try:
+            # Dual-input dispatch（與 BurnSubtitle / LoopVideo 的 source resolve 對稱）：
+            # path mode + audio dict 同時接時要 pre-mux，否則 audio 會 silently drop
             if frames is not None:
                 source_path = encode_tensor_to_tempfile(frames, fps=fps, audio=audio)
                 cleanup_tmp = source_path
             else:
                 if not os.path.exists(video_path):
                     raise FileNotFoundError(f"[Trim By Ranges] 找不到影片：{video_path}")
-                source_path = video_path
+                if audio is not None:
+                    source_path = mux_path_with_audio_dict(video_path, audio)
+                    cleanup_tmp = source_path
+                else:
+                    source_path = video_path
 
             # R7 P1 fix：連線到 MF_DetectSilence 的 ranges=[] (沒偵到靜音) 不能 fallback 到
             # ranges_json (那是 disconnect 時的手填預設)。用 `is not None` 區分「連了空 list」
