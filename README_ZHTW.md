@@ -10,7 +10,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## 亮點
 
-- 🎞️ **17 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Compose / AI（Audio / Net / Image 規劃中）
+- 🎞️ **18 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Compose / AI（Audio / Net / Image 規劃中）
 - 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
 - 🧪 **廣播級編碼控制** — H.264 / HEVC / AV1 / ProRes，支援 CRF / bitrate / target-size 三種編碼模式
 - 🎚️ **單次編碼、多層 overlay 的 Compose pipeline** — `filter_complex` graph 編譯器，N 層 overlay 仍只走一次 re-encode
@@ -104,11 +104,15 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 **結論**：兩個都裝。VHS 用於快速 IMAGE batch workflow；MediaForge 用於廣播級編碼、檔案級操作、Compose pipeline、AI 字幕。
 
-## 節點清單（17）
+## 節點清單（18）
 
 > **Dual-input 註記**：下列標 **(dual-input)** 的 node 同時接受兩種 input：(a) 既有的 `video_path` STRING 欄位，(b) 新加的 `frames` + `fps` + `audio` 三件套 optional 輸入。連 tensor 時 MediaForge 內部會寫一個 temp .mp4 給 FFmpeg 吃。Path 模式仍是預設的 fast path — MediaForge 之間串接時不會被迫多走一次無謂的 decode/encode。
 
 ### `MediaForge/Subtitle`
+
+#### 🀄 Convert Chinese (`MF_ConvertChinese`)
+
+OpenCC 簡繁中文轉換、對任意中文文字或 SRT 都通用。四個 profile：`s2twp`（簡→繁台灣詞庫，預設）/ `s2t`（簡→繁通用）/ `tw2sp`（繁台灣→簡）/ `t2s`（繁通用→簡）。三段式輸入：直接貼 `text` widget、wire 上游 STRING（如從 `MF_TranslateSubtitle` / `MF_WhisperTranscribe`）、或填 `input_path` 讀檔。`filename_prefix` 非空時自動 counter 寫到 `output/<prefix>_NNNNN.srt`（或 `.txt`，副檔名 auto-detect 看 `-->`）— 跟其他 file-producer 同 pattern。Lazy-import `opencc-python-reimplemented` — 安裝：`pip install opencc-python-reimplemented`。
 
 #### 🔥 Burn Subtitle (`MF_BurnSubtitle`) **(dual-input)**
 
@@ -268,6 +272,7 @@ comfyui_MediaForge/
 │   ├── compose_watermark.py    # MF_ComposeWatermark
 │   ├── compose_finalize.py     # MF_ComposeFinalize
 │   ├── concat_videos.py        # MF_ConcatVideos
+│   ├── convert_chinese.py      # MF_ConvertChinese  — OpenCC 簡繁轉換
 │   ├── detect_silence.py       # MF_DetectSilence
 │   ├── load_video_frames.py    # MF_LoadVideoFrames
 │   ├── loop_video.py           # MF_LoopVideo
@@ -281,6 +286,7 @@ comfyui_MediaForge/
 │   ├── color.py             # hex_to_ass_color：#RRGGBB → ASS BGR+alpha
 │   ├── compose_ir.py        # ComposeIR + compile_ir() + tmp_paths_to_cleanup hook
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
+│   ├── output_path.py       # resolve_output_path：filename_prefix + ext → counter path
 │   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO + encode_tensor_to_tempfile
 ├── font/                    # 丟 .ttf / .otf 進來給 MF_BurnSubtitle 的 font_file dropdown
 ├── web/

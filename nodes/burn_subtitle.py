@@ -2,6 +2,7 @@ import os
 
 from ..utils.color import hex_to_ass_color
 from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, run_ffmpeg
+from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile
 
 
@@ -69,48 +70,6 @@ def _read_ttf_family_name(ttf_path):
     return None
 
 
-def _resolve_output_path(filename_prefix):
-    """filename_prefix → counter-incremented full path, ComfyUI-style 但檔名乾淨。
-
-    為什麼不讓使用者直接填 output_path：固定檔名每次跑 workflow 會 silently 覆蓋上次結果。
-    每次跑都產出新檔案：output/<prefix>_00001.mp4 → output/<prefix>_00002.mp4 → ...
-
-    為什麼不直接用 `folder_paths.get_save_image_path` 的回傳 counter：核心那個函式掃 existing
-    file 時用 `<name>_<digits>_*` pattern（**末尾必須有底線**）來判定 — 我們要的是乾淨檔名
-    `_00001.mp4`、不要 `_00001_.mp4`，所以掃不到既存檔、counter 永遠停在 1 → 覆蓋舊檔。
-    自己寫 regex 掃避開這個 convention mismatch。
-
-    prefix 可含子目錄 (e.g., "MediaForge/subtitled") — 自動建目錄。
-    使用者誤填副檔名 (如 "subtitled.mp4") 會被剝掉，避免 .mp4.mp4。
-    """
-    import re
-
-    import folder_paths
-
-    # 容錯：剝掉使用者可能誤加的副檔名
-    for ext in (".mp4", ".mov", ".mkv", ".webm", ".avi"):
-        if filename_prefix.lower().endswith(ext):
-            filename_prefix = filename_prefix[: -len(ext)]
-            break
-
-    # Split subfolder from filename (prefix 可能含 "/" 表子目錄)
-    output_dir = folder_paths.get_output_directory()
-    subfolder, filename = os.path.split(filename_prefix)
-    full_output_folder = os.path.join(output_dir, subfolder) if subfolder else output_dir
-    os.makedirs(full_output_folder, exist_ok=True)
-
-    # 掃 existing files matching `<filename>_<digits>.mp4` → next = max(digits)+1
-    pattern = re.compile(rf"^{re.escape(filename)}_(\d+)\.mp4$", re.IGNORECASE)
-    max_n = 0
-    for f in os.listdir(full_output_folder):
-        m = pattern.match(f)
-        if m:
-            max_n = max(max_n, int(m.group(1)))
-    counter = max_n + 1
-
-    return os.path.join(full_output_folder, f"{filename}_{counter:05d}.mp4")
-
-
 class MF_BurnSubtitle:
     @classmethod
     def INPUT_TYPES(s):
@@ -120,7 +79,11 @@ class MF_BurnSubtitle:
         default_font = "msjh.ttc" if "msjh.ttc" in fonts else font_choices[0]
         return {
             "required": {
-                # === 數據輸入 ===
+                # === 影片來源（最頂、最先設定）===
+                # ComfyUI 渲染順序：required 全部 → optional 全部。video_path 放 required position 1
+                # 才會在 node body 最頂端。連 frames pin 時 web/dual_input_lock.js 自動把它 hide。
+                "video_path": ("STRING", {"default": "input/sample.mp4"}),
+                # === 字幕來源 ===
                 "srt_path": ("STRING", {"default": "input/sample.srt"}),
                 # === 輸出設定 ===
                 # filename_prefix 是 ComfyUI SaveImage 慣例：每次跑 workflow 自動接 _00001/_00002...，
@@ -149,8 +112,7 @@ class MF_BurnSubtitle:
                 "margin_r": ("INT", {"default": 50, "min": 0, "max": 1000}),
             },
             "optional": {
-                # Dual-input: video_path 跟 frames 二選一；都沒設就用 video_path 預設、找不到再 raise
-                "video_path": ("STRING", {"default": "input/sample.mp4"}),
+                # Tensor pipeline (in-memory chain)：連線 frames 時 web/dual_input_lock.js 會 hide 上面的 video_path
                 "frames": ("IMAGE",),
                 "tensor_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "audio": ("AUDIO",),
@@ -165,11 +127,11 @@ class MF_BurnSubtitle:
     FUNCTION = "burn"
     CATEGORY = "MediaForge/Subtitle"
 
-    def burn(self, srt_path, filename_prefix, font, font_size,
+    def burn(self, video_path, srt_path, filename_prefix, font, font_size,
              font_color_hex, bold, italic, letter_spacing,
              outline_color_hex, outline_width, shadow_depth, border_style, back_color_hex,
              alignment, margin_v, margin_l, margin_r,
-             video_path="input/sample.mp4", frames=None, tensor_fps=30.0, audio=None,
+             frames=None, tensor_fps=30.0, audio=None,
              target_fps=0):
         if not ensure_ffmpeg():
             raise RuntimeError("[Burn Subtitle] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
@@ -201,7 +163,7 @@ class MF_BurnSubtitle:
             )
 
         # 解析輸出路徑 — auto-counter 不會覆蓋舊檔
-        output_path = _resolve_output_path(filename_prefix)
+        output_path = resolve_output_path(filename_prefix, ".mp4")
 
         # ASS Style 組裝
         primary = hex_to_ass_color(font_color_hex)

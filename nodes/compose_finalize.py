@@ -3,8 +3,8 @@ import os
 
 from ..utils.compose_ir import ComposeIR, compile_ir, write_filter_script_if_long
 from ..utils.ffmpeg import ensure_ffmpeg, probe_video_duration, run_ffmpeg
+from ..utils.output_path import resolve_output_path
 from ..utils.video_io import svtav1_preset_from_name
-from .save_video_frames import _ensure_compatible_container
 
 
 class MF_ComposeFinalize:
@@ -13,7 +13,7 @@ class MF_ComposeFinalize:
         return {
             "required": {
                 "compose": ("MF_COMPOSE",),
-                "output_path": ("STRING", {"default": "output/composed.mp4"}),
+                "filename_prefix": ("STRING", {"default": "MediaForge/composed"}),
                 "codec": (["libx264", "libx265", "libsvtav1", "prores_ks"], {"default": "libx264"}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
                 "preset": (
@@ -31,7 +31,7 @@ class MF_ComposeFinalize:
     FUNCTION = "finalize"
     CATEGORY = "MediaForge/Compose"
 
-    def finalize(self, compose, output_path, codec, crf, preset, keep_audio):
+    def finalize(self, compose, filename_prefix, codec, crf, preset, keep_audio):
         if not ensure_ffmpeg():
             raise RuntimeError("[Compose Finalize] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
         if not isinstance(compose, ComposeIR):
@@ -41,12 +41,11 @@ class MF_ComposeFinalize:
         if not compose.inputs:
             raise RuntimeError("[Compose Finalize] IR 沒有任何 input — 是否漏接 MF_ComposeStart？")
 
-        # R8 P2 fix：prores_ks 不支援 .mp4 → 自動修正為 .mov
-        output_path = _ensure_compatible_container(output_path, codec, tag="Compose Finalize")
-
-        out_dir = os.path.dirname(output_path)
-        if out_dir and not os.path.exists(out_dir):
-            os.makedirs(out_dir, exist_ok=True)
+        # Codec-aware container：prores_ks 必須走 .mov；其餘走 .mp4
+        # (取代舊版的 _ensure_compatible_container post-hoc 修正；現在 ext 從 prefix resolve
+        # 時就決定，counter 也按該 ext 算 max digit、不會跨 container 撞數)
+        ext = ".mov" if codec == "prores_ks" else ".mp4"
+        output_path = resolve_output_path(filename_prefix, ext)
 
         # IR 經 compile 會 mutate 內部 ops 的 depends_on（rewrite main_label → norm_label），
         # 為避免破壞下游可能 cache 住的 IR，先 clone。

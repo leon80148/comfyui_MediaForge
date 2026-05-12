@@ -8,6 +8,7 @@ import os
 import tempfile
 
 from ..utils.ffmpeg import ensure_ffmpeg, run_ffmpeg
+from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile
 
 
@@ -24,7 +25,7 @@ class MF_ConcatVideos:
                         "multiline": True,
                     },
                 ),
-                "output_path": ("STRING", {"default": "output/concat.mp4"}),
+                "filename_prefix": ("STRING", {"default": "MediaForge/concat"}),
                 # copy = 同 codec/同參數，秒接；transcode = 跨 codec / 加 transition
                 "mode": (["copy", "transcode"], {"default": "transcode"}),
                 # xfade duration (sec)；只在 mode=transcode 生效；0 = 純 cut
@@ -56,11 +57,13 @@ class MF_ConcatVideos:
     FUNCTION = "concat"
     CATEGORY = "MediaForge/Video"
 
-    def concat(self, video_paths, output_path, mode, transition_sec, transition_type,
+    def concat(self, video_paths, filename_prefix, mode, transition_sec, transition_type,
                fps, width, height, crf,
                frames=None, tensor_fps=30.0, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Concat Videos] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
+
+        output_path = resolve_output_path(filename_prefix, ".mp4")
 
         cleanup_tmp = None
         try:

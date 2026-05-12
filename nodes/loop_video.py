@@ -2,6 +2,7 @@ import math
 import os
 
 from ..utils.ffmpeg import ensure_ffmpeg, probe, probe_video_duration, run_ffmpeg
+from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile
 
 
@@ -42,7 +43,7 @@ class MF_LoopVideo:
         return {
             "required": {
                 "video_path": ("STRING", {"default": "input/sample.mp4"}),
-                "output_path": ("STRING", {"default": "output/looped.mp4"}),
+                "filename_prefix": ("STRING", {"default": "MediaForge/looped"}),
                 "target_duration_sec": ("FLOAT", {"default": 30.0, "min": 0.1, "max": 36000.0, "step": 0.1}),
                 "loop_mode": (["strict", "ping_pong", "crossfade"], {"default": "strict"}),
                 "crossfade_sec": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1}),
@@ -65,12 +66,15 @@ class MF_LoopVideo:
     FUNCTION = "loop"
     CATEGORY = "MediaForge/Video"
 
-    def loop(self, video_path, output_path, target_duration_sec, loop_mode,
+    def loop(self, video_path, filename_prefix, target_duration_sec, loop_mode,
              crossfade_sec, speed, reverse, keep_audio, audio_volume,
              frames=None, fps=30.0, audio=None):
 
         if not ensure_ffmpeg():
             raise RuntimeError("[Loop Video] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
+
+        # 解析輸出路徑 — auto-counter，避免覆蓋
+        output_path = resolve_output_path(filename_prefix, ".mp4")
 
         cleanup_tmp = None
         try:

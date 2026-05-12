@@ -6,6 +6,7 @@ v2.1 ROADMAP Phase 2 foundation 節點。
 import os
 
 from ..utils.ffmpeg import ensure_ffmpeg
+from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_video
 
 
@@ -27,7 +28,7 @@ class MF_SaveVideoFrames:
         return {
             "required": {
                 "frames": ("IMAGE",),
-                "output_path": ("STRING", {"default": "output/video.mp4"}),
+                "filename_prefix": ("STRING", {"default": "MediaForge/video"}),
                 "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "codec": (list(CODEC_MAP.keys()), {"default": "h264 (libx264)"}),
                 # CRF mode 為 v2.1 預設；bitrate>0 切到 bitrate mode；target_size_mb>0 切到 two-pass
@@ -53,7 +54,7 @@ class MF_SaveVideoFrames:
     FUNCTION = "save"
     CATEGORY = "MediaForge/Video"
 
-    def save(self, frames, output_path, fps, codec, encode_mode, crf, bitrate_kbps,
+    def save(self, frames, filename_prefix, fps, codec, encode_mode, crf, bitrate_kbps,
              target_size_mb, preset, pix_fmt_override, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Save Video Frames] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
@@ -76,13 +77,10 @@ class MF_SaveVideoFrames:
         codec_id, default_pix_fmt = CODEC_MAP[codec]
         pix_fmt = pix_fmt_override.strip() or default_pix_fmt
 
-        # R8 P2 fix：ProRes 不支援 MP4 容器，FFmpeg 在 encode 才會炸。事前驗證 + 自動修正 .mp4 → .mov
-        output_path = _ensure_compatible_container(output_path, codec_id, tag="Save Video Frames")
-
-        # 確保輸出目錄存在
-        out_dir = os.path.dirname(output_path)
-        if out_dir and not os.path.exists(out_dir):
-            os.makedirs(out_dir, exist_ok=True)
+        # Codec-aware container：prores_ks 必須走 .mov；其餘 .mp4
+        # (取代舊 _ensure_compatible_container 的 post-hoc 修正，現在 ext 從 prefix resolve 時就決定)
+        ext = ".mov" if codec_id == "prores_ks" else ".mp4"
+        output_path = resolve_output_path(filename_prefix, ext)
 
         if encode_mode == "target_size":
             # target_size 模式 = 從目標大小反推 bitrate。
@@ -125,30 +123,6 @@ class MF_SaveVideoFrames:
             preset=preset,
             extra_args=extra,
         )
-
-
-def _ensure_compatible_container(output_path, codec_id, tag="Save Video Frames"):
-    """Codec/container 相容性 guard。
-
-    某些 codec 不能進某些 container：
-    - prores_ks → MP4 不支援、應走 MOV
-    （R8 P2 finding；FFmpeg 在 encode time 才報錯、使用者體驗差）
-    """
-    incompatible_containers = {
-        "prores_ks": {".mp4", ".m4v"},
-    }
-    bad = incompatible_containers.get(codec_id)
-    if not bad:
-        return output_path
-    ext = os.path.splitext(output_path)[1].lower()
-    if ext in bad:
-        new_path = os.path.splitext(output_path)[0] + ".mov"
-        print(
-            f"[{tag}] 注意：{codec_id} codec 不支援 {ext} 容器，自動改為 .mov："
-            f"{output_path} → {new_path}"
-        )
-        return new_path
-    return output_path
 
 
 NODE_CLASS_MAPPINGS = {"MF_SaveVideoFrames": MF_SaveVideoFrames}

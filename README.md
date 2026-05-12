@@ -10,7 +10,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 
 ## Highlights
 
-- 🎞️ **17 nodes** across 6 categories — Subtitle / Video / Analysis / Compose / AI (+ Audio / Net / Image planned)
+- 🎞️ **18 nodes** across 6 categories — Subtitle / Video / Analysis / Compose / AI (+ Audio / Net / Image planned)
 - 🔗 **Dual-input bridge** — file-consumer nodes accept *either* a `video_path` string *or* an in-memory `IMAGE + AUDIO + fps` triplet, so MediaForge chains with VHS / AnimateDiff / any IMAGE-pipeline plugin without a SaveVideoFrames round-trip
 - 🧪 **Broadcast-grade codec control** — H.264 / HEVC / AV1 / ProRes with CRF / bitrate / target-size encode modes
 - 🎚️ **Single-encode multi-overlay Compose pipeline** — `filter_complex` graph compiler; lossless overlay stacking vs. N re-encodes
@@ -104,11 +104,15 @@ See [AI Provider Recipes](#ai-provider-recipes) below for copy-paste `base_url` 
 
 **TL;DR:** Install both. VHS for fast IMAGE-batch workflows; MediaForge for broadcast encoding, file-level ops, Compose pipeline, and AI-driven subtitle work.
 
-## Nodes (17)
+## Nodes (18)
 
 > **Dual-input note**: nodes marked **(dual-input)** below accept *either* a file path (existing `video_path` STRING widget) *or* an in-memory tensor (wire `frames` + `fps` + `audio` from VHS / AnimateDiff / `MF_LoadVideoFrames` / etc.). When tensor is wired, MediaForge writes a temp .mp4 internally and FFmpeg processes that. Path mode stays the default fast path — no quality loss when chaining MediaForge-to-MediaForge.
 
 ### `MediaForge/Subtitle`
+
+#### 🀄 Convert Chinese (`MF_ConvertChinese`)
+
+OpenCC simplified ↔ traditional Chinese conversion for any text or SRT. Four profiles (`s2twp` Taiwan-vocab default / `s2t` generic / `tw2sp` reverse / `t2s` reverse generic). Triple input shape: paste into `text` widget, wire upstream STRING, or read from `input_path`. Optional `filename_prefix` writes to `output/<prefix>_NNNNN.srt` (or `.txt`) with the same auto-counter pattern other producers use; extension auto-detected from `-->` presence in the converted text. Lazy-imports `opencc-python-reimplemented` — install with `pip install opencc-python-reimplemented`.
 
 #### 🔥 Burn Subtitle (`MF_BurnSubtitle`) **(dual-input)**
 
@@ -268,6 +272,7 @@ comfyui_MediaForge/
 │   ├── compose_watermark.py    # MF_ComposeWatermark
 │   ├── compose_finalize.py     # MF_ComposeFinalize
 │   ├── concat_videos.py        # MF_ConcatVideos
+│   ├── convert_chinese.py      # MF_ConvertChinese  — OpenCC simp↔trad
 │   ├── detect_silence.py       # MF_DetectSilence
 │   ├── load_video_frames.py    # MF_LoadVideoFrames
 │   ├── loop_video.py           # MF_LoopVideo
@@ -281,6 +286,7 @@ comfyui_MediaForge/
 │   ├── color.py             # hex_to_ass_color: #RRGGBB → ASS BGR+alpha
 │   ├── compose_ir.py        # ComposeIR + compile_ir() + tmp_paths_to_cleanup hook
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
+│   ├── output_path.py       # resolve_output_path: filename_prefix + ext → counter path
 │   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO + encode_tensor_to_tempfile
 ├── font/                    # drop .ttf / .otf here for MF_BurnSubtitle font_file dropdown
 ├── web/

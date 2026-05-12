@@ -8,6 +8,7 @@ import json
 import os
 
 from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, probe, probe_video_duration, run_ffmpeg
+from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile
 
 
@@ -17,7 +18,7 @@ class MF_TrimByRanges:
         return {
             "required": {
                 "video_path": ("STRING", {"default": "input/sample.mp4"}),
-                "output_path": ("STRING", {"default": "output/trimmed.mp4"}),
+                "filename_prefix": ("STRING", {"default": "MediaForge/trimmed"}),
                 "mode": (["keep", "remove"], {"default": "remove"}),
                 # 兩條 input path：(1) SILENCE_RANGES 連線；(2) 手寫 JSON fallback
                 "ranges_json": (
@@ -41,10 +42,12 @@ class MF_TrimByRanges:
     FUNCTION = "trim"
     CATEGORY = "MediaForge/Video"
 
-    def trim(self, video_path, output_path, mode, ranges_json, crossfade_sec, ranges=None,
+    def trim(self, video_path, filename_prefix, mode, ranges_json, crossfade_sec, ranges=None,
              frames=None, fps=30.0, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Trim By Ranges] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
+
+        output_path = resolve_output_path(filename_prefix, ".mp4")
 
         cleanup_tmp = None
         try:
