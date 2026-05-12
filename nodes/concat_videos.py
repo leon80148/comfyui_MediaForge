@@ -8,6 +8,7 @@ import os
 import tempfile
 
 from ..utils.ffmpeg import ensure_ffmpeg, run_ffmpeg
+from ..utils.video_io import encode_tensor_to_tempfile
 
 
 class MF_ConcatVideos:
@@ -39,6 +40,15 @@ class MF_ConcatVideos:
                 "height": ("INT", {"default": 1080, "min": 16, "max": 4320, "step": 2}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
             },
+            "optional": {
+                # In-memory chain: 連 frames 時把它寫成 temp mp4 作為「第一段」（path[0]），
+                # video_paths 內列的檔案 shift 到 path[1..N]。需要 ≥1 個 video_paths 條目組成 ≥2 段。
+                # tensor_fps 跟上面 required.fps 是不同概念：required.fps 是 transcode mode
+                # 輸出目標 fps；tensor_fps 是 tensor → temp mp4 寫入時的 fps。
+                "frames": ("IMAGE",),
+                "tensor_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
+                "audio": ("AUDIO",),
+            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -47,35 +57,51 @@ class MF_ConcatVideos:
     CATEGORY = "MediaForge/Video"
 
     def concat(self, video_paths, output_path, mode, transition_sec, transition_type,
-               fps, width, height, crf):
+               fps, width, height, crf,
+               frames=None, tensor_fps=30.0, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Concat Videos] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
-        paths = [p.strip() for p in video_paths.splitlines() if p.strip()]
-        if len(paths) < 2:
-            raise ValueError(f"[Concat Videos] 至少需要 2 個檔案，但只有 {len(paths)} 個")
-        for p in paths:
-            if not os.path.exists(p):
-                raise FileNotFoundError(f"[Concat Videos] 找不到檔案：{p}")
+        cleanup_tmp = None
+        try:
+            paths = [p.strip() for p in video_paths.splitlines() if p.strip()]
+            if frames is not None:
+                # tensor 進來 → 寫 temp mp4 prepend 成 path[0]
+                cleanup_tmp = encode_tensor_to_tempfile(frames, fps=tensor_fps, audio=audio)
+                paths = [cleanup_tmp] + paths
+            if len(paths) < 2:
+                raise ValueError(
+                    f"[Concat Videos] 至少需要 2 個輸入，但只有 {len(paths)} 個"
+                    "（提示：連 frames 時 video_paths 至少還要 1 條路徑）"
+                )
+            for p in paths:
+                if not os.path.exists(p):
+                    raise FileNotFoundError(f"[Concat Videos] 找不到檔案：{p}")
 
-        out_dir = os.path.dirname(output_path)
-        if out_dir and not os.path.exists(out_dir):
-            os.makedirs(out_dir, exist_ok=True)
+            out_dir = os.path.dirname(output_path)
+            if out_dir and not os.path.exists(out_dir):
+                os.makedirs(out_dir, exist_ok=True)
 
-        if mode == "copy":
-            if transition_sec > 0:
-                print("[Concat Videos] 注意：mode=copy 無法加 transition，已忽略 transition_sec")
-            self._concat_demuxer(paths, output_path)
-        else:
-            self._concat_transcode(
-                paths, output_path,
-                transition_sec=transition_sec,
-                transition_type=transition_type,
-                fps=fps, width=width, height=height, crf=crf,
-            )
+            if mode == "copy":
+                if transition_sec > 0:
+                    print("[Concat Videos] 注意：mode=copy 無法加 transition，已忽略 transition_sec")
+                self._concat_demuxer(paths, output_path)
+            else:
+                self._concat_transcode(
+                    paths, output_path,
+                    transition_sec=transition_sec,
+                    transition_type=transition_type,
+                    fps=fps, width=width, height=height, crf=crf,
+                )
 
-        print(f"[Concat Videos] 輸出成功（{len(paths)} 段）: {output_path}")
-        return (output_path,)
+            print(f"[Concat Videos] 輸出成功（{len(paths)} 段）: {output_path}")
+            return (output_path,)
+        finally:
+            if cleanup_tmp:
+                try:
+                    os.unlink(cleanup_tmp)
+                except OSError:
+                    pass
 
     @staticmethod
     def _concat_demuxer(paths, output_path):

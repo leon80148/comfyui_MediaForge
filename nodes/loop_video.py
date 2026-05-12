@@ -2,6 +2,7 @@ import math
 import os
 
 from ..utils.ffmpeg import ensure_ffmpeg, probe, probe_video_duration, run_ffmpeg
+from ..utils.video_io import encode_tensor_to_tempfile
 
 
 # loop filter `size` 是「buffered frames 上限」(FFmpeg INT16_MAX 為 32767)；
@@ -49,6 +50,12 @@ class MF_LoopVideo:
                 "reverse": ("BOOLEAN", {"default": False}),
                 "keep_audio": ("BOOLEAN", {"default": True}),
             },
+            "optional": {
+                # In-memory chain: 連 frames 後改走 tensor → temp mp4 → loop 流程
+                "frames": ("IMAGE",),
+                "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
+                "audio": ("AUDIO",),
+            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -57,40 +64,56 @@ class MF_LoopVideo:
     CATEGORY = "MediaForge/Video"
 
     def loop(self, video_path, output_path, target_duration_sec, loop_mode,
-             crossfade_sec, speed, reverse, keep_audio):
+             crossfade_sec, speed, reverse, keep_audio,
+             frames=None, fps=30.0, audio=None):
 
         if not ensure_ffmpeg():
             raise RuntimeError("[Loop Video] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
-        if not os.path.exists(video_path):
-            raise FileNotFoundError(f"[Loop Video] 找不到影片：{video_path}")
 
-        source_dur = probe_video_duration(video_path)
-        if source_dur is None or source_dur <= 0:
-            raise RuntimeError(f"[Loop Video] 無法讀取影片長度：{video_path}")
+        cleanup_tmp = None
+        try:
+            if frames is not None:
+                source_path = encode_tensor_to_tempfile(frames, fps=fps, audio=audio)
+                cleanup_tmp = source_path
+            else:
+                if not os.path.exists(video_path):
+                    raise FileNotFoundError(f"[Loop Video] 找不到影片：{video_path}")
+                source_path = video_path
 
-        effective_dur = source_dur / speed
-        has_audio = keep_audio and _source_has_audio(video_path)
+            source_dur = probe_video_duration(source_path)
+            if source_dur is None or source_dur <= 0:
+                raise RuntimeError(f"[Loop Video] 無法讀取影片長度：{source_path}")
 
-        if loop_mode == "crossfade" and crossfade_sec >= effective_dur:
-            print(f"[Loop Video] 警告：crossfade_sec({crossfade_sec}) >= 有效片段長度({effective_dur:.2f}s)，改用 strict")
-            loop_mode = "strict"
+            effective_dur = source_dur / speed
+            has_audio = keep_audio and _source_has_audio(source_path)
 
-        filter_parts, v_out, a_out = self._build_filter(
-            loop_mode, effective_dur, target_duration_sec, crossfade_sec,
-            speed, reverse, has_audio,
-        )
+            if loop_mode == "crossfade" and crossfade_sec >= effective_dur:
+                print(f"[Loop Video] 警告：crossfade_sec({crossfade_sec}) >= 有效片段長度({effective_dur:.2f}s)，改用 strict")
+                loop_mode = "strict"
 
-        cmd = ["ffmpeg", "-y", "-i", video_path,
-               "-filter_complex", ";".join(filter_parts),
-               "-map", f"[{v_out}]"]
-        if has_audio:
-            cmd.extend(["-map", f"[{a_out}]"])
-        else:
-            cmd.append("-an")
-        cmd.extend(["-t", f"{target_duration_sec}", output_path])
+            filter_parts, v_out, a_out = self._build_filter(
+                loop_mode, effective_dur, target_duration_sec, crossfade_sec,
+                speed, reverse, has_audio,
+            )
 
-        if not run_ffmpeg(cmd, tag="Loop Video"):
-            raise RuntimeError("[Loop Video] FFmpeg loop 失敗，請查看上方 stderr 輸出。")
+            cmd = ["ffmpeg", "-y", "-i", source_path,
+                   "-filter_complex", ";".join(filter_parts),
+                   "-map", f"[{v_out}]"]
+            if has_audio:
+                cmd.extend(["-map", f"[{a_out}]"])
+            else:
+                cmd.append("-an")
+            cmd.extend(["-t", f"{target_duration_sec}", output_path])
+
+            if not run_ffmpeg(cmd, tag="Loop Video"):
+                raise RuntimeError("[Loop Video] FFmpeg loop 失敗，請查看上方 stderr 輸出。")
+        finally:
+            if cleanup_tmp:
+                try:
+                    os.unlink(cleanup_tmp)
+                except OSError:
+                    pass
+
         print(f"[Loop Video] 輸出成功: {output_path}")
         return (output_path,)
 

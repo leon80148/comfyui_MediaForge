@@ -332,6 +332,32 @@ def _cleanup_audio_tmp(tmp_path):
         pass
 
 
+def encode_tensor_to_tempfile(frames, fps, audio=None):
+    """Encode IMAGE batch (+ optional AUDIO dict) to a temp .mp4 for use as an
+    intermediate in file-native FFmpeg pipelines.
+
+    Why this exists: nodes like MF_BurnSubtitle / MF_LoopVideo / MF_TrimByRanges
+    run `ffmpeg -i input.mp4 -vf ...`. When upstream is an in-memory tensor (from
+    VHS / AnimateDiff / etc.), we materialise it to a temp .mp4 once, FFmpeg
+    processes that, caller unlinks in finally. Mirrors the temp-WAV pattern in
+    detect_silence.py / whisper_transcribe.py but for video.
+
+    Quality is fixed h264/yuv420p/crf=18 — downstream re-encodes anyway, so
+    chasing higher quality here only wastes time.
+
+    Caller is responsible for `os.unlink()` (use try/finally).
+    """
+    import os
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".mp4", prefix="mf_tensor_")
+    os.close(fd)
+    encode_tensor_to_video(
+        frames, tmp, fps=fps, audio=audio,
+        codec="libx264", pix_fmt="yuv420p", crf=18, preset="medium",
+    )
+    return tmp
+
+
 def get_video_metadata_json(path):
     """Convenience: full ffprobe JSON as plain string for metadata-output ports."""
     info = probe(path)

@@ -1,0 +1,3 @@
+# Drop .ttf / .otf font files here.
+# MF_BurnSubtitle scans this directory for its `font_file` dropdown.
+# Actual font files are .gitignore'd (licensing) — only this marker is tracked.

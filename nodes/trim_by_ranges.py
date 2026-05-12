@@ -8,6 +8,7 @@ import json
 import os
 
 from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, probe, probe_video_duration, run_ffmpeg
+from ..utils.video_io import encode_tensor_to_tempfile
 
 
 class MF_TrimByRanges:
@@ -28,6 +29,10 @@ class MF_TrimByRanges:
             },
             "optional": {
                 "ranges": ("SILENCE_RANGES",),
+                # In-memory chain: 連 frames 後改走 tensor → temp mp4 → trim 流程
+                "frames": ("IMAGE",),
+                "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
+                "audio": ("AUDIO",),
             },
         }
 
@@ -36,51 +41,67 @@ class MF_TrimByRanges:
     FUNCTION = "trim"
     CATEGORY = "MediaForge/Video"
 
-    def trim(self, video_path, output_path, mode, ranges_json, crossfade_sec, ranges=None):
+    def trim(self, video_path, output_path, mode, ranges_json, crossfade_sec, ranges=None,
+             frames=None, fps=30.0, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Trim By Ranges] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
-        if not os.path.exists(video_path):
-            raise FileNotFoundError(f"[Trim By Ranges] 找不到影片：{video_path}")
 
-        # R7 P1 fix：連線到 MF_DetectSilence 的 ranges=[] (沒偵到靜音) 不能 fallback 到
-        # ranges_json (那是 disconnect 時的手填預設)。用 `is not None` 區分「連了空 list」
-        # 與「沒連」。
-        if ranges is not None:
-            effective_ranges = list(ranges)  # 可能是空 list
-        else:
-            effective_ranges = self._parse_ranges_json(ranges_json)
-
-        duration = probe_video_duration(video_path)
-        if duration is None or duration <= 0:
-            raise RuntimeError(f"[Trim By Ranges] 無法讀取影片長度：{video_path}")
-
-        # mode=remove + 空 ranges → 整段保留（identity），是合法 no-op
-        if mode == "remove":
-            if not effective_ranges:
-                print("[Trim By Ranges] 注意：ranges 為空 + mode=remove，保留整段影片 (identity)")
-                keep_ranges = [[0.0, duration]]
+        cleanup_tmp = None
+        try:
+            if frames is not None:
+                source_path = encode_tensor_to_tempfile(frames, fps=fps, audio=audio)
+                cleanup_tmp = source_path
             else:
-                keep_ranges = _complement_ranges(effective_ranges, duration)
-        else:  # keep
-            if not effective_ranges:
+                if not os.path.exists(video_path):
+                    raise FileNotFoundError(f"[Trim By Ranges] 找不到影片：{video_path}")
+                source_path = video_path
+
+            # R7 P1 fix：連線到 MF_DetectSilence 的 ranges=[] (沒偵到靜音) 不能 fallback 到
+            # ranges_json (那是 disconnect 時的手填預設)。用 `is not None` 區分「連了空 list」
+            # 與「沒連」。
+            if ranges is not None:
+                effective_ranges = list(ranges)  # 可能是空 list
+            else:
+                effective_ranges = self._parse_ranges_json(ranges_json)
+
+            duration = probe_video_duration(source_path)
+            if duration is None or duration <= 0:
+                raise RuntimeError(f"[Trim By Ranges] 無法讀取影片長度：{source_path}")
+
+            # mode=remove + 空 ranges → 整段保留（identity），是合法 no-op
+            if mode == "remove":
+                if not effective_ranges:
+                    print("[Trim By Ranges] 注意：ranges 為空 + mode=remove，保留整段影片 (identity)")
+                    keep_ranges = [[0.0, duration]]
+                else:
+                    keep_ranges = _complement_ranges(effective_ranges, duration)
+            else:  # keep
+                if not effective_ranges:
+                    raise ValueError(
+                        "[Trim By Ranges] mode=keep + ranges 為空：沒有東西可保留。"
+                        "若是想保留整段請改用 mode=remove。"
+                    )
+                keep_ranges = [list(r) for r in effective_ranges]
+
+            keep_ranges = _normalize_ranges(keep_ranges, duration)
+            if not keep_ranges:
                 raise ValueError(
-                    "[Trim By Ranges] mode=keep + ranges 為空：沒有東西可保留。"
-                    "若是想保留整段請改用 mode=remove。"
+                    f"[Trim By Ranges] mode={mode} 處理後沒有剩下任何片段（檢查 ranges 是否覆蓋整段影片）"
                 )
-            keep_ranges = [list(r) for r in effective_ranges]
 
-        keep_ranges = _normalize_ranges(keep_ranges, duration)
-        if not keep_ranges:
-            raise ValueError(
-                f"[Trim By Ranges] mode={mode} 處理後沒有剩下任何片段（檢查 ranges 是否覆蓋整段影片）"
-            )
+            info = probe(source_path)
+            has_audio = bool(info and any(s.get("codec_type") == "audio" for s in info.get("streams", [])))
 
-        info = probe(video_path)
-        has_audio = bool(info and any(s.get("codec_type") == "audio" for s in info.get("streams", [])))
+            cmd = self._build_concat_command(source_path, output_path, keep_ranges, crossfade_sec, has_audio)
+            if not run_ffmpeg(cmd, tag="Trim By Ranges"):
+                raise RuntimeError("[Trim By Ranges] FFmpeg 失敗，請查看上方 stderr 輸出。")
+        finally:
+            if cleanup_tmp:
+                try:
+                    os.unlink(cleanup_tmp)
+                except OSError:
+                    pass
 
-        cmd = self._build_concat_command(video_path, output_path, keep_ranges, crossfade_sec, has_audio)
-        if not run_ffmpeg(cmd, tag="Trim By Ranges"):
-            raise RuntimeError("[Trim By Ranges] FFmpeg 失敗，請查看上方 stderr 輸出。")
         print(f"[Trim By Ranges] 輸出成功（{len(keep_ranges)} 個片段，audio={has_audio}）: {output_path}")
         return (output_path,)
 

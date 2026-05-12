@@ -70,6 +70,10 @@ tmp/
 *.key
 *.pem
 
+# Font files (licensing + Windows ADS sidecars — let each user drop their own)
+font/*
+!font/.gitkeep
+
 # Internal Claude guidance — kept local-only per project policy
 CLAUDE.md
 claude.md

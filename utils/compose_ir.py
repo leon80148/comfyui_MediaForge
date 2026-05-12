@@ -55,6 +55,9 @@ class ComposeIR:
     target_fps: float = 30.0
     target_width: int = 1920
     target_height: int = 1080
+    # 由 caller 注入、需在 Finalize 跑完後 unlink 的 temp 路徑（例如 ComposeStart 把
+    # 上游 IMAGE tensor 寫成的 temp .mp4）。compile_ir 會把它 prepend 進 cleanup_paths。
+    tmp_paths_to_cleanup: list[str] = field(default_factory=list)
 
     def alloc_label(self, hint: str = "v") -> str:
         self._label_counter += 1
@@ -117,6 +120,7 @@ class ComposeIR:
             target_fps=self.target_fps,
             target_width=self.target_width,
             target_height=self.target_height,
+            tmp_paths_to_cleanup=list(self.tmp_paths_to_cleanup),
         )
         return new
 
@@ -263,13 +267,15 @@ def compile_ir(ir: ComposeIR) -> tuple[str, str, list[str]]:
     """IR → (filter_complex_script, final_video_label, cleanup_paths).
 
     final_video_label 是最後一個 op 的 output；若 ops 為空，回到 main_label。
-    cleanup_paths 是 compile 過程中產生的 tmp 檔（目前是 drawtext text 檔），
-    caller 跑完 ffmpeg 必須 unlink 這些路徑。
+    cleanup_paths = ir.tmp_paths_to_cleanup (e.g., ComposeStart 為 tensor input
+    寫的 temp mp4) + compile 過程產生的 tmp 檔（drawtext text 檔）。
+    Caller 跑完 ffmpeg 必須 unlink 這些路徑。
     """
     if not ir.main_label:
         raise RuntimeError("[ComposeIR] IR 沒有 main video input — Compose 流程必須從 MF_ComposeStart 開始")
 
-    cleanup_paths: list[str] = []
+    # 從 IR 帶入的 tmp paths（caller-injected, 例如 ComposeStart 的 tensor temp）
+    cleanup_paths: list[str] = list(ir.tmp_paths_to_cleanup)
     parts: list[str] = []
 
     # 1. Normalization：main video 套 setpts/fps/format，方便後續 op 不重複煩心

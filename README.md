@@ -10,7 +10,8 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 
 ## Highlights
 
-- 🎞️ **16 nodes** across 6 categories — Subtitle / Video / Analysis / Compose / AI (+ Audio / Net / Image planned)
+- 🎞️ **17 nodes** across 6 categories — Subtitle / Video / Analysis / Compose / AI (+ Audio / Net / Image planned)
+- 🔗 **Dual-input bridge** — file-consumer nodes accept *either* a `video_path` string *or* an in-memory `IMAGE + AUDIO + fps` triplet, so MediaForge chains with VHS / AnimateDiff / any IMAGE-pipeline plugin without a SaveVideoFrames round-trip
 - 🧪 **Broadcast-grade codec control** — H.264 / HEVC / AV1 / ProRes with CRF / bitrate / target-size encode modes
 - 🎚️ **Single-encode multi-overlay Compose pipeline** — `filter_complex` graph compiler; lossless overlay stacking vs. N re-encodes
 - 🤖 **Provider-agnostic AI** — `MF_AIConfig` lets you point Whisper / Translate at OpenAI / Groq / Ollama / local backends in one place
@@ -103,17 +104,30 @@ See [AI Provider Recipes](#ai-provider-recipes) below for copy-paste `base_url` 
 
 **TL;DR:** Install both. VHS for fast IMAGE-batch workflows; MediaForge for broadcast encoding, file-level ops, Compose pipeline, and AI-driven subtitle work.
 
-## Nodes (16)
+## Nodes (17)
+
+> **Dual-input note**: nodes marked **(dual-input)** below accept *either* a file path (existing `video_path` STRING widget) *or* an in-memory tensor (wire `frames` + `fps` + `audio` from VHS / AnimateDiff / `MF_LoadVideoFrames` / etc.). When tensor is wired, MediaForge writes a temp .mp4 internally and FFmpeg processes that. Path mode stays the default fast path — no quality loss when chaining MediaForge-to-MediaForge.
 
 ### `MediaForge/Subtitle`
 
-#### 🔥 Burn Subtitle (`MF_BurnSubtitle`)
+#### 🔥 Burn Subtitle (`MF_BurnSubtitle`) **(dual-input)**
 
-SRT → hard-burned overlay with full ASS style control (font, color, outline, shadow, alignment, margins). Colors are accepted as `#RRGGBB`; internally converted to ASS BGR-with-alpha (`hex_to_ass_color()`).
+SRT → hard-burned overlay with full ASS style control. Colors are accepted as `#RRGGBB`; internally converted to ASS BGR-with-alpha.
+
+Styling knobs:
+- **Font**: `font_name` (Family Name STRING) + optional `font_file` dropdown reading `<plugin>/font/*.ttf|.otf`. When `font_file` is picked, MediaForge lazy-imports `fontTools` to auto-extract the TTF's internal Family Name (drop a TTF in `font/` and you're done — no need to look up the family name manually). Falls back to your typed `font_name` if `fontTools` isn't installed.
+- **Weight**: `bold` + `italic` booleans.
+- **Position**: `alignment` dropdown (9 named positions: `bottom_center (2)`, `top_right (9)`, etc.) + `margin_v` + `margin_l` + `margin_r`. Subtitle effective width = play area − `margin_l` − `margin_r`.
+- **Spacing**: `letter_spacing` FLOAT (ASS Spacing in pixels) for tight or airy line feel.
+- **Outline / shadow / box**: full `outline_color_hex` + `outline_width` + `shadow_depth` + `border_style` (1=outline, 3=box with semi-transparent `back_color_hex`).
 
 ### `MediaForge/Video`
 
-#### 🔁 Loop Video (`MF_LoopVideo`)
+#### 📂 Select Video (`MF_SelectVideo`)
+
+Dropdown picker for `ComfyUI/input/` video files. Walks subdirectories, lists `.mp4 / .mov / .mkv / .webm / .avi / .m4v / .mpg / .mpeg / .ts`. Outputs `STRING video_path` — wire to any file-consumer node. `IS_CHANGED` hashes file mtime so the cache invalidates when you replace the file with a same-named version.
+
+#### 🔁 Loop Video (`MF_LoopVideo`) **(dual-input)**
 
 Loop to target duration with `strict` / `ping_pong` / `crossfade` modes, optional speed and reverse. `xfade` chain capped at 50 loops; `crossfade_sec >= 有效片段長度` falls back to `strict` (graceful degradation, not error). FFmpeg's `loop` filter buffers up to `MAX_LOOP_FRAMES = 32767` (INT16), so very long sources at high fps need `crossfade` mode instead.
 
@@ -125,17 +139,17 @@ FFmpeg-decode any container/codec → `IMAGE` batch `[B,H,W,C] float32 [0,1]` + 
 
 `IMAGE` batch + optional `AUDIO` dict → H.264 / HEVC / AV1 / ProRes file with **CRF (default)** / bitrate / target-size encode modes. Auto-corrects container extension (ProRes → `.mov`).
 
-#### ✂️ Trim by Ranges (`MF_TrimByRanges`)
+#### ✂️ Trim by Ranges (`MF_TrimByRanges`) **(dual-input)**
 
 Takes `SILENCE_RANGES` (from `MF_DetectSilence`) or raw JSON `[[s,e],...]`. Modes: `keep` / `remove`. Chained xfade for seam fade; audio/video interleaved concat; empty-list identity semantics (no-op).
 
-#### 🔗 Concat Videos (`MF_ConcatVideos`)
+#### 🔗 Concat Videos (`MF_ConcatVideos`) **(dual-input, prepend semantics)**
 
-Path-level concat of multiple files. `copy` mode → FFmpeg concat demuxer (same-codec fast path). `transcode` mode → filter_complex with optional `xfade` transition (`fade` / `wipeleft` / `wiperight` / `slideleft` / `slideright` / `circleopen` / `circleclose` / `dissolve`). Inputs missing audio are auto-filled with `anullsrc` silence.
+Path-level concat of multiple files. `copy` mode → FFmpeg concat demuxer (same-codec fast path). `transcode` mode → filter_complex with optional `xfade` transition (`fade` / `wipeleft` / `wiperight` / `slideleft` / `slideright` / `circleopen` / `circleclose` / `dissolve`). Inputs missing audio are auto-filled with `anullsrc` silence. When `frames` is wired, the tensor is materialised as path[0] (prepended), with `video_paths` lines shifting to path[1..N] — needs ≥1 path entry to reach the 2-clip minimum.
 
 ### `MediaForge/Analysis`
 
-#### 🔍 Probe Media (`MF_ProbeMedia`)
+#### 🔍 Probe Media (`MF_ProbeMedia`) **(dual-input)**
 
 Returns duration, dimensions, fps, video/audio codec via ffprobe. Returns the **video stream's** duration (distinct from container duration — they can differ).
 
@@ -147,8 +161,8 @@ FFmpeg `silencedetect` wrapper → `SILENCE_RANGES` list (`[[start_sec, end_sec]
 
 `MF_Compose*` nodes chain a `MF_COMPOSE` IR (FFmpeg `filter_complex` graph compiler). Only `MF_ComposeFinalize` runs ffmpeg — all intermediate ops accumulate into the IR and compile to one `filter_complex_script`. **Lossless overlay stacking** vs. N re-encodes.
 
-#### 🎬 Compose Start (`MF_ComposeStart`)
-Init the IR. Sets `target_width / target_height / target_fps`.
+#### 🎬 Compose Start (`MF_ComposeStart`) **(dual-input)**
+Init the IR. Sets `target_width / target_height / target_fps`. When `frames` is wired, the temp .mp4 is created here but cleanup is deferred to `MF_ComposeFinalize` (via `ComposeIR.tmp_paths_to_cleanup`) so it survives the full Compose chain.
 
 #### ✏️ Compose Overlay Text (`MF_ComposeOverlayText`)
 Append `drawtext` op. Temporal window via `start_sec`/`end_sec` (enable expression). Custom `fontfile` supported. Text is passed via `textfile=` to safely escape apostrophes, percents, and newlines.
@@ -244,7 +258,7 @@ comfyui_MediaForge/
 ├── requirements.txt         # intentionally empty — optional deps lazy-imported
 ├── nodes/                   # one file per node, MF_<Verb><Noun>
 │   ├── ai_config.py            # MF_AIConfig
-│   ├── burn_subtitle.py        # MF_BurnSubtitle
+│   ├── burn_subtitle.py        # MF_BurnSubtitle  — uses font/ subdir
 │   ├── compose_start.py        # MF_ComposeStart
 │   ├── compose_overlay_text.py # MF_ComposeOverlayText
 │   ├── compose_overlay_image.py# MF_ComposeOverlayImage
@@ -256,14 +270,16 @@ comfyui_MediaForge/
 │   ├── loop_video.py           # MF_LoopVideo
 │   ├── probe_media.py          # MF_ProbeMedia
 │   ├── save_video_frames.py    # MF_SaveVideoFrames
+│   ├── select_video.py         # MF_SelectVideo  — dropdown picker for input/ videos
 │   ├── translate_subtitle.py   # MF_TranslateSubtitle
 │   ├── trim_by_ranges.py       # MF_TrimByRanges
 │   └── whisper_transcribe.py   # MF_WhisperTranscribe
 ├── utils/
 │   ├── color.py             # hex_to_ass_color: #RRGGBB → ASS BGR+alpha
-│   ├── compose_ir.py        # ComposeIR dataclass + compile() pass
+│   ├── compose_ir.py        # ComposeIR + compile_ir() + tmp_paths_to_cleanup hook
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
-│   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO tensors
+│   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO + encode_tensor_to_tempfile
+├── font/                    # drop .ttf / .otf here for MF_BurnSubtitle font_file dropdown
 └── tests/                   # 58 tests, pytest-runnable
     ├── test_compose_ir.py        # 8 IR spike cases (Phase 4 prerequisite)
     ├── test_compose_e2e.py       # 3 real-ffmpeg e2e

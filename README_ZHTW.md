@@ -10,7 +10,8 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## 亮點
 
-- 🎞️ **16 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Compose / AI（Audio / Net / Image 規劃中）
+- 🎞️ **17 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Compose / AI（Audio / Net / Image 規劃中）
+- 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
 - 🧪 **廣播級編碼控制** — H.264 / HEVC / AV1 / ProRes，支援 CRF / bitrate / target-size 三種編碼模式
 - 🎚️ **單次編碼、多層 overlay 的 Compose pipeline** — `filter_complex` graph 編譯器，N 層 overlay 仍只走一次 re-encode
 - 🤖 **Provider-agnostic AI** — `MF_AIConfig` 讓 Whisper / Translate 在 OpenAI / Groq / Ollama / 本地 backend 之間一處切換
@@ -103,17 +104,30 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 **結論**：兩個都裝。VHS 用於快速 IMAGE batch workflow；MediaForge 用於廣播級編碼、檔案級操作、Compose pipeline、AI 字幕。
 
-## 節點清單（16）
+## 節點清單（17）
+
+> **Dual-input 註記**：下列標 **(dual-input)** 的 node 同時接受兩種 input：(a) 既有的 `video_path` STRING 欄位，(b) 新加的 `frames` + `fps` + `audio` 三件套 optional 輸入。連 tensor 時 MediaForge 內部會寫一個 temp .mp4 給 FFmpeg 吃。Path 模式仍是預設的 fast path — MediaForge 之間串接時不會被迫多走一次無謂的 decode/encode。
 
 ### `MediaForge/Subtitle`
 
-#### 🔥 Burn Subtitle (`MF_BurnSubtitle`)
+#### 🔥 Burn Subtitle (`MF_BurnSubtitle`) **(dual-input)**
 
-SRT → 硬燒字幕，完整 ASS 風格控制（字型、顏色、外框、陰影、對齊、邊距）。顏色輸入 `#RRGGBB`，內部轉成 ASS BGR-with-alpha（走 `hex_to_ass_color()`）。
+SRT → 硬燒字幕，完整 ASS 風格控制。顏色輸入 `#RRGGBB`，內部轉成 ASS BGR-with-alpha。
+
+可調樣式：
+- **字型**：`font_name` (Family Name STRING) + 可選 `font_file` dropdown 讀 `<plugin>/font/*.ttf|.otf`。選 `font_file` 時，MediaForge lazy-import `fontTools` 自動讀 TTF 內部的 Family Name — 丟一個 TTF 進 `font/` 就直接能用，不必再去查字型內部叫什麼名字。沒裝 `fontTools` 時退用你打的 `font_name`。
+- **粗細**：`bold` + `italic` boolean。
+- **位置**：`alignment` dropdown（9 個命名位置：`bottom_center (2)`、`top_right (9)`…）+ `margin_v` + `margin_l` + `margin_r`。字幕實際可用寬 = 播放區寬 − `margin_l` − `margin_r`。
+- **字距**：`letter_spacing` FLOAT（ASS Spacing，像素為單位）做緊湊或寬鬆的視覺。
+- **外框 / 陰影 / 底色塊**：`outline_color_hex` + `outline_width` + `shadow_depth` + `border_style`（1=outline 描邊、3=box 半透明底色配 `back_color_hex`）。
 
 ### `MediaForge/Video`
 
-#### 🔁 Loop Video (`MF_LoopVideo`)
+#### 📂 Select Video (`MF_SelectVideo`)
+
+`ComfyUI/input/` 的影片檔 dropdown picker。會遞迴掃子目錄、列 `.mp4 / .mov / .mkv / .webm / .avi / .m4v / .mpg / .mpeg / .ts`。輸出 `STRING video_path` — 直接 wire 給任何 file-consumer node。`IS_CHANGED` 用 file mtime 做 cache key，同檔名換內容也會自動 invalidate 下游 cache。
+
+#### 🔁 Loop Video (`MF_LoopVideo`) **(dual-input)**
 
 循環至目標時長，支援 `strict` / `ping_pong` / `crossfade` 模式，可加速、可反向。`xfade` chain 上限 50 圈；`crossfade_sec >= 有效片段長度` 自動退階回 `strict`（合理退階，不報錯）。FFmpeg `loop` filter 的 frame 緩衝上限是 `MAX_LOOP_FRAMES = 32767`（INT16），超長素材高 fps 要改用 `crossfade` mode。
 
@@ -125,17 +139,17 @@ FFmpeg decode 任意容器／codec → `IMAGE` batch `[B,H,W,C] float32 [0,1]` +
 
 `IMAGE` batch + 可選 `AUDIO` dict → H.264 / HEVC / AV1 / ProRes 檔，三種編碼模式：**CRF（預設）** / bitrate / target-size。容器副檔名自動修正（ProRes → `.mov`）。
 
-#### ✂️ Trim by Ranges (`MF_TrimByRanges`)
+#### ✂️ Trim by Ranges (`MF_TrimByRanges`) **(dual-input)**
 
 吃 `SILENCE_RANGES`（從 `MF_DetectSilence`）或原始 JSON `[[s,e],...]`。Mode：`keep` / `remove`。Seam 處可走 xfade chain 做接縫淡入淡出；音影 interleaved concat；empty list 視為 identity（no-op）。
 
-#### 🔗 Concat Videos (`MF_ConcatVideos`)
+#### 🔗 Concat Videos (`MF_ConcatVideos`) **(dual-input, prepend 語意)**
 
-多檔路徑級拼接。`copy` mode → FFmpeg concat demuxer（同 codec 快路徑）。`transcode` mode → filter_complex 加可選 `xfade` 過場（`fade` / `wipeleft` / `wiperight` / `slideleft` / `slideright` / `circleopen` / `circleclose` / `dissolve`）。沒音軌的輸入自動補 `anullsrc` 靜音。
+多檔路徑級拼接。`copy` mode → FFmpeg concat demuxer（同 codec 快路徑）。`transcode` mode → filter_complex 加可選 `xfade` 過場（`fade` / `wipeleft` / `wiperight` / `slideleft` / `slideright` / `circleopen` / `circleclose` / `dissolve`）。沒音軌的輸入自動補 `anullsrc` 靜音。`frames` 連線時 tensor 寫成 path[0] (prepend)、`video_paths` 列表 shift 到 path[1..N] — 需要至少 1 條 path 才能湊到 2 段才能 concat。
 
 ### `MediaForge/Analysis`
 
-#### 🔍 Probe Media (`MF_ProbeMedia`)
+#### 🔍 Probe Media (`MF_ProbeMedia`) **(dual-input)**
 
 ffprobe 拿到時長、尺寸、fps、影／音 codec。回傳的是**影片串流的時長**（跟容器時長可能不一樣 — 故意分開）。
 
@@ -147,8 +161,8 @@ FFmpeg `silencedetect` 包裝 → `SILENCE_RANGES` list（`[[start_sec, end_sec]
 
 `MF_Compose*` 系列串接 `MF_COMPOSE` IR（FFmpeg `filter_complex` graph 編譯器）。只有 `MF_ComposeFinalize` 會跑 ffmpeg — 所有中間操作累積進 IR，最後編譯成一份 `filter_complex_script`。**多層 overlay 無損疊加**，不再 N 次 re-encode。
 
-#### 🎬 Compose Start (`MF_ComposeStart`)
-初始化 IR，設 `target_width / target_height / target_fps`。
+#### 🎬 Compose Start (`MF_ComposeStart`) **(dual-input)**
+初始化 IR，設 `target_width / target_height / target_fps`。連 `frames` 時 temp .mp4 在這裡產生，但清理延後到 `MF_ComposeFinalize`（透過 `ComposeIR.tmp_paths_to_cleanup`）— 這樣 temp 檔能活過整條 Compose chain。
 
 #### ✏️ Compose Overlay Text (`MF_ComposeOverlayText`)
 追加 `drawtext` 操作。`start_sec`/`end_sec` 走 enable expression 控時間窗。支援自訂 `fontfile`。文字透過 `textfile=` 傳入，安全處理單引號、百分號、換行等難 escape 字元。
@@ -244,7 +258,7 @@ comfyui_MediaForge/
 ├── requirements.txt         # 故意留空 — 選用相依走 lazy import
 ├── nodes/                   # 一節點一檔，類別命名 MF_<Verb><Noun>
 │   ├── ai_config.py            # MF_AIConfig
-│   ├── burn_subtitle.py        # MF_BurnSubtitle
+│   ├── burn_subtitle.py        # MF_BurnSubtitle  — 使用 font/ 子目錄
 │   ├── compose_start.py        # MF_ComposeStart
 │   ├── compose_overlay_text.py # MF_ComposeOverlayText
 │   ├── compose_overlay_image.py# MF_ComposeOverlayImage
@@ -256,14 +270,16 @@ comfyui_MediaForge/
 │   ├── loop_video.py           # MF_LoopVideo
 │   ├── probe_media.py          # MF_ProbeMedia
 │   ├── save_video_frames.py    # MF_SaveVideoFrames
+│   ├── select_video.py         # MF_SelectVideo  — input/ 影片 dropdown picker
 │   ├── translate_subtitle.py   # MF_TranslateSubtitle
 │   ├── trim_by_ranges.py       # MF_TrimByRanges
 │   └── whisper_transcribe.py   # MF_WhisperTranscribe
 ├── utils/
 │   ├── color.py             # hex_to_ass_color：#RRGGBB → ASS BGR+alpha
-│   ├── compose_ir.py        # ComposeIR dataclass + compile() pass
+│   ├── compose_ir.py        # ComposeIR + compile_ir() + tmp_paths_to_cleanup hook
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
-│   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO tensors
+│   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO + encode_tensor_to_tempfile
+├── font/                    # 丟 .ttf / .otf 進來給 MF_BurnSubtitle 的 font_file dropdown
 └── tests/                   # 58 個測試，pytest 跑
     ├── test_compose_ir.py        # 8 個 IR spike case（Phase 4 prerequisite）
     ├── test_compose_e2e.py       # 3 個 real-ffmpeg e2e
