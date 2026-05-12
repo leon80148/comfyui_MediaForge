@@ -228,20 +228,11 @@ def encode_tensor_to_video(
     if audio is not None:
         audio_tmp = _audio_dict_to_pipe_args(audio, cmd)
 
-    cmd.extend(["-c:v", codec, "-pix_fmt", pix_fmt])
-
-    if codec in ("libx264", "libx265") and preset:
-        cmd.extend(["-preset", preset])
-    elif codec == "libsvtav1" and preset:
-        # SVT-AV1 preset 是 numeric 0–13；把 x264-style 名字映射為 SVT-AV1 數值
-        cmd.extend(["-preset", svtav1_preset_from_name(preset)])
-
-    if bitrate:
-        cmd.extend(["-b:v", str(bitrate)])
-    else:
-        # CRF mode — ProRes / utvideo 不吃 -crf，呼叫方需在 extra_args 控制
-        if codec in ("libx264", "libx265", "libsvtav1", "libaom-av1"):
-            cmd.extend(["-crf", str(crf)])
+    # 共用 builder 處理各家 encoder 的 preset / crf / bitrate 差異（含 NVENC）
+    # 避開 module-load 循環：encoder.py 對 video_io.svtav1_preset_from_name 是 lazy import
+    from .encoder import build_encoder_args
+    cmd.extend(build_encoder_args(codec, crf=crf, bitrate=bitrate, preset=preset))
+    cmd.extend(["-pix_fmt", pix_fmt])
 
     if extra_args:
         cmd.extend(list(extra_args))

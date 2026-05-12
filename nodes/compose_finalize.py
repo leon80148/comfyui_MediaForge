@@ -2,19 +2,21 @@
 import os
 
 from ..utils.compose_ir import ComposeIR, compile_ir, write_filter_script_if_long
+from ..utils.encoder import build_encoder_args, get_available_codecs
 from ..utils.ffmpeg import ensure_ffmpeg, probe_video_duration, run_ffmpeg
 from ..utils.output_path import resolve_output_path
-from ..utils.video_io import svtav1_preset_from_name
 
 
 class MF_ComposeFinalize:
     @classmethod
     def INPUT_TYPES(s):
+        # codec dropdown 走 codec_id 值（不像 SaveVideoFrames 用 display name），動態包含 NVENC variants
+        codec_ids = [codec_id for codec_id, _pix_fmt in get_available_codecs().values()]
         return {
             "required": {
                 "compose": ("MF_COMPOSE",),
                 "filename_prefix": ("STRING", {"default": "MediaForge/composed"}),
-                "codec": (["libx264", "libx265", "libsvtav1", "prores_ks"], {"default": "libx264"}),
+                "codec": (codec_ids, {"default": "libx264"}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
                 "preset": (
                     ["ultrafast", "superfast", "veryfast", "faster", "fast",
@@ -41,11 +43,14 @@ class MF_ComposeFinalize:
         if not compose.inputs:
             raise RuntimeError("[Compose Finalize] IR 沒有任何 input — 是否漏接 MF_ComposeStart？")
 
-        # Codec-aware container：prores_ks 必須走 .mov；其餘走 .mp4
+        # Codec-aware container：prores_ks 必須走 .mov；其餘走 .mp4（含 NVENC variants）
         # (取代舊版的 _ensure_compatible_container post-hoc 修正；現在 ext 從 prefix resolve
         # 時就決定，counter 也按該 ext 算 max digit、不會跨 container 撞數)
         ext = ".mov" if codec == "prores_ks" else ".mp4"
         output_path = resolve_output_path(filename_prefix, ext)
+        # pix_fmt 從 codec map 查（NVENC variants 用 yuv420p、ProRes 用 yuv422p10le）
+        codec_map = {cid: pix for (cid, pix) in get_available_codecs().values()}
+        pix_fmt = codec_map.get(codec, "yuv420p")
 
         # IR 經 compile 會 mutate 內部 ops 的 depends_on（rewrite main_label → norm_label），
         # 為避免破壞下游可能 cache 住的 IR，先 clone。
@@ -75,17 +80,12 @@ class MF_ComposeFinalize:
         else:
             cmd.append("-an")
 
-        cmd.extend(["-c:v", codec])
-        if codec in ("libx264", "libx265"):
-            cmd.extend(["-crf", str(crf), "-preset", preset])
-        elif codec == "libsvtav1":
-            # SVT-AV1 用 numeric preset 0–13；x264-style 字串會被 ffmpeg 拒掉。
-            # 把 UI 上 ultrafast..veryslow 映射到 13..0 的常用區間。
-            cmd.extend(["-crf", str(crf), "-preset", svtav1_preset_from_name(preset)])
-        elif codec == "prores_ks":
-            cmd.extend(["-profile:v", "3"])  # 422 HQ
+        # 共用 builder 處理各 encoder 家族的 preset/crf 差異（含 NVENC 的 -rc vbr -cq + p1..p7）
+        cmd.extend(build_encoder_args(codec, crf=crf, preset=preset))
+        if codec == "prores_ks":
+            cmd.extend(["-profile:v", "3"])  # 422 HQ — builder 不碰 ProRes、caller 自己加
 
-        cmd.extend(["-pix_fmt", "yuv420p" if codec != "prores_ks" else "yuv422p10le"])
+        cmd.extend(["-pix_fmt", pix_fmt])
 
         # 為什麼不用 -shortest：當 main video 的 audio stream 比 video 短 (常見於 capture
         # 或編輯軟體輸出)，-shortest 會把整段 output 截到 audio 結尾、silently 丟掉影片尾。

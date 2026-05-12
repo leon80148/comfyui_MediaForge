@@ -5,32 +5,30 @@ v2.1 ROADMAP Phase 2 foundation 節點。
 """
 import os
 
+from ..utils.encoder import get_available_codecs
 from ..utils.ffmpeg import ensure_ffmpeg
 from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_video
 
 
-# 預設 codec → (ffmpeg codec id, pix_fmt) mapping
-CODEC_MAP = {
-    "h264 (libx264)": ("libx264", "yuv420p"),
-    "hevc (libx265)": ("libx265", "yuv420p"),
-    "av1 (libsvtav1)": ("libsvtav1", "yuv420p"),
-    "prores (prores_ks)": ("prores_ks", "yuv422p10le"),
-}
-
 # CRF mode 預設值（範圍依各 codec 不同，UI 以單一旗標展示後內部 clamp）
-CRF_DEFAULTS = {"libx264": 18, "libx265": 22, "libsvtav1": 30, "prores_ks": 0}
+# 注意 *_nvenc 走 -cq 但 range 跟 -crf 一樣 0-51；ProRes 不用
+CRF_DEFAULTS = {
+    "libx264": 18, "libx265": 22, "libsvtav1": 30, "prores_ks": 0,
+    "h264_nvenc": 23, "hevc_nvenc": 25, "av1_nvenc": 28,
+}
 
 
 class MF_SaveVideoFrames:
     @classmethod
     def INPUT_TYPES(s):
+        codec_map = get_available_codecs()
         return {
             "required": {
                 "frames": ("IMAGE",),
                 "filename_prefix": ("STRING", {"default": "MediaForge/video"}),
                 "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
-                "codec": (list(CODEC_MAP.keys()), {"default": "h264 (libx264)"}),
+                "codec": (list(codec_map.keys()), {"default": "h264 (libx264)"}),
                 # CRF mode 為 v2.1 預設；bitrate>0 切到 bitrate mode；target_size_mb>0 切到 two-pass
                 "encode_mode": (["crf", "bitrate", "target_size"], {"default": "crf"}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
@@ -74,7 +72,7 @@ class MF_SaveVideoFrames:
                 print("[Save Video Frames] 注意：audio dict 退化 (waveform 缺或 T<=1)，視為無音訊處理")
                 audio = None
 
-        codec_id, default_pix_fmt = CODEC_MAP[codec]
+        codec_id, default_pix_fmt = get_available_codecs()[codec]
         pix_fmt = pix_fmt_override.strip() or default_pix_fmt
 
         # Codec-aware container：prores_ks 必須走 .mov；其餘 .mp4
