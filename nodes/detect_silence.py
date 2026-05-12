@@ -9,7 +9,7 @@ import re
 import subprocess
 import tempfile
 
-from ..utils.ffmpeg import ensure_ffmpeg
+from ..utils.ffmpeg import ensure_ffmpeg, resolve_ffmpeg_cmd
 
 
 # silencedetect 輸出例：
@@ -57,13 +57,13 @@ class MF_DetectSilence:
                     raise FileNotFoundError(f"[Detect Silence] 找不到輸入檔：{audio_source}")
                 source_path = audio_source
 
-            cmd = [
+            cmd = resolve_ffmpeg_cmd([
                 "ffmpeg", "-v", "info",  # silencedetect 訊息走 stderr at info level
                 "-i", source_path,
                 "-af", f"silencedetect=noise={noise_db}dB:d={min_duration_sec}",
                 "-vn",
                 "-f", "null", "-",
-            ]
+            ])
             proc = subprocess.run(cmd, check=False, capture_output=True, text=True,
                                   encoding="utf-8", errors="replace")
             if proc.returncode != 0:

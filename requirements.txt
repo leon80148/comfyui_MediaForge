@@ -1,26 +1,34 @@
 # MediaForge Python dependencies
 #
-# 系統需求：FFmpeg + FFprobe 在 PATH (不是 Python 套件)。
-# 安裝 Plugin 時 ComfyUI Manager 會自動跑 `pip install -r requirements.txt`。
+# 安裝 plugin 時 ComfyUI Manager 會自動跑 `pip install -r requirements.txt`。
 #
 # ─── 列在這裡的判準 ───
 # 「裝下去對沒用到該節點的人是不是負擔」— 不是 → 列進來；是 → 仍走 lazy-import。
-# 所有列在這裡的套件都是純 Python、小體積、無平台/編譯依賴。
+# 列在這裡的套件都該是純 Python、小體積、無平台/編譯依賴的安全選項。
 
-# MF_ConvertChinese (OpenCC 簡繁轉換) — pure Python, no C++ libopencc
+# ─── FFmpeg / FFprobe binaries (雙保險) ───
+# 系統有裝 ffmpeg 是優先 (最快、最相容、codec 最齊)，沒裝的話這兩個 fallback 撐住：
+#   - imageio-ffmpeg: 純 ffmpeg static binary (~70MB)
+#   - static-ffmpeg:  ffmpeg + ffprobe binaries，lazy download on first use (~30-60MB)
+# 解析順序 (utils/ffmpeg.py:get_ffmpeg_bin / get_ffprobe_bin)：
+#   ffmpeg :  system → imageio-ffmpeg → static-ffmpeg
+#   ffprobe:  system → static-ffmpeg (imageio-ffmpeg 不帶 ffprobe)
+imageio-ffmpeg>=0.4.9
+static-ffmpeg>=2.5
+
+# ─── 中文轉換 ───
+# MF_ConvertChinese 唯一 backend，pure Python 零 C++ 依賴
 opencc-python-reimplemented>=0.1.7
 
-# MF_WhisperTranscribe (openai_compatible backend) / MF_TranslateSubtitle — HTTP client
+# ─── HTTP / 字型解析 (輕量、純 Python) ───
+# MF_WhisperTranscribe (openai_compatible) / MF_TranslateSubtitle
 requests>=2.28
-
-# MF_BurnSubtitle 自動讀 TTF Family Name；沒裝會 fallback 到檔名 stem (能跑但 Fontname 可能對不到)
+# MF_BurnSubtitle 自動讀 TTF Family Name；沒裝會 fallback 到檔名 stem
 fontTools>=4.0
 
-# ─── 仍維持 lazy-import 的可選套件（自行安裝） ───
+# ─── 仍走 lazy-import 的可選套件 (太大或太特定，自行安裝) ───
 #
-# faster-whisper — 給 MF_WhisperTranscribe 的 `faster_whisper_local` backend 用。
-#   不列在這裡的理由：
-#     - 套件本身 + CTranslate2 + 模型快取合計幾百 MB
-#     - 需要 GPU/CPU compute backend (硬體相關)
-#     - 多數使用者改用 hosted (Groq / OpenAI) 而非 local，裝下去純浪費空間
+# faster-whisper — MF_WhisperTranscribe 的 `faster_whisper_local` backend。
+#   不列在這裡：本體 + CTranslate2 + 模型 cache 動輒 ~500MB+，需要 GPU/CPU
+#   compute backend；多數使用者改用 hosted (Groq / OpenAI)。
 #   要用時：pip install faster-whisper

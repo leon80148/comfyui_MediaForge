@@ -9,7 +9,7 @@
 import os
 import tempfile
 
-from ..utils.ffmpeg import ensure_ffmpeg
+from ..utils.ffmpeg import ensure_ffmpeg, resolve_ffmpeg_cmd
 
 
 class MF_WhisperTranscribe:
@@ -130,11 +130,11 @@ def _extract_wav(path):
     import subprocess
     fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="mf_whisper_")
     os.close(fd)
-    cmd = [
+    cmd = resolve_ffmpeg_cmd([
         "ffmpeg", "-y", "-v", "error", "-i", path,
         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
         tmp,
-    ]
+    ])
     proc = subprocess.run(cmd, check=False, capture_output=True)
     if proc.returncode != 0:
         try:

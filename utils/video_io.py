@@ -16,7 +16,7 @@ import subprocess
 import numpy as np
 import torch
 
-from .ffmpeg import get_video_display_dims, probe, probe_video_duration
+from .ffmpeg import get_video_display_dims, probe, probe_video_duration, resolve_ffmpeg_cmd
 
 
 # x264-style preset → SVT-AV1 numeric preset (0=最慢/最佳壓縮, 13=最快/最差壓縮)
@@ -112,7 +112,7 @@ def decode_video_to_tensor(path, target_fps=0.0, max_frames=0):
         cmd.extend(["-frames:v", str(max_frames)])
     cmd.extend(["-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
 
-    proc = subprocess.run(cmd, check=False, capture_output=True)
+    proc = subprocess.run(resolve_ffmpeg_cmd(cmd), check=False, capture_output=True)
     if proc.returncode != 0:
         tail = "\n".join((proc.stderr.decode("utf-8", errors="replace")).strip().splitlines()[-30:])
         raise RuntimeError(f"[MediaForge.video_io] FFmpeg 解碼失敗 (exit {proc.returncode}):\n{tail}")
@@ -168,7 +168,7 @@ def decode_audio_to_dict(path, target_sr=0):
         "-ar", str(out_sr),
         "pipe:1",
     ]
-    proc = subprocess.run(cmd, check=False, capture_output=True)
+    proc = subprocess.run(resolve_ffmpeg_cmd(cmd), check=False, capture_output=True)
     if proc.returncode != 0:
         tail = "\n".join((proc.stderr.decode("utf-8", errors="replace")).strip().splitlines()[-30:])
         raise RuntimeError(f"[MediaForge.video_io] FFmpeg audio decode 失敗 (exit {proc.returncode}):\n{tail}")
@@ -256,7 +256,7 @@ def encode_tensor_to_video(
 
     cmd.append(output_path)
 
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(resolve_ffmpeg_cmd(cmd), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     stderr = b""
     write_err = None
     try:
