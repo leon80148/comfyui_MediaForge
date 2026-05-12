@@ -70,15 +70,21 @@ def _read_ttf_family_name(ttf_path):
 
 
 def _resolve_output_path(filename_prefix):
-    """ComfyUI SaveImage-style filename_prefix → counter-incremented full path.
+    """filename_prefix → counter-incremented full path, ComfyUI-style 但檔名乾淨。
 
     為什麼不讓使用者直接填 output_path：固定檔名每次跑 workflow 會 silently 覆蓋上次結果。
-    用 filename_prefix + auto-counter (對齊 ComfyUI 核心 SaveImage 慣例)，每次跑都產出
-    新檔案：output/<prefix>_00001.mp4 → output/<prefix>_00002.mp4 → ...
+    每次跑都產出新檔案：output/<prefix>_00001.mp4 → output/<prefix>_00002.mp4 → ...
 
-    prefix 可以含子目錄 (e.g., "MediaForge/subtitled") — 自動建目錄。
-    使用者誤填副檔名 (如 "subtitled.mp4") 會被剝掉，避免 .mp4.mp4 雙副檔名。
+    為什麼不直接用 `folder_paths.get_save_image_path` 的回傳 counter：核心那個函式掃 existing
+    file 時用 `<name>_<digits>_*` pattern（**末尾必須有底線**）來判定 — 我們要的是乾淨檔名
+    `_00001.mp4`、不要 `_00001_.mp4`，所以掃不到既存檔、counter 永遠停在 1 → 覆蓋舊檔。
+    自己寫 regex 掃避開這個 convention mismatch。
+
+    prefix 可含子目錄 (e.g., "MediaForge/subtitled") — 自動建目錄。
+    使用者誤填副檔名 (如 "subtitled.mp4") 會被剝掉，避免 .mp4.mp4。
     """
+    import re
+
     import folder_paths
 
     # 容錯：剝掉使用者可能誤加的副檔名
@@ -87,10 +93,21 @@ def _resolve_output_path(filename_prefix):
             filename_prefix = filename_prefix[: -len(ext)]
             break
 
+    # Split subfolder from filename (prefix 可能含 "/" 表子目錄)
     output_dir = folder_paths.get_output_directory()
-    full_output_folder, filename, counter, _subfolder, _prefix = (
-        folder_paths.get_save_image_path(filename_prefix, output_dir)
-    )
+    subfolder, filename = os.path.split(filename_prefix)
+    full_output_folder = os.path.join(output_dir, subfolder) if subfolder else output_dir
+    os.makedirs(full_output_folder, exist_ok=True)
+
+    # 掃 existing files matching `<filename>_<digits>.mp4` → next = max(digits)+1
+    pattern = re.compile(rf"^{re.escape(filename)}_(\d+)\.mp4$", re.IGNORECASE)
+    max_n = 0
+    for f in os.listdir(full_output_folder):
+        m = pattern.match(f)
+        if m:
+            max_n = max(max_n, int(m.group(1)))
+    counter = max_n + 1
+
     return os.path.join(full_output_folder, f"{filename}_{counter:05d}.mp4")
 
 

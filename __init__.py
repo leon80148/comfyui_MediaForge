@@ -18,4 +18,9 @@ for _, _module_name, _ in pkgutil.iter_modules(nodes.__path__):
     NODE_CLASS_MAPPINGS.update(getattr(_module, "NODE_CLASS_MAPPINGS", {}))
     NODE_DISPLAY_NAME_MAPPINGS.update(getattr(_module, "NODE_DISPLAY_NAME_MAPPINGS", {}))
 
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+# 告訴 ComfyUI 我們有 frontend extension 要 serve。
+# 沒這行的話 ComfyUI 不會 serve plugin 的 web/ 目錄、JS extension 完全不會 load。
+# 路徑相對於本 __init__.py 所在的 plugin 根目錄。
+WEB_DIRECTORY = "./web"
+
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
