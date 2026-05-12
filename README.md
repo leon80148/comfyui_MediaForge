@@ -114,12 +114,15 @@ See [AI Provider Recipes](#ai-provider-recipes) below for copy-paste `base_url` 
 
 SRT → hard-burned overlay with full ASS style control. Colors are accepted as `#RRGGBB`; internally converted to ASS BGR-with-alpha.
 
+**Output**: `filename_prefix` STRING (default `MediaForge/subtitled`) — ComfyUI `SaveImage`-style counter pattern; each run produces `output/<prefix>_00001.mp4` → `_00002.mp4` → ... so subsequent runs don't silently overwrite earlier results. Subdirectories OK; extension `.mp4` auto-appended.
+
 Styling knobs:
-- **Font**: `font_name` (Family Name STRING) + optional `font_file` dropdown reading `<plugin>/font/*.ttf|.otf`. When `font_file` is picked, MediaForge lazy-imports `fontTools` to auto-extract the TTF's internal Family Name (drop a TTF in `font/` and you're done — no need to look up the family name manually). Falls back to your typed `font_name` if `fontTools` isn't installed.
-- **Weight**: `bold` + `italic` booleans.
-- **Position**: `alignment` dropdown (9 named positions: `bottom_center (2)`, `top_right (9)`, etc.) + `margin_v` + `margin_l` + `margin_r`. Subtitle effective width = play area − `margin_l` − `margin_r`.
-- **Spacing**: `letter_spacing` FLOAT (ASS Spacing in pixels) for tight or airy line feel.
-- **Outline / shadow / box**: full `outline_color_hex` + `outline_width` + `shadow_depth` + `border_style` (1=outline, 3=box with semi-transparent `back_color_hex`).
+- **Font**: `font` dropdown reads `<plugin>/font/*.ttf|.otf|.ttc`. Drop a TTF in `font/` and pick it from the dropdown — MediaForge lazy-imports `fontTools` to auto-extract the TTF's internal Family Name for libass. Falls back to the filename stem if `fontTools` isn't installed (`pip install fontTools` recommended).
+- **Weight / style**: `bold` + `italic` booleans, `letter_spacing` FLOAT (ASS Spacing in pixels).
+- **Outline / shadow / box**: `outline_color_hex` + `outline_width` + `shadow_depth` + `border_style` (1=outline, 3=box with semi-transparent `back_color_hex`).
+- **Position**: `alignment` dropdown (9 named positions: `bottom_center (2)`, `top_right (9)`, etc.) + `margin_v` + `margin_l` + `margin_r`. Subtitle effective width = play area − `margin_l` − `margin_r` (so asymmetric margins push the text box left / right while controlling its width).
+
+Optional advanced inputs: `video_path` (file path, fallback when no tensor wired), `tensor_fps` (only used when `frames` is wired), `target_fps` (output fps override; `0` = sync to source).
 
 ### `MediaForge/Video`
 
@@ -129,7 +132,7 @@ Dropdown picker for `ComfyUI/input/` video files. Walks subdirectories, lists `.
 
 #### 🔁 Loop Video (`MF_LoopVideo`) **(dual-input)**
 
-Loop to target duration with `strict` / `ping_pong` / `crossfade` modes, optional speed and reverse. `xfade` chain capped at 50 loops; `crossfade_sec >= 有效片段長度` falls back to `strict` (graceful degradation, not error). FFmpeg's `loop` filter buffers up to `MAX_LOOP_FRAMES = 32767` (INT16), so very long sources at high fps need `crossfade` mode instead.
+Loop to target duration with `strict` / `ping_pong` / `crossfade` modes, optional speed and reverse. `xfade` chain capped at 50 loops; `crossfade_sec >= 有效片段長度` falls back to `strict` (graceful degradation, not error). FFmpeg's `loop` filter buffers up to `MAX_LOOP_FRAMES = 32767` (INT16), so very long sources at high fps need `crossfade` mode instead. `audio_volume` (FLOAT 0.0–1.0, default 1.0) attenuates the muxed audio via FFmpeg's `volume` filter — `0.0` mutes, `0.5` halves, `1.0` keeps original.
 
 #### 📥 Load Video Frames (`MF_LoadVideoFrames`)
 
@@ -280,6 +283,8 @@ comfyui_MediaForge/
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
 │   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO + encode_tensor_to_tempfile
 ├── font/                    # drop .ttf / .otf here for MF_BurnSubtitle font_file dropdown
+├── web/
+│   └── dual_input_lock.js   # frontend extension: hide path widget when `frames` pin is wired
 └── tests/                   # 58 tests, pytest-runnable
     ├── test_compose_ir.py        # 8 IR spike cases (Phase 4 prerequisite)
     ├── test_compose_e2e.py       # 3 real-ffmpeg e2e

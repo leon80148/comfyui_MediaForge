@@ -49,6 +49,8 @@ class MF_LoopVideo:
                 "speed": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.05}),
                 "reverse": ("BOOLEAN", {"default": False}),
                 "keep_audio": ("BOOLEAN", {"default": True}),
+                # 音量倍率 — 1.0 = 原音；0.0 = 靜音；0.5 = 半音量。只在 keep_audio=True 時生效
+                "audio_volume": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05}),
             },
             "optional": {
                 # In-memory chain: 連 frames 後改走 tensor → temp mp4 → loop 流程
@@ -64,7 +66,7 @@ class MF_LoopVideo:
     CATEGORY = "MediaForge/Video"
 
     def loop(self, video_path, output_path, target_duration_sec, loop_mode,
-             crossfade_sec, speed, reverse, keep_audio,
+             crossfade_sec, speed, reverse, keep_audio, audio_volume,
              frames=None, fps=30.0, audio=None):
 
         if not ensure_ffmpeg():
@@ -93,7 +95,7 @@ class MF_LoopVideo:
 
             filter_parts, v_out, a_out = self._build_filter(
                 loop_mode, effective_dur, target_duration_sec, crossfade_sec,
-                speed, reverse, has_audio,
+                speed, reverse, has_audio, audio_volume,
             )
 
             cmd = ["ffmpeg", "-y", "-i", source_path,
@@ -118,10 +120,14 @@ class MF_LoopVideo:
         return (output_path,)
 
     @staticmethod
-    def _build_filter(mode, eff_dur, target, xfade_dur, speed, reverse, has_audio):
-        # Step 1: 前處理（speed、reverse）套用到來源串流
+    def _build_filter(mode, eff_dur, target, xfade_dur, speed, reverse, has_audio, audio_volume):
+        # Step 1: 前處理（音量、speed、reverse）套用到來源串流
         v_pre = []
         a_pre = []
+        # volume 放在 a_pre 最前面：FFmpeg audio filter 多數 commutative，順序不影響結果，
+        # 但概念上「先調量、再做其他變換」最清楚。0.0-1.0 範圍；1.0 跳過避免無謂的 filter graph 節點
+        if has_audio and abs(audio_volume - 1.0) > 1e-9:
+            a_pre.append(f"volume={audio_volume:.3f}")
         if reverse:
             v_pre.append("reverse")
             a_pre.append("areverse")

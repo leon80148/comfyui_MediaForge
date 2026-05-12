@@ -114,12 +114,15 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 SRT → 硬燒字幕，完整 ASS 風格控制。顏色輸入 `#RRGGBB`，內部轉成 ASS BGR-with-alpha。
 
+**輸出**：`filename_prefix` STRING（預設 `MediaForge/subtitled`）— 對齊 ComfyUI 核心 `SaveImage` 慣例，每次跑 workflow 自動接 counter：`output/<prefix>_00001.mp4` → `_00002.mp4` → ... 不會 silently 覆蓋先前產出。可含子目錄；`.mp4` 副檔名自動補上。
+
 可調樣式：
-- **字型**：`font_name` (Family Name STRING) + 可選 `font_file` dropdown 讀 `<plugin>/font/*.ttf|.otf`。選 `font_file` 時，MediaForge lazy-import `fontTools` 自動讀 TTF 內部的 Family Name — 丟一個 TTF 進 `font/` 就直接能用，不必再去查字型內部叫什麼名字。沒裝 `fontTools` 時退用你打的 `font_name`。
-- **粗細**：`bold` + `italic` boolean。
-- **位置**：`alignment` dropdown（9 個命名位置：`bottom_center (2)`、`top_right (9)`…）+ `margin_v` + `margin_l` + `margin_r`。字幕實際可用寬 = 播放區寬 − `margin_l` − `margin_r`。
-- **字距**：`letter_spacing` FLOAT（ASS Spacing，像素為單位）做緊湊或寬鬆的視覺。
+- **字型**：`font` dropdown 讀 `<plugin>/font/*.ttf|.otf|.ttc`。把 TTF 丟到 `font/` 後從 dropdown 選即可 — MediaForge lazy-import `fontTools` 自動讀 TTF 內部的 Family Name 餵給 libass。沒裝 `fontTools` 時退用檔名 stem（建議 `pip install fontTools`）。
+- **粗細 / 風格**：`bold` + `italic` boolean、`letter_spacing` FLOAT（ASS Spacing，像素為單位）。
 - **外框 / 陰影 / 底色塊**：`outline_color_hex` + `outline_width` + `shadow_depth` + `border_style`（1=outline 描邊、3=box 半透明底色配 `back_color_hex`）。
+- **位置**：`alignment` dropdown（9 個命名位置：`bottom_center (2)`、`top_right (9)`…）+ `margin_v` + `margin_l` + `margin_r`。字幕實際可用寬 = 播放區寬 − `margin_l` − `margin_r`（margin 不對稱時可同時控制「字幕往哪邊推」+「字幕多寬」）。
+
+進階 optional 輸入：`video_path`（檔案路徑、沒接 tensor 時走它）、`tensor_fps`（只在連 `frames` 時用）、`target_fps`（輸出畫格率覆寫；`0` = 沿用 source fps）。
 
 ### `MediaForge/Video`
 
@@ -129,7 +132,7 @@ SRT → 硬燒字幕，完整 ASS 風格控制。顏色輸入 `#RRGGBB`，內部
 
 #### 🔁 Loop Video (`MF_LoopVideo`) **(dual-input)**
 
-循環至目標時長，支援 `strict` / `ping_pong` / `crossfade` 模式，可加速、可反向。`xfade` chain 上限 50 圈；`crossfade_sec >= 有效片段長度` 自動退階回 `strict`（合理退階，不報錯）。FFmpeg `loop` filter 的 frame 緩衝上限是 `MAX_LOOP_FRAMES = 32767`（INT16），超長素材高 fps 要改用 `crossfade` mode。
+循環至目標時長，支援 `strict` / `ping_pong` / `crossfade` 模式，可加速、可反向。`xfade` chain 上限 50 圈；`crossfade_sec >= 有效片段長度` 自動退階回 `strict`（合理退階，不報錯）。FFmpeg `loop` filter 的 frame 緩衝上限是 `MAX_LOOP_FRAMES = 32767`（INT16），超長素材高 fps 要改用 `crossfade` mode。`audio_volume`（FLOAT 0.0–1.0、預設 1.0）走 FFmpeg `volume` filter 衰減音量 — `0.0` 靜音、`0.5` 半音量、`1.0` 原音。
 
 #### 📥 Load Video Frames (`MF_LoadVideoFrames`)
 
@@ -280,6 +283,8 @@ comfyui_MediaForge/
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
 │   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO + encode_tensor_to_tempfile
 ├── font/                    # 丟 .ttf / .otf 進來給 MF_BurnSubtitle 的 font_file dropdown
+├── web/
+│   └── dual_input_lock.js   # 前端 extension：frames pin 連上時把 path widget 收起來
 └── tests/                   # 58 個測試，pytest 跑
     ├── test_compose_ir.py        # 8 個 IR spike case（Phase 4 prerequisite）
     ├── test_compose_e2e.py       # 3 個 real-ffmpeg e2e
