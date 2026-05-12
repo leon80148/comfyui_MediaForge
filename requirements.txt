@@ -20,11 +20,14 @@ static-ffmpeg>=2.5
 # MF_ConvertChinese 唯一 backend，pure Python 零 C++ 依賴
 opencc-python-reimplemented>=0.1.7
 
-# ─── HTTP / 字型解析 (輕量、純 Python) ───
+# ─── HTTP / 字型解析 / 編碼偵測 (輕量、純 Python) ───
 # MF_WhisperTranscribe (openai_compatible) / MF_TranslateSubtitle
 requests>=2.28
 # MF_BurnSubtitle 自動讀 TTF Family Name；沒裝會 fallback 到檔名 stem
 fontTools>=4.0
+# MF_ConvertChinese 讀 input_path 時自動偵測 encoding (GBK / BIG5 / UTF-16 / ...)；
+# 實質是 requests 的 transitive dep、但顯式列在這避免 requests 哪天 dep tree 改變我們沉默 break
+charset-normalizer>=3.0
 
 # ─── 仍走 lazy-import 的可選套件 (太大或太特定，自行安裝) ───
 #

@@ -14,6 +14,41 @@ import os
 from ..utils.output_path import resolve_output_path
 
 
+def _read_text_with_encoding_detect(path):
+    """讀文字檔、自動偵測 encoding。
+
+    為什麼：SRT 多種編碼 — 現代多為 UTF-8 (with/without BOM)；
+    舊簡體 Windows 通常 GBK / GB18030；舊繁體 Windows 通常 BIG5；
+    部分 Windows 工具會輸出 UTF-16 LE/BE。直接 `open(..., encoding="utf-8")` 在後三者會 UnicodeDecodeError。
+
+    `charset-normalizer` 是純 Python、小、且已經是 `requests` 的 transitive dep（我們 requirements.txt 有 requests），
+    所以實質上一定裝得到 — 但 lazy-import 加 fallback 保險，沒裝時退回 UTF-8 + 友善 error。
+    """
+    try:
+        from charset_normalizer import from_path
+    except ImportError:
+        # Fallback：試 UTF-8，失敗給導引訊息
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except UnicodeDecodeError as e:
+            raise RuntimeError(
+                f"[Convert Chinese] {path} 不是 UTF-8 編碼，自動偵測套件 charset-normalizer 未安裝。"
+                "請 `pip install charset-normalizer` 啟用自動偵測，或先把檔案另存為 UTF-8 再丟進來。"
+            ) from e
+
+    result = from_path(path).best()
+    if result is None:
+        raise RuntimeError(
+            f"[Convert Chinese] 無法偵測 {path} 的編碼（檔案可能損毀或非文字）。請手動轉成 UTF-8 後重試。"
+        )
+    detected = result.encoding
+    if detected and detected.lower() not in ("utf-8", "utf_8", "ascii"):
+        # 非 UTF-8 明確標出 — 讓使用者知道發生了 implicit transcoding
+        print(f"[Convert Chinese] 偵測到 {path} 為 {detected} 編碼（已自動以 UTF-8 處理）")
+    return str(result)
+
+
 # 4 個主要 profile — dropdown 展示文字 → opencc config 字串
 # s2twp 是台灣使用者最常用：簡 → 繁，含詞庫轉換（「电脑」→「電腦」、「软件」→「軟體」）
 PROFILES = {
@@ -59,8 +94,8 @@ class MF_ConvertChinese:
                 )
             if not os.path.exists(input_path):
                 raise FileNotFoundError(f"[Convert Chinese] 找不到輸入檔：{input_path}")
-            with open(input_path, "r", encoding="utf-8") as f:
-                source_text = f.read()
+            # 自動偵測 encoding — 處理 GBK / BIG5 / UTF-16 等 non-UTF-8 SRT 檔
+            source_text = _read_text_with_encoding_detect(input_path)
 
         # Lazy import — 對齊 translate_subtitle / whisper_transcribe 的 ImportError 友善訊息 pattern
         try:
