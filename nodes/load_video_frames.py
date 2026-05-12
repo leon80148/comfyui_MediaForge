@@ -15,7 +15,7 @@ class MF_LoadVideoFrames:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "video_path": ("STRING", {"default": "/輸入/原始影片.mp4"}),
+                "video_path": ("STRING", {"default": "input/sample.mp4"}),
                 # 0 → 沿用原始 fps；>0 → 用 ffmpeg fps filter 重新採樣
                 "target_fps": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 240.0, "step": 0.1}),
                 # 0 → 不限制；>0 → 只解前 N frame，方便 preview 不爆記憶體
@@ -24,10 +24,6 @@ class MF_LoadVideoFrames:
                 # 0 → 沿用原始 sample rate
                 "audio_sr": ("INT", {"default": 0, "min": 0, "max": 192000, "step": 1000}),
             },
-            "optional": {
-                "trigger": ("*", {}),
-                "ai_config": ("AI_CONFIG", {}),
-            },
         }
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "INT", "INT", "STRING")
@@ -35,8 +31,7 @@ class MF_LoadVideoFrames:
     FUNCTION = "load"
     CATEGORY = "MediaForge/Video"
 
-    def load(self, video_path, target_fps, max_frames, load_audio, audio_sr,
-             trigger=None, ai_config=None):
+    def load(self, video_path, target_fps, max_frames, load_audio, audio_sr):
         if not ensure_ffmpeg():
             raise RuntimeError("[Load Video Frames] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
         if not os.path.exists(video_path):

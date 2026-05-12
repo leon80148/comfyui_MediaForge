@@ -33,7 +33,6 @@ class MF_TranslateSubtitle:
                 # 一次送 batch 行數 — 太大可能超 context；太小拖慢速度
                 "batch_size": ("INT", {"default": 20, "min": 1, "max": 200, "step": 1}),
             },
-            "optional": {"trigger": ("*", {})},
         }
 
     RETURN_TYPES = ("STRING",)
@@ -41,7 +40,7 @@ class MF_TranslateSubtitle:
     FUNCTION = "translate"
     CATEGORY = "MediaForge/AI"
 
-    def translate(self, ai_config, srt_text, target_lang, system_prompt, batch_size, trigger=None):
+    def translate(self, ai_config, srt_text, target_lang, system_prompt, batch_size):
         if not isinstance(ai_config, dict):
             raise ValueError(
                 f"[Translate Subtitle] ai_config 必須是 AI_CONFIG dict，"

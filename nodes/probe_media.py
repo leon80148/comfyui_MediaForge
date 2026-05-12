@@ -9,11 +9,7 @@ class MF_ProbeMedia:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "media_path": ("STRING", {"default": "/輸入/原始影片.mp4"}),
-            },
-            "optional": {
-                "trigger": ("*", {}),
-                "ai_config": ("AI_CONFIG", {}),
+                "media_path": ("STRING", {"default": "input/sample.mp4"}),
             },
         }
 
@@ -22,7 +18,7 @@ class MF_ProbeMedia:
     FUNCTION = "probe"
     CATEGORY = "MediaForge/Analysis"
 
-    def probe(self, media_path, trigger=None, ai_config=None):
+    def probe(self, media_path):
         if not ensure_ffmpeg():
             raise RuntimeError("[Probe Media] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
         if not os.path.exists(media_path):

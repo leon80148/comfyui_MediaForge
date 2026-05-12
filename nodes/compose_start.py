@@ -13,14 +13,10 @@ class MF_ComposeStart:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "video_path": ("STRING", {"default": "/輸入/影片.mp4"}),
+                "video_path": ("STRING", {"default": "input/sample.mp4"}),
                 "target_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "target_width": ("INT", {"default": 1920, "min": 16, "max": 7680, "step": 2}),
                 "target_height": ("INT", {"default": 1080, "min": 16, "max": 4320, "step": 2}),
-            },
-            "optional": {
-                "trigger": ("*", {}),
-                "ai_config": ("AI_CONFIG", {}),
             },
         }
 
@@ -29,8 +25,7 @@ class MF_ComposeStart:
     FUNCTION = "start"
     CATEGORY = "MediaForge/Compose"
 
-    def start(self, video_path, target_fps, target_width, target_height,
-              trigger=None, ai_config=None):
+    def start(self, video_path, target_fps, target_width, target_height):
         if not ensure_ffmpeg():
             raise RuntimeError("[Compose Start] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
         if not os.path.exists(video_path):

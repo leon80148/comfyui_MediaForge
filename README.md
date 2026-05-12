@@ -235,12 +235,6 @@ For **translate only** — Ollama / LM Studio don't expose Whisper. Pair with `f
 - **MF_COMPOSE**: `ComposeIR` dataclass (see `utils/compose_ir.py`). Frozen schema after Phase 4 — only additive changes allowed.
 - **AI_CONFIG**: `dict` with keys `provider / base_url / api_key / model / device / extra`. Experimental.
 
-## Optional `ai_config` hook on every node
-
-Every MediaForge node accepts an optional `ai_config: AI_CONFIG` input. Most nodes ignore it today — it exists to keep workflows forward-compatible when Phase 5 wires AI behavior into more nodes (e.g. AI-assisted subtitle styling, auto-watermark placement).
-
-There is also a universal `optional.trigger: ("*", {})` input on every node — it accepts any type, used purely to force execution order between nodes that don't share dataflow (handy in batch workflows).
-
 ## Architecture
 
 ```

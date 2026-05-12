@@ -40,18 +40,14 @@ class MF_LoopVideo:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "video_path": ("STRING", {"default": "/輸入/原始影片.mp4"}),
-                "output_path": ("STRING", {"default": "/輸出/loop影片.mp4"}),
+                "video_path": ("STRING", {"default": "input/sample.mp4"}),
+                "output_path": ("STRING", {"default": "output/looped.mp4"}),
                 "target_duration_sec": ("FLOAT", {"default": 30.0, "min": 0.1, "max": 36000.0, "step": 0.1}),
                 "loop_mode": (["strict", "ping_pong", "crossfade"], {"default": "strict"}),
                 "crossfade_sec": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1}),
                 "speed": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.05}),
                 "reverse": ("BOOLEAN", {"default": False}),
                 "keep_audio": ("BOOLEAN", {"default": True}),
-            },
-            "optional": {
-                "trigger": ("*", {}),
-                "ai_config": ("AI_CONFIG", {}),
             },
         }
 
@@ -61,7 +57,7 @@ class MF_LoopVideo:
     CATEGORY = "MediaForge/Video"
 
     def loop(self, video_path, output_path, target_duration_sec, loop_mode,
-             crossfade_sec, speed, reverse, keep_audio, trigger=None, ai_config=None):
+             crossfade_sec, speed, reverse, keep_audio):
 
         if not ensure_ffmpeg():
             raise RuntimeError("[Loop Video] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")

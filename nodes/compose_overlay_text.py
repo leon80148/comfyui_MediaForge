@@ -21,7 +21,6 @@ class MF_ComposeOverlayText:
                 "start_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
                 "end_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
             },
-            "optional": {"trigger": ("*", {})},
         }
 
     RETURN_TYPES = ("MF_COMPOSE",)
@@ -30,7 +29,7 @@ class MF_ComposeOverlayText:
     CATEGORY = "MediaForge/Compose"
 
     def overlay_text(self, compose, text, x_expr, y_expr, fontsize, fontcolor,
-                     borderw, bordercolor, fontfile, start_sec, end_sec, trigger=None):
+                     borderw, bordercolor, fontfile, start_sec, end_sec):
         if not isinstance(compose, ComposeIR):
             raise ValueError(f"[Compose Overlay Text] 輸入不是 MF_COMPOSE IR，拿到 {type(compose).__name__}")
 

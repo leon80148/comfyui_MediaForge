@@ -28,7 +28,6 @@ class MF_AIConfig:
                 "device": (["cpu", "cuda", "auto"], {"default": "auto"}),
                 "extra_json": ("STRING", {"default": "{}", "multiline": True}),
             },
-            "optional": {"trigger": ("*", {})},
         }
 
     RETURN_TYPES = ("AI_CONFIG",)
@@ -36,7 +35,7 @@ class MF_AIConfig:
     FUNCTION = "config"
     CATEGORY = "MediaForge/AI"
 
-    def config(self, provider, base_url, api_key, model, device, extra_json, trigger=None):
+    def config(self, provider, base_url, api_key, model, device, extra_json):
         import json
         try:
             extra = json.loads(extra_json) if extra_json.strip() else {}

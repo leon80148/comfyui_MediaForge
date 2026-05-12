@@ -15,8 +15,8 @@ class MF_TrimByRanges:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "video_path": ("STRING", {"default": "/輸入/影片.mp4"}),
-                "output_path": ("STRING", {"default": "/輸出/裁切影片.mp4"}),
+                "video_path": ("STRING", {"default": "input/sample.mp4"}),
+                "output_path": ("STRING", {"default": "output/trimmed.mp4"}),
                 "mode": (["keep", "remove"], {"default": "remove"}),
                 # 兩條 input path：(1) SILENCE_RANGES 連線；(2) 手寫 JSON fallback
                 "ranges_json": (
@@ -27,8 +27,6 @@ class MF_TrimByRanges:
                 "crossfade_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.05}),
             },
             "optional": {
-                "trigger": ("*", {}),
-                "ai_config": ("AI_CONFIG", {}),
                 "ranges": ("SILENCE_RANGES",),
             },
         }
@@ -38,8 +36,7 @@ class MF_TrimByRanges:
     FUNCTION = "trim"
     CATEGORY = "MediaForge/Video"
 
-    def trim(self, video_path, output_path, mode, ranges_json, crossfade_sec,
-             trigger=None, ai_config=None, ranges=None):
+    def trim(self, video_path, output_path, mode, ranges_json, crossfade_sec, ranges=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Trim By Ranges] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
         if not os.path.exists(video_path):

@@ -235,12 +235,6 @@ model      = llama3.2                       # 你本地 pull 過的任何 model
 - **MF_COMPOSE**: `ComposeIR` dataclass（見 `utils/compose_ir.py`）。Phase 4 後 schema 凍結 — 只能加新欄位，不能改既有。
 - **AI_CONFIG**: `dict`，keys 為 `provider / base_url / api_key / model / device / extra`。Experimental。
 
-## 每個節點的 optional `ai_config` hook
-
-每個 MediaForge 節點都接受可選的 `ai_config: AI_CONFIG` 輸入。今天大多節點忽略它 — 這個槽位的存在是為了 Phase 5 把 AI 行為串到更多節點時 workflow 保持向前相容（例如 AI 輔助字幕風格、自動 watermark 擺位）。
-
-每個節點也都有萬用 `optional.trigger: ("*", {})` 輸入 — 接任意型別，用途是強制兩個沒 dataflow 關係的節點之間的執行順序（batch workflow 常用）。
-
 ## Architecture
 
 ```

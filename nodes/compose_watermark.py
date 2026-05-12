@@ -25,7 +25,7 @@ class MF_ComposeWatermark:
         return {
             "required": {
                 "compose": ("MF_COMPOSE",),
-                "image_path": ("STRING", {"default": "/輸入/watermark.png"}),
+                "image_path": ("STRING", {"default": "input/watermark.png"}),
                 "placement": (list(PLACEMENT_PRESETS.keys()), {"default": "bottom_right"}),
                 # 相對 frame width 的縮放比例，0.05~0.5；對應 watermark 寬度 = scale * target_width
                 "relative_scale": ("FLOAT", {"default": 0.15, "min": 0.05, "max": 0.5, "step": 0.01}),
@@ -39,7 +39,6 @@ class MF_ComposeWatermark:
                 "visible_start_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
                 "visible_end_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
             },
-            "optional": {"trigger": ("*", {})},
         }
 
     RETURN_TYPES = ("MF_COMPOSE",)
@@ -49,7 +48,7 @@ class MF_ComposeWatermark:
 
     def watermark(self, compose, image_path, placement, relative_scale, opacity,
                   margin_top, margin_right, margin_bottom, margin_left,
-                  visible_start_sec, visible_end_sec, trigger=None):
+                  visible_start_sec, visible_end_sec):
         if not isinstance(compose, ComposeIR):
             raise ValueError(
                 f"[Compose Watermark] 輸入不是 MF_COMPOSE IR，拿到 {type(compose).__name__}"

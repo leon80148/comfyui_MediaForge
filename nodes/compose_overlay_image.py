@@ -10,7 +10,7 @@ class MF_ComposeOverlayImage:
         return {
             "required": {
                 "compose": ("MF_COMPOSE",),
-                "image_path": ("STRING", {"default": "/輸入/overlay.png"}),
+                "image_path": ("STRING", {"default": "input/overlay.png"}),
                 "x_expr": ("STRING", {"default": "10"}),
                 "y_expr": ("STRING", {"default": "10"}),
                 # 縮放：0 = 原圖大小；>0 = 寬度像素 (高度等比例)
@@ -18,7 +18,6 @@ class MF_ComposeOverlayImage:
                 "start_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
                 "end_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
             },
-            "optional": {"trigger": ("*", {})},
         }
 
     RETURN_TYPES = ("MF_COMPOSE",)
@@ -26,8 +25,7 @@ class MF_ComposeOverlayImage:
     FUNCTION = "overlay_image"
     CATEGORY = "MediaForge/Compose"
 
-    def overlay_image(self, compose, image_path, x_expr, y_expr, scale_w, start_sec, end_sec,
-                      trigger=None):
+    def overlay_image(self, compose, image_path, x_expr, y_expr, scale_w, start_sec, end_sec):
         if not isinstance(compose, ComposeIR):
             raise ValueError(
                 f"[Compose Overlay Image] 輸入不是 MF_COMPOSE IR，拿到 {type(compose).__name__}"

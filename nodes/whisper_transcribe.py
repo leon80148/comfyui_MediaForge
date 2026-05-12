@@ -18,7 +18,7 @@ class MF_WhisperTranscribe:
         return {
             "required": {
                 "ai_config": ("AI_CONFIG",),
-                "audio_path": ("STRING", {"default": "/輸入/影片.mp4"}),
+                "audio_path": ("STRING", {"default": "input/sample.mp4"}),
                 "language": ("STRING", {"default": "zh"}),
                 # STT 與 chat completion 必須用不同 model id；
                 # 留空 → 用 ai_config.model；填值 → override 給 STT 端點使用。
@@ -30,7 +30,6 @@ class MF_WhisperTranscribe:
                 "model_override": ("STRING", {"default": ""}),
             },
             "optional": {
-                "trigger": ("*", {}),
                 "audio": ("AUDIO",),
             },
         }
@@ -40,8 +39,7 @@ class MF_WhisperTranscribe:
     FUNCTION = "transcribe"
     CATEGORY = "MediaForge/AI"
 
-    def transcribe(self, ai_config, audio_path, language, model_override,
-                   trigger=None, audio=None):
+    def transcribe(self, ai_config, audio_path, language, model_override, audio=None):
         if not isinstance(ai_config, dict):
             raise ValueError(
                 f"[Whisper Transcribe] ai_config 必須是 AI_CONFIG dict，"

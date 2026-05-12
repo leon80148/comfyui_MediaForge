@@ -13,7 +13,7 @@ class MF_ComposeFinalize:
         return {
             "required": {
                 "compose": ("MF_COMPOSE",),
-                "output_path": ("STRING", {"default": "/輸出/合成.mp4"}),
+                "output_path": ("STRING", {"default": "output/composed.mp4"}),
                 "codec": (["libx264", "libx265", "libsvtav1", "prores_ks"], {"default": "libx264"}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
                 "preset": (
@@ -24,10 +24,6 @@ class MF_ComposeFinalize:
                 # 是否保留 main video 的原 audio 軌
                 "keep_audio": ("BOOLEAN", {"default": True}),
             },
-            "optional": {
-                "trigger": ("*", {}),
-                "ai_config": ("AI_CONFIG", {}),
-            },
         }
 
     RETURN_TYPES = ("STRING", "STRING")
@@ -35,8 +31,7 @@ class MF_ComposeFinalize:
     FUNCTION = "finalize"
     CATEGORY = "MediaForge/Compose"
 
-    def finalize(self, compose, output_path, codec, crf, preset, keep_audio,
-                 trigger=None, ai_config=None):
+    def finalize(self, compose, output_path, codec, crf, preset, keep_audio):
         if not ensure_ffmpeg():
             raise RuntimeError("[Compose Finalize] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
         if not isinstance(compose, ComposeIR):

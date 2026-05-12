@@ -25,15 +25,13 @@ class MF_DetectSilence:
         return {
             "required": {
                 # 任一：STRING path (常用) 或 AUDIO dict (純 audio workflow)
-                "audio_source": ("STRING", {"default": "/輸入/影片.mp4"}),
+                "audio_source": ("STRING", {"default": "input/sample.mp4"}),
                 # 噪音門檻 dB，越負越嚴格（-30dB 比 -50dB 更容易判定為靜音）
                 "noise_db": ("FLOAT", {"default": -30.0, "min": -90.0, "max": 0.0, "step": 0.5}),
                 # 最短靜音長度（短於此值不算）
                 "min_duration_sec": ("FLOAT", {"default": 0.5, "min": 0.05, "max": 60.0, "step": 0.05}),
             },
             "optional": {
-                "trigger": ("*", {}),
-                "ai_config": ("AI_CONFIG", {}),
                 "audio": ("AUDIO",),
             },
         }
@@ -44,8 +42,7 @@ class MF_DetectSilence:
     CATEGORY = "MediaForge/Analysis"
     # 連線型別 SILENCE_RANGES 為 MediaForge 自定，下游 MF_TrimByRanges 吃這個
 
-    def detect(self, audio_source, noise_db, min_duration_sec,
-               trigger=None, ai_config=None, audio=None):
+    def detect(self, audio_source, noise_db, min_duration_sec, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Detect Silence] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 

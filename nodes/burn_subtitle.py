@@ -9,9 +9,9 @@ class MF_BurnSubtitle:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "video_path": ("STRING", {"default": "/輸入/原始影片.mp4"}),
-                "srt_path": ("STRING", {"default": "/輸入/原始字幕.srt"}),
-                "output_path": ("STRING", {"default": "/輸出/上字影片.mp4"}),
+                "video_path": ("STRING", {"default": "input/sample.mp4"}),
+                "srt_path": ("STRING", {"default": "input/sample.srt"}),
+                "output_path": ("STRING", {"default": "output/subtitled.mp4"}),
 
                 # 字體與顏色
                 "font_name": ("STRING", {"default": "Microsoft JhengHei"}),
@@ -34,11 +34,6 @@ class MF_BurnSubtitle:
                 # 影片輸出設定
                 "target_fps": ("INT", {"default": 0, "min": 0, "max": 120, "step": 1}),
             },
-            "optional": {
-                "trigger": ("*", {}),
-                # Phase 5 預留 hook — 目前 no-op，避免 AI 節點 ship 時 breaking
-                "ai_config": ("AI_CONFIG", {}),
-            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -49,7 +44,7 @@ class MF_BurnSubtitle:
     def burn(self, video_path, srt_path, output_path, font_name, font_size,
              font_color_hex, bold, outline_color_hex, outline_width, shadow_depth,
              border_style, back_color_hex, alignment, margin_v, margin_lr,
-             target_fps, trigger=None, ai_config=None):
+             target_fps):
 
         if not ensure_ffmpeg():
             raise RuntimeError("[Burn Subtitle] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")

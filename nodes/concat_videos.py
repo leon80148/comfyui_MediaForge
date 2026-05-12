@@ -19,11 +19,11 @@ class MF_ConcatVideos:
                 "video_paths": (
                     "STRING",
                     {
-                        "default": "/輸入/片段1.mp4\n/輸入/片段2.mp4",
+                        "default": "input/clip1.mp4\ninput/clip2.mp4",
                         "multiline": True,
                     },
                 ),
-                "output_path": ("STRING", {"default": "/輸出/串接.mp4"}),
+                "output_path": ("STRING", {"default": "output/concat.mp4"}),
                 # copy = 同 codec/同參數，秒接；transcode = 跨 codec / 加 transition
                 "mode": (["copy", "transcode"], {"default": "transcode"}),
                 # xfade duration (sec)；只在 mode=transcode 生效；0 = 純 cut
@@ -39,10 +39,6 @@ class MF_ConcatVideos:
                 "height": ("INT", {"default": 1080, "min": 16, "max": 4320, "step": 2}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
             },
-            "optional": {
-                "trigger": ("*", {}),
-                "ai_config": ("AI_CONFIG", {}),
-            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -51,8 +47,7 @@ class MF_ConcatVideos:
     CATEGORY = "MediaForge/Video"
 
     def concat(self, video_paths, output_path, mode, transition_sec, transition_type,
-               fps, width, height, crf,
-               trigger=None, ai_config=None):
+               fps, width, height, crf):
         if not ensure_ffmpeg():
             raise RuntimeError("[Concat Videos] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 

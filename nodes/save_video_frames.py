@@ -27,7 +27,7 @@ class MF_SaveVideoFrames:
         return {
             "required": {
                 "frames": ("IMAGE",),
-                "output_path": ("STRING", {"default": "/輸出/影片.mp4"}),
+                "output_path": ("STRING", {"default": "output/video.mp4"}),
                 "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "codec": (list(CODEC_MAP.keys()), {"default": "h264 (libx264)"}),
                 # CRF mode 為 v2.1 預設；bitrate>0 切到 bitrate mode；target_size_mb>0 切到 two-pass
@@ -44,8 +44,6 @@ class MF_SaveVideoFrames:
                 "pix_fmt_override": ("STRING", {"default": ""}),
             },
             "optional": {
-                "trigger": ("*", {}),
-                "ai_config": ("AI_CONFIG", {}),
                 "audio": ("AUDIO",),
             },
         }
@@ -56,8 +54,7 @@ class MF_SaveVideoFrames:
     CATEGORY = "MediaForge/Video"
 
     def save(self, frames, output_path, fps, codec, encode_mode, crf, bitrate_kbps,
-             target_size_mb, preset, pix_fmt_override,
-             trigger=None, ai_config=None, audio=None):
+             target_size_mb, preset, pix_fmt_override, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Save Video Frames] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
