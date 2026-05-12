@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.history/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Development docs & internal records (local-only, not for public repo)
+docs/
+NOTES.md
+TODO.md
+TODOS.md
+ROADMAP.md
+CHANGELOG.draft.md
+.session/
+*.local.md
+*.draft.md
+.scratch/
+
+# Test outputs / sample media
+test_outputs/
+outputs/
+inputs/
+samples/
+tmp/
+*.tmp
+*.bak
+
+# Test media files in repo root (avoid accidentally committing large binaries)
+/*.mp4
+/*.mov
+/*.avi
+/*.mkv
+/*.webm
+/*.gif
+/*.wav
+/*.mp3
+/*.aac
+/*.flac
+/*.srt
+/*.ass
+/*.vtt
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Internal Claude guidance — kept local-only per project policy
+CLAUDE.md
+claude.md

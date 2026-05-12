@@ -1,0 +1,21 @@
+[project]
+name = "comfyui-mediaforge"
+description = "MediaForge — FFmpeg-powered media utility nodes for ComfyUI. Subtitle burn-in, video loop, media probe, with an extensible structure for image / audio / AI work."
+version = "0.1.0"
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/leon80148/comfyui_MediaForge"
+
+[tool.comfy]
+PublisherId = "leon80148"
+DisplayName = "MediaForge"
+Icon = ""
+
+[tool.ruff]
+# 繼承 ComfyUI 主 repo 的 ruff 規則 (selects N805, S307, S102, E, T, W, F)，
+# 但本 plugin 把 `print` 當使用者面向 UX channel (見 CLAUDE.md 慣例)，故 ignore T201。
+lint.select = ["N805", "S307", "S102", "E", "T", "W", "F"]
+lint.ignore = ["E501", "E722", "E731", "E712", "E402", "E741", "T201"]
+exclude = ["*.ipynb", "tests/__pycache__/*"]
