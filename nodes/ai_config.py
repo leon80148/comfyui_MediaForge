@@ -36,6 +36,13 @@ class MF_AIConfig:
     CATEGORY = "MediaForge/AI"
 
     def config(self, provider, base_url, api_key, model, device, extra_json):
+        """Build AI_CONFIG dict from widget values.
+
+        Returns single-element tuple wrapping ``cfg`` dict (ComfyUI 強制 tuple)。
+        ``cfg`` 含 provider / base_url (尾斜線已 strip) / api_key / model / device /
+        extra (parse 自 extra_json 的 dict)。`api_key` 在 print log 中只露前 4 字 + ***
+        以避免 screen-share / log 外流；下游 node 自行決定如何 sanitize。
+        """
         import json
         try:
             extra = json.loads(extra_json) if extra_json.strip() else {}

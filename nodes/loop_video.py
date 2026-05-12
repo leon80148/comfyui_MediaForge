@@ -104,6 +104,15 @@ class MF_LoopVideo:
             if loop_mode == "crossfade" and crossfade_sec >= effective_dur:
                 print(f"[Loop Video] 警告：crossfade_sec({crossfade_sec}) >= 有效片段長度({effective_dur:.2f}s)，改用 strict")
                 loop_mode = "strict"
+            # P0-2 fix：target <= xfade 邊界。原公式 ceil((target-xfade)/(eff-xfade)) 變 ≤0，
+            # max(2, ...) 強塞 n=2 → 兩段完全重疊輸出時長 = eff_dur，不到 target、silent 偏短。
+            # 退階到 strict：strict 用 -t 截長度、行為可預測。
+            if loop_mode == "crossfade" and target_duration_sec <= crossfade_sec:
+                print(
+                    f"[Loop Video] 警告：target_duration({target_duration_sec})s ≤ crossfade_sec({crossfade_sec})s，"
+                    "退階到 strict（無交疊接縫）"
+                )
+                loop_mode = "strict"
 
             filter_parts, v_out, a_out = self._build_filter(
                 loop_mode, effective_dur, target_duration_sec, crossfade_sec,
@@ -133,6 +142,10 @@ class MF_LoopVideo:
 
     @staticmethod
     def _build_filter(mode, eff_dur, target, xfade_dur, speed, reverse, has_audio, audio_volume):
+        # Defensive：crossfade 模式但 target <= xfade，靜默退階到 strict（避免兩段完全
+        # overlap 輸出比 target 短）。caller (.loop) 已先檢查、這裡是保險。
+        if mode == "crossfade" and target <= xfade_dur:
+            mode = "strict"
         # Step 1: 前處理（音量、speed、reverse）套用到來源串流
         v_pre = []
         a_pre = []

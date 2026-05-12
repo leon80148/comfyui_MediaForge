@@ -11,6 +11,10 @@ from ..utils.ffmpeg import ensure_ffmpeg, run_ffmpeg
 from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile
 
+# 註：本 module 不 import `escape_filter_path` — concat demuxer 走 list 檔走 abspath、
+# transcode 走 -i 路徑（filter graph 不直接寫 path），所以 escape 不必要。
+# 之前留 import + `_ = escape_filter_path` hack 已移除。
+
 
 class MF_ConcatVideos:
     @classmethod
@@ -164,6 +168,17 @@ class MF_ConcatVideos:
         v_labels = []
         a_labels = []
         durations = [_pd(p) or 0.0 for p in paths]
+        # Probe 失敗或 0 長度 → 直接 raise。
+        # 為什麼不退階：apad=whole_dur=0 / atrim=duration=0 / xfade offset=0 都會讓
+        # FFmpeg 跑出晦澀錯誤（filter graph 內部失敗），訊息不會點出真正原因（probe）。
+        # 早 raise 給使用者「為什麼 probe 失敗」的線索（path 拼錯？codec ffprobe 不認？）。
+        bad = [paths[i] for i, d in enumerate(durations) if d <= 0]
+        if bad:
+            raise RuntimeError(
+                f"[Concat Videos] ffprobe 取不到 video 時長（{bad}）。"
+                "可能是檔案損毀 / 容器 ffprobe 不認 / 路徑含特殊字元。"
+                "改用 mode=copy 跳過 probe，或先用 MF_ProbeMedia 確認檔案可解析。"
+            )
         has_audio_flags = [
             bool(info and any(s.get("codec_type") == "audio" for s in info.get("streams", [])))
             for info in (_probe(p) for p in paths)

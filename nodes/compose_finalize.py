@@ -55,7 +55,11 @@ class MF_ComposeFinalize:
         # IR 經 compile 會 mutate 內部 ops 的 depends_on（rewrite main_label → norm_label），
         # 為避免破壞下游可能 cache 住的 IR，先 clone。
         ir = compose.clone()
-        script, final_label, drawtext_cleanup = compile_ir(ir)
+        # cleanup_paths 包含兩類 temp 檔：
+        #   (a) ComposeStart 在 tensor input 時寫的 temp .mp4（活到 Finalize 跑完才能刪）
+        #   (b) compile_ir 為每個 drawtext op 寫的 textfile (R5 P2 fix)
+        # 兩類都必須在 finally 統一 unlink，不能拆。原命名 `drawtext_cleanup` 誤導，已 rename。
+        script, final_label, cleanup_paths = compile_ir(ir)
         filter_arg_value, tmp_path = write_filter_script_if_long(script)
 
         cmd = ["ffmpeg", "-y"]
@@ -109,7 +113,7 @@ class MF_ComposeFinalize:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
-            for p in drawtext_cleanup:
+            for p in cleanup_paths:
                 try:
                     os.unlink(p)
                 except OSError:

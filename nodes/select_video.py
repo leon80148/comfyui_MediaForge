@@ -10,7 +10,11 @@ decode 走 MF_LoadVideoFrames（重量級、tensor pipeline）。
 """
 import os
 
-import folder_paths
+# `folder_paths` 是 ComfyUI runtime 才有的 module；放 function-level lazy-import
+# 才能在 unit test / non-ComfyUI 環境也安全 load 整個 package（plugin auto-discovery
+# 透過 __init__.py 的 pkgutil.iter_modules walk 每個 nodes/*.py，module-level import
+# folder_paths 會讓整個 package 在 ComfyUI 沒啟動時直接炸）。
+# CLAUDE.md 約定：optional / runtime-only dependency 一律 function-level import。
 
 
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg", ".ts")
@@ -21,6 +25,7 @@ _EMPTY_PLACEHOLDER = "(input/ 目錄沒有影片檔)"
 
 def _list_input_videos():
     """Walk ComfyUI input/ recursively, return relative paths to video files."""
+    import folder_paths
     input_dir = folder_paths.get_input_directory()
     if not os.path.isdir(input_dir):
         return []
@@ -50,6 +55,7 @@ class MF_SelectVideo:
     CATEGORY = "MediaForge/Video"
 
     def select(self, video):
+        import folder_paths
         if video == _EMPTY_PLACEHOLDER:
             raise FileNotFoundError(
                 "[Select Video] ComfyUI input/ 目錄沒有影片檔。"
@@ -68,6 +74,7 @@ class MF_SelectVideo:
         # 用檔案 mtime 當 cache key：使用者換了 input/foo.mp4 的內容（即使同檔名），
         # mtime 變動 → ComfyUI 自動 invalidate 下游 node 的 output cache。
         # 對應 ComfyUI core LoadImage 的同款設計。
+        import folder_paths
         if video == _EMPTY_PLACEHOLDER:
             return 0.0
         input_dir = folder_paths.get_input_directory()
