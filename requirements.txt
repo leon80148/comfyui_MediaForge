@@ -1,15 +1,26 @@
-# MediaForge Python dependencies.
+# MediaForge Python dependencies
 #
-# 系統需求：FFmpeg + FFprobe 在 PATH（不是 Python 套件）。
+# 系統需求：FFmpeg + FFprobe 在 PATH (不是 Python 套件)。
+# 安裝 Plugin 時 ComfyUI Manager 會自動跑 `pip install -r requirements.txt`。
 #
-# 為什麼這裡只列 opencc 一個：其他 plugin 用到的可選套件都走 lazy-import + 友善
-# ImportError 訊息引導安裝，不強制全部使用者裝。opencc 例外是因為 MF_ConvertChinese
-# 對所有需要簡繁轉換的工作流都核心、且 opencc-python-reimplemented 是純 Python、零
-# C++ 依賴、體積小、無 platform 風險，列進來不會造成困擾。
-#
-# 其他 plugin 內 lazy-import 的可選套件（不在這裡 — 視需要自行安裝）：
-#   - requests           — MF_WhisperTranscribe (openai_compatible) / MF_TranslateSubtitle
-#   - fontTools          — MF_BurnSubtitle 自動讀 TTF Family Name (沒裝會退用檔名 stem)
-#   - faster-whisper     — MF_WhisperTranscribe 的 faster_whisper_local backend (大、需要 CUDA/CPU compute)
+# ─── 列在這裡的判準 ───
+# 「裝下去對沒用到該節點的人是不是負擔」— 不是 → 列進來；是 → 仍走 lazy-import。
+# 所有列在這裡的套件都是純 Python、小體積、無平台/編譯依賴。
 
+# MF_ConvertChinese (OpenCC 簡繁轉換) — pure Python, no C++ libopencc
 opencc-python-reimplemented>=0.1.7
+
+# MF_WhisperTranscribe (openai_compatible backend) / MF_TranslateSubtitle — HTTP client
+requests>=2.28
+
+# MF_BurnSubtitle 自動讀 TTF Family Name；沒裝會 fallback 到檔名 stem (能跑但 Fontname 可能對不到)
+fontTools>=4.0
+
+# ─── 仍維持 lazy-import 的可選套件（自行安裝） ───
+#
+# faster-whisper — 給 MF_WhisperTranscribe 的 `faster_whisper_local` backend 用。
+#   不列在這裡的理由：
+#     - 套件本身 + CTranslate2 + 模型快取合計幾百 MB
+#     - 需要 GPU/CPU compute backend (硬體相關)
+#     - 多數使用者改用 hosted (Groq / OpenAI) 而非 local，裝下去純浪費空間
+#   要用時：pip install faster-whisper
