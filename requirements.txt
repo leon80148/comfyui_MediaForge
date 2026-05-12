@@ -1,1 +1,15 @@
-# No Python dependencies. Requires system FFmpeg in PATH.
+# MediaForge Python dependencies.
+#
+# 系統需求：FFmpeg + FFprobe 在 PATH（不是 Python 套件）。
+#
+# 為什麼這裡只列 opencc 一個：其他 plugin 用到的可選套件都走 lazy-import + 友善
+# ImportError 訊息引導安裝，不強制全部使用者裝。opencc 例外是因為 MF_ConvertChinese
+# 對所有需要簡繁轉換的工作流都核心、且 opencc-python-reimplemented 是純 Python、零
+# C++ 依賴、體積小、無 platform 風險，列進來不會造成困擾。
+#
+# 其他 plugin 內 lazy-import 的可選套件（不在這裡 — 視需要自行安裝）：
+#   - requests           — MF_WhisperTranscribe (openai_compatible) / MF_TranslateSubtitle
+#   - fontTools          — MF_BurnSubtitle 自動讀 TTF Family Name (沒裝會退用檔名 stem)
+#   - faster-whisper     — MF_WhisperTranscribe 的 faster_whisper_local backend (大、需要 CUDA/CPU compute)
+
+opencc-python-reimplemented>=0.1.7
