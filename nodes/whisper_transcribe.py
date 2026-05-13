@@ -126,8 +126,32 @@ def _looks_like_stt_model(name: str) -> bool:
     return any(low.startswith(p) for p in _STT_MODEL_PREFIXES)
 
 
+def _input_has_audio_stream(path):
+    """ffprobe 確認 input 至少有一個 audio stream。
+
+    為什麼：抽 WAV 前先 probe 比直接讓 ffmpeg 失敗給更好的 UX —— 當 input 是純 video
+    或 SRT 之類沒 audio 的檔，ffmpeg 只會吐 generic "Output file does not contain
+    any stream"，不像「input 缺 audio stream」那麼直白。
+    """
+    from ..utils.ffmpeg import probe
+    info = probe(path)
+    if info is None:
+        return False
+    return any(s.get("codec_type") == "audio" for s in info.get("streams", []))
+
+
+# WAV header (RIFF/fmt/data) 通常 44 bytes；任何低於這個量就一定不是有效音訊。
+_MIN_VALID_WAV_BYTES = 256
+
+
 def _extract_wav(path):
     import subprocess
+    if not _input_has_audio_stream(path):
+        raise RuntimeError(
+            f"[Whisper Transcribe] {path} 沒有 audio stream，無法做語音辨識。"
+            "請確認來源是含音軌的影片或音訊檔；若想轉一段純文字，請改用 MF_TranslateSubtitle。"
+        )
+
     fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="mf_whisper_")
     os.close(fd)
     cmd = resolve_ffmpeg_cmd([
@@ -143,6 +167,22 @@ def _extract_wav(path):
             pass
         tail = "\n".join(proc.stderr.decode("utf-8", errors="replace").strip().splitlines()[-30:])
         raise RuntimeError(f"[Whisper Transcribe] FFmpeg 抽 WAV 失敗:\n{tail}")
+
+    # Defense-in-depth：舊版 ffmpeg / static-ffmpeg fallback 偶爾會吐 0-byte WAV
+    # 但 returncode=0；不擋下，下游 faster-whisper 會 silent return 0 段、產出空 SRT。
+    try:
+        size = os.path.getsize(tmp)
+    except OSError:
+        size = 0
+    if size < _MIN_VALID_WAV_BYTES:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"[Whisper Transcribe] FFmpeg 抽 WAV 後 size={size} byte 過小（無效音訊），"
+            f"input 可能是 silent video 或非預期格式。"
+        )
     return tmp
 
 
