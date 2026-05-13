@@ -10,10 +10,14 @@ import tempfile
 
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CUSTOM_NODES = os.path.dirname(_PLUGIN_DIR)
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _CUSTOM_NODES not in sys.path:
     sys.path.insert(0, _CUSTOM_NODES)
 if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
+import conftest  # noqa: E402,F401
 
 
 def _ffprobe_duration(path):
@@ -31,7 +35,6 @@ def test_trim_empty_ranges_remove_mode_keeps_full_video():
 
     with tempfile.TemporaryDirectory() as td:
         src = os.path.join(td, "src.mp4")
-        out = os.path.join(td, "out.mp4")
         subprocess.run(
             ["ffmpeg", "-y", "-v", "error",
              "-f", "lavfi", "-i", "testsrc=duration=2:size=160x120:rate=24",
@@ -42,8 +45,10 @@ def test_trim_empty_ranges_remove_mode_keeps_full_video():
         )
         node = MF_TrimByRanges()
         # 故意傳空 list (模擬 MF_DetectSilence 沒偵到任何靜音)
-        node.trim(
-            video_path=src, output_path=out, mode="remove",
+        (out,) = node.trim(
+            video_path=src,
+            filename_prefix="MediaForge/test_r7_trim_empty_remove",
+            mode="remove",
             ranges_json="ignored, should not be used", crossfade_sec=0.0,
             ranges=[],  # ← 連線傳入空 list
         )
@@ -68,7 +73,8 @@ def test_trim_empty_ranges_keep_mode_raises():
         node = MF_TrimByRanges()
         try:
             node.trim(
-                video_path=src, output_path=os.path.join(td, "out.mp4"),
+                video_path=src,
+                filename_prefix="MediaForge/test_r7_trim_empty_keep",
                 mode="keep", ranges_json="ignored", crossfade_sec=0.0, ranges=[],
             )
         except ValueError as e:
@@ -129,7 +135,7 @@ def test_concat_demuxer_uses_absolute_paths():
                 node = cv.MF_ConcatVideos()
                 node.concat(
                     video_paths="c1.mp4\nc2.mp4",
-                    output_path=os.path.join(td, "out.mp4"),
+                    filename_prefix="MediaForge/test_r7_concat_demuxer_abs",
                     mode="copy", transition_sec=0.0, transition_type="fade",
                     fps=24.0, width=320, height=180, crf=23,
                 )
@@ -138,8 +144,18 @@ def test_concat_demuxer_uses_absolute_paths():
 
             content = captured["list_content"]
             for line in content.splitlines():
-                # 每行格式 `file '/...'`
-                assert line.startswith("file '/"), (
+                # 每行格式 `file '<absolute>'`. POSIX absolute 以 `/` 起頭；
+                # Windows absolute 以 drive letter `X:` (例 C:) 起頭。
+                m_posix = line.startswith("file '/")
+                # 比對 Windows 樣式: `file 'X:\\...'` 或 `file 'X:/...'`
+                m_win = (len(line) > 8 and line.startswith("file '")
+                         and line[7:9] == ":" + os.sep[0:1] if False  # noqa
+                         else False)
+                # 更可靠的 Windows check：第 7~9 char 為 `<letter>:` 後接 / 或 \
+                m_win = (line.startswith("file '") and len(line) > 9
+                         and line[6].isalpha() and line[7] == ":"
+                         and line[8] in ("/", "\\"))
+                assert m_posix or m_win, (
                     f"list 內路徑非 absolute:\n{content}"
                 )
             print("[OK] R7 P2: concat demuxer 用 absolute paths")
@@ -155,7 +171,7 @@ def test_loop_audio_truncated_padded_to_video_duration():
     # 直接調 _build_filter 看輸出 filter parts
     parts, _, _ = MF_LoopVideo._build_filter(
         mode="strict", eff_dur=3.0, target=10.0, xfade_dur=1.0,
-        speed=1.0, reverse=False, has_audio=True,
+        speed=1.0, reverse=False, has_audio=True, audio_volume=1.0,
     )
     base_a_line = [p for p in parts if "[base_a]" in p][0]
     assert "apad=whole_dur=3.000000" in base_a_line, (

@@ -9,12 +9,19 @@ import tempfile
 # 用 parent (custom_nodes/) 作 sys.path root，讓 `comfyui_MediaForge.xxx` 包裝匯入可解析
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CUSTOM_NODES = os.path.dirname(_PLUGIN_DIR)
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _CUSTOM_NODES not in sys.path:
     sys.path.insert(0, _CUSTOM_NODES)
 
 # 也加 plugin dir 本身，方便 utils.xxx 直接匯入（給 IR / video_io test 用）
 if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
+
+# Standalone 跑（python tests/foo.py）時 pytest 不會 auto-load conftest，
+# 手動 trigger 它的 folder_paths stub 安裝。
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
+import conftest  # noqa: E402,F401
 
 
 def test_trim_concat_interleaves_video_audio_pairs():
@@ -86,8 +93,10 @@ def test_save_video_drops_degenerate_audio_dict():
     import torch
     from comfyui_MediaForge.nodes.save_video_frames import MF_SaveVideoFrames
 
-    with tempfile.TemporaryDirectory() as td:
-        out = os.path.join(td, "out.mp4")
+    with tempfile.TemporaryDirectory() as _td:
+        # 註：Save 節點透過 filename_prefix + counter 寫到 ComfyUI output_dir，不是這裡的 td。
+        # 本 test 用 conftest 的 folder_paths stub（指 tempfile.gettempdir()/mf_test_output），
+        # 由節點回傳值取得實際輸出路徑。
         frames = torch.rand(30, 64, 64, 3)  # 30 frames @ 30 fps = 1.0s
         # 假合成的 1-sample audio（模擬 v1.0 行為）
         fake_audio = {
@@ -95,8 +104,9 @@ def test_save_video_drops_degenerate_audio_dict():
             "sample_rate": 44100,
         }
         node = MF_SaveVideoFrames()
-        node.save(
-            frames=frames, output_path=out, fps=30.0,
+        (out,) = node.save(
+            frames=frames, filename_prefix="MediaForge/test_r2_save_degenerate",
+            fps=30.0,
             codec="h264 (libx264)", encode_mode="crf", crf=23,
             bitrate_kbps=4000, target_size_mb=8.0,
             preset="ultrafast", pix_fmt_override="",

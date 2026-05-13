@@ -3,8 +3,6 @@
 v2.1 ROADMAP Phase 2 foundation 節點。
 整合 v1 計畫中的 SaveVideo / Convert / Resize / ChangeFps / Compress / ReplaceAudio 為單一輸出節點。
 """
-import os
-
 from ..utils.encoder import get_available_codecs
 from ..utils.ffmpeg import ensure_ffmpeg
 from ..utils.output_path import resolve_output_path

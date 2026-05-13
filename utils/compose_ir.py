@@ -26,6 +26,54 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 
+# Plugin root = utils/.. — used to locate the font/ subdirectory shared with burn_subtitle.
+_PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_FONT_DIR = os.path.join(_PLUGIN_DIR, "font")
+
+# Common system fonts as fallback when plugin's font/ is empty.
+# drawtext on Windows native ffmpeg has no fontconfig — without an explicit fontfile=
+# 必爆 "Fontconfig error: Cannot load default config file"。集中在這裡解決。
+_SYSTEM_FONT_CANDIDATES = (
+    "C:/Windows/Fonts/arial.ttf",                           # Windows
+    "C:/Windows/Fonts/segoeui.ttf",                         # Windows Segoe UI
+    "/System/Library/Fonts/Helvetica.ttc",                  # macOS
+    "/System/Library/Fonts/Supplemental/Arial.ttf",         # macOS
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",      # Debian/Ubuntu
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",                  # Arch
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",               # Fedora/RHEL
+)
+
+_DEFAULT_FONT_CACHE: str | None = None
+
+
+def _resolve_default_fontfile() -> str | None:
+    """找一個 drawtext 能用的字型檔絕對路徑（cross-platform）。
+
+    解析順序：plugin 自帶 font/ 目錄 → 常見 system font 路徑。Cache per-process。
+    """
+    global _DEFAULT_FONT_CACHE
+    if _DEFAULT_FONT_CACHE is not None:
+        return _DEFAULT_FONT_CACHE or None
+
+    # 1. plugin font/ 目錄優先（跨平台一致、跟 burn_subtitle 共用）
+    if os.path.isdir(_FONT_DIR):
+        for fname in sorted(os.listdir(_FONT_DIR)):
+            if fname.lower().endswith((".ttf", ".otf", ".ttc")):
+                resolved = os.path.join(_FONT_DIR, fname).replace("\\", "/")
+                _DEFAULT_FONT_CACHE = resolved
+                return resolved
+
+    # 2. system fallback
+    for cand in _SYSTEM_FONT_CANDIDATES:
+        # Windows path with `/` 也能被 os.path.exists 認得
+        cand_native = cand.replace("/", os.sep)
+        if os.path.exists(cand_native):
+            _DEFAULT_FONT_CACHE = cand
+            return cand
+
+    _DEFAULT_FONT_CACHE = ""
+    return None
+
 
 @dataclass
 class ComposeInput:
@@ -181,7 +229,10 @@ def _validate_linear_chain(ir: ComposeIR, norm_label: str) -> None:
 
 
 def _escape_filter_path(path: str) -> str:
-    return path.replace("\\", "/").replace(":", r"\:")
+    # 集中走 utils.ffmpeg.escape_filter_path，避免「修了一邊忘了另一邊」。
+    # FFmpeg 8.x 需要雙層 escape（`:` → `\\:`），詳見 utils/ffmpeg.py:escape_filter_path。
+    from .ffmpeg import escape_filter_path
+    return escape_filter_path(path)
 
 
 def _render_op(op: ComposeOp, label_in: str, label_extra: str | None) -> str:
@@ -295,7 +346,9 @@ def compile_ir(ir: ComposeIR) -> tuple[str, str, list[str]]:
     _validate_linear_chain(ir, norm_label)
 
     # 2.5 為每個 drawtext op 寫 text tmpfile (R5 P2 fix)。延後到 validate 後才做，
-    # 否則 parallel fan-out raise 時 tmpfile 會 leak。
+    # 否則 parallel fan-out raise 時 tmpfile 會 leak。同時：drawtext 沒指定 fontfile
+    # 在 Windows native ffmpeg 上必爆 (沒裝 fontconfig) — 自動 fallback 到 plugin
+    # bundled font 或 system font。找不到才 raise 帶友善訊息。
     for op in ir.ops:
         if op.kind == "drawtext":
             fd, tmp = tempfile.mkstemp(suffix=".txt", prefix="mf_drawtext_")
@@ -303,6 +356,16 @@ def compile_ir(ir: ComposeIR) -> tuple[str, str, list[str]]:
                 f.write(str(op.params.get("text", "")))
             op.params["_textfile_path"] = tmp
             cleanup_paths.append(tmp)
+            if not op.params.get("fontfile"):
+                fallback = _resolve_default_fontfile()
+                if fallback:
+                    op.params["fontfile"] = fallback
+                else:
+                    raise RuntimeError(
+                        f"[ComposeIR] drawtext op {op.label} 沒指定 fontfile，且系統找不到任何"
+                        " fallback 字型檔。請：(1) 在 ComposeOverlayText 節點設 fontfile=絕對路徑，"
+                        " 或 (2) 把 .ttf/.otf/.ttc 字型檔放進 plugin 的 font/ 目錄。"
+                    )
 
     # 3. extra_input fan-out split：同一張 image / aux stream 被多個 overlay op 引用就插 split
     consumers = _count_extra_input_consumers(ir)

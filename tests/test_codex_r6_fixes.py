@@ -7,10 +7,14 @@ import sys
 
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CUSTOM_NODES = os.path.dirname(_PLUGIN_DIR)
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _CUSTOM_NODES not in sys.path:
     sys.path.insert(0, _CUSTOM_NODES)
 if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
+import conftest  # noqa: E402,F401
 
 
 def test_concat_transition_clamped_to_shortest_clip():
@@ -48,7 +52,8 @@ def test_concat_transition_clamped_to_shortest_clip():
 
             node = cv.MF_ConcatVideos()
             node.concat(
-                video_paths=f"{c1}\n{c2}", output_path=os.path.join(td, "out.mp4"),
+                video_paths=f"{c1}\n{c2}",
+                filename_prefix="MediaForge/test_r6_concat_clamp",
                 mode="transcode", transition_sec=1.0, transition_type="fade",
                 fps=24.0, width=320, height=180, crf=23,
             )

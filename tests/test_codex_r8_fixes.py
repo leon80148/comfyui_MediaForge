@@ -1,5 +1,10 @@
 """Regression tests for Codex Round 8 review findings.
 
+R8 P2 #1 (ProRes container) 原本驗 `_ensure_compatible_container` helper；
+post-hoc fix 已被 codec-aware `resolve_output_path(prefix, ext)` 模式取代
+(save_video_frames 內 inline 決定 `ext = ".mov" if codec=="prores_ks" else ".mp4"`)。
+本檔案 P3-7 改寫後驗的是「ext 由 codec 決定」這個契約。
+
 跑法：python tests/test_codex_r8_fixes.py
 """
 import os
@@ -8,50 +13,89 @@ import tempfile
 
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CUSTOM_NODES = os.path.dirname(_PLUGIN_DIR)
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _CUSTOM_NODES not in sys.path:
     sys.path.insert(0, _CUSTOM_NODES)
 if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
+import conftest  # noqa: E402,F401  (installs folder_paths stub for standalone runs)
 
 
-def test_prores_with_mp4_auto_corrected_to_mov():
-    """[R8 P2] ProRes + .mp4 → MP4 muxer 不支援；自動改 .mov 不該 raise。"""
-    from comfyui_MediaForge.nodes.save_video_frames import _ensure_compatible_container
+def test_resolve_output_path_codec_aware_ext_independence():
+    """[R8 P2 → P3-7 改寫] resolve_output_path 對相同 prefix 用不同 ext 必須 counter
+    各自獨立 — `save_prores` 走 .mov、`save_h264` 走 .mp4 不會互相搶 counter。
 
-    out = _ensure_compatible_container("/tmp/x.mp4", "prores_ks")
-    assert out == "/tmp/x.mov", f"預期 /tmp/x.mov，但拿到 {out}"
+    舊 helper `_ensure_compatible_container` 已移除；現在 ext 是由 caller (save_video_frames
+    依 codec 選 `.mov`/`.mp4`)直接傳給 resolve_output_path。本 test 驗該層契約。
+    """
+    from utils.output_path import resolve_output_path
 
-    out2 = _ensure_compatible_container("/tmp/x.m4v", "prores_ks")
-    assert out2 == "/tmp/x.mov"
+    # 兩次 .mov 都應 counter 遞增（同 prefix 同 ext）
+    p1 = resolve_output_path("MediaForge/test_r8_codec_ext", ".mov")
+    open(p1, "wb").close()
+    p2 = resolve_output_path("MediaForge/test_r8_codec_ext", ".mov")
+    open(p2, "wb").close()
+    assert p1 != p2 and p1.endswith(".mov") and p2.endswith(".mov"), (
+        f"counter 應遞增：{p1} vs {p2}"
+    )
 
-    # 其他 codec 不受影響
-    assert _ensure_compatible_container("/tmp/x.mp4", "libx264") == "/tmp/x.mp4"
-    assert _ensure_compatible_container("/tmp/x.mp4", "libx265") == "/tmp/x.mp4"
+    # 同 prefix 但 .mp4 → counter 從 1 起跳（與 .mov 獨立）
+    p3 = resolve_output_path("MediaForge/test_r8_codec_ext", ".mp4")
+    open(p3, "wb").close()
+    assert p3.endswith("_00001.mp4"), (
+        f".mp4 counter 應從 1 起跳（不受 .mov 影響）: {p3}"
+    )
 
-    # ProRes + .mov 不變
-    assert _ensure_compatible_container("/tmp/x.mov", "prores_ks") == "/tmp/x.mov"
-    print("[OK] R8 P2: ProRes / MP4 → MOV 自動修正")
+    # 清掉自製檔避免污染後續 run
+    for p in (p1, p2, p3):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+
+    print("[OK] R8 P2 / P3-7: resolve_output_path codec-aware ext counter 獨立")
 
 
-def test_save_prores_with_mp4_writes_mov():
-    """端到端：MF_SaveVideoFrames 接 prores 指定 .mp4 output → 寫 .mov、不該 fail。"""
+def test_save_prores_writes_mov_via_filename_prefix():
+    """[R8 P2 端到端] MF_SaveVideoFrames 接 prores codec → 自動產出 .mov、不該 fail。"""
     import torch
     from comfyui_MediaForge.nodes.save_video_frames import MF_SaveVideoFrames
 
-    with tempfile.TemporaryDirectory() as td:
-        requested = os.path.join(td, "out.mp4")
+    with tempfile.TemporaryDirectory() as _td:
         frames = torch.rand(10, 64, 64, 3)
         node = MF_SaveVideoFrames()
         (result,) = node.save(
-            frames=frames, output_path=requested, fps=10.0,
+            frames=frames, filename_prefix="MediaForge/test_r8_save_prores",
+            fps=10.0,
             codec="prores (prores_ks)", encode_mode="crf", crf=23,
             bitrate_kbps=4000, target_size_mb=8.0,
             preset="medium", pix_fmt_override="",
         )
-        # 應該回傳 .mov 路徑
-        assert result.endswith(".mov"), f"output_path 應結尾 .mov，但 {result}"
+        assert result.endswith(".mov"), f"prores 應產出 .mov 檔，但拿到 {result}"
         assert os.path.exists(result), f"檔案不存在：{result}"
-        print(f"[OK] R8 P2: ProRes save .mp4 → 自動寫成 {os.path.basename(result)}")
+        print(f"[OK] R8 P2: ProRes save 自動寫成 {os.path.basename(result)}")
+
+
+def test_save_h264_writes_mp4_via_filename_prefix():
+    """副驗：非 prores codec 仍走 .mp4 — codec-aware ext 切換邏輯雙向都對。"""
+    import torch
+    from comfyui_MediaForge.nodes.save_video_frames import MF_SaveVideoFrames
+
+    with tempfile.TemporaryDirectory() as _td:
+        frames = torch.rand(10, 64, 64, 3)
+        node = MF_SaveVideoFrames()
+        (result,) = node.save(
+            frames=frames, filename_prefix="MediaForge/test_r8_save_h264",
+            fps=10.0,
+            codec="h264 (libx264)", encode_mode="crf", crf=23,
+            bitrate_kbps=4000, target_size_mb=8.0,
+            preset="ultrafast", pix_fmt_override="",
+        )
+        assert result.endswith(".mp4"), f"libx264 應產出 .mp4 檔，但拿到 {result}"
+        assert os.path.exists(result), f"檔案不存在：{result}"
+        print(f"[OK] R8 P2 副驗: h264 save 寫成 {os.path.basename(result)}")
 
 
 def test_concat_transition_clamp_never_exceeds_shortest_clip():
@@ -81,7 +125,8 @@ def test_concat_transition_clamp_never_exceeds_shortest_clip():
 
             node = cv.MF_ConcatVideos()
             node.concat(
-                video_paths=f"{c1}\n{c2}", output_path=os.path.join(td, "out.mp4"),
+                video_paths=f"{c1}\n{c2}",
+                filename_prefix="MediaForge/test_r8_clamp_short",
                 mode="transcode", transition_sec=0.5, transition_type="fade",
                 fps=24.0, width=320, height=180, crf=23,
             )
@@ -127,7 +172,8 @@ def test_concat_transition_disabled_for_microscopic_clips():
 
             node = cv.MF_ConcatVideos()
             node.concat(
-                video_paths=f"{c1}\n{c2}", output_path=os.path.join(td, "out.mp4"),
+                video_paths=f"{c1}\n{c2}",
+                filename_prefix="MediaForge/test_r8_microscopic",
                 mode="transcode", transition_sec=0.5, transition_type="fade",
                 fps=24.0, width=320, height=180, crf=23,
             )
@@ -166,7 +212,8 @@ def test_concat_transition_clamp_moderate_clips():
 
             node = cv.MF_ConcatVideos()
             node.concat(
-                video_paths=f"{c1}\n{c2}", output_path=os.path.join(td, "out.mp4"),
+                video_paths=f"{c1}\n{c2}",
+                filename_prefix="MediaForge/test_r8_clamp_moderate",
                 mode="transcode", transition_sec=1.0, transition_type="fade",
                 fps=24.0, width=320, height=180, crf=23,
             )
@@ -185,9 +232,10 @@ def test_concat_transition_clamp_moderate_clips():
 
 
 if __name__ == "__main__":
-    test_prores_with_mp4_auto_corrected_to_mov()
-    test_save_prores_with_mp4_writes_mov()
+    test_resolve_output_path_codec_aware_ext_independence()
+    test_save_prores_writes_mov_via_filename_prefix()
+    test_save_h264_writes_mp4_via_filename_prefix()
     test_concat_transition_clamp_never_exceeds_shortest_clip()
     test_concat_transition_disabled_for_microscopic_clips()
     test_concat_transition_clamp_moderate_clips()
-    print("\n=== Codex R8 fixes: all 5 cases passed ===")
+    print("\n=== Codex R8 fixes (P3-7 rewritten): all 6 cases passed ===")

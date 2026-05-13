@@ -58,8 +58,10 @@ def test_concat_transcode_raises_on_zero_duration():
             raise AssertionError("expected RuntimeError when probe duration is 0, but call returned")
         finally:
             for p in (f1.name, f2.name):
-                try: os.unlink(p)
-                except OSError: pass
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
     finally:
         ff.probe = saved_probe
         ff.probe_video_duration = saved_dur

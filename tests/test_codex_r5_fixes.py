@@ -10,10 +10,14 @@ import tempfile
 
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CUSTOM_NODES = os.path.dirname(_PLUGIN_DIR)
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _CUSTOM_NODES not in sys.path:
     sys.path.insert(0, _CUSTOM_NODES)
 if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
+import conftest  # noqa: E402,F401
 
 
 def test_drawtext_handles_apostrophe_via_textfile():
@@ -137,10 +141,10 @@ def test_concat_trims_audio_to_video_duration():
              "-c:a", "aac", "-b:a", "96k", c2],
             check=True, capture_output=True,
         )
-        out = os.path.join(td, "out.mp4")
         node = MF_ConcatVideos()
-        node.concat(
-            video_paths=f"{c1}\n{c2}", output_path=out,
+        (out,) = node.concat(
+            video_paths=f"{c1}\n{c2}",
+            filename_prefix="MediaForge/test_r5_concat_audio_trim",
             mode="transcode", transition_sec=0.0, transition_type="fade",
             fps=24.0, width=320, height=180, crf=23,
         )

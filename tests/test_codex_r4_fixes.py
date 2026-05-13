@@ -10,10 +10,14 @@ import tempfile
 
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CUSTOM_NODES = os.path.dirname(_PLUGIN_DIR)
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _CUSTOM_NODES not in sys.path:
     sys.path.insert(0, _CUSTOM_NODES)
 if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
+import conftest  # noqa: E402,F401  (installs folder_paths stub for standalone runs)
 
 
 def _ffprobe_duration(path):
@@ -29,10 +33,9 @@ def test_save_keeps_full_video_when_audio_shorter():
     import torch
     from comfyui_MediaForge.nodes.save_video_frames import MF_SaveVideoFrames
 
-    with tempfile.TemporaryDirectory() as td:
-        out = os.path.join(td, "out.mp4")
-        # 30 frames @ 30 fps = 1.0 s 影像
-        frames = torch.rand(60, 64, 64, 3)  # 60 frames @ 30 fps = 2.0 s
+    with tempfile.TemporaryDirectory() as _td:
+        # 60 frames @ 30 fps = 2.0 s 影像
+        frames = torch.rand(60, 64, 64, 3)
         # 0.5s mono audio (44.1k → 22050 samples)
         sr = 44100
         n_samples = int(sr * 0.5)
@@ -41,8 +44,9 @@ def test_save_keeps_full_video_when_audio_shorter():
             "sample_rate": sr,
         }
         node = MF_SaveVideoFrames()
-        node.save(
-            frames=frames, output_path=out, fps=30.0,
+        (out,) = node.save(
+            frames=frames, filename_prefix="MediaForge/test_r4_short_audio",
+            fps=30.0,
             codec="h264 (libx264)", encode_mode="crf", crf=23,
             bitrate_kbps=4000, target_size_mb=8.0,
             preset="ultrafast", pix_fmt_override="",
@@ -103,8 +107,7 @@ def test_save_unaffected_when_audio_longer_than_video():
     import torch
     from comfyui_MediaForge.nodes.save_video_frames import MF_SaveVideoFrames
 
-    with tempfile.TemporaryDirectory() as td:
-        out = os.path.join(td, "out.mp4")
+    with tempfile.TemporaryDirectory() as _td:
         # 30 frames @ 30 fps = 1.0 s 影像
         frames = torch.rand(30, 64, 64, 3)
         # 3s audio
@@ -115,8 +118,9 @@ def test_save_unaffected_when_audio_longer_than_video():
             "sample_rate": sr,
         }
         node = MF_SaveVideoFrames()
-        node.save(
-            frames=frames, output_path=out, fps=30.0,
+        (out,) = node.save(
+            frames=frames, filename_prefix="MediaForge/test_r4_long_audio",
+            fps=30.0,
             codec="h264 (libx264)", encode_mode="crf", crf=23,
             bitrate_kbps=4000, target_size_mb=8.0,
             preset="ultrafast", pix_fmt_override="",
