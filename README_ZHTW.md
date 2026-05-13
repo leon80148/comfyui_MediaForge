@@ -10,7 +10,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## 亮點
 
-- 🎞️ **18 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Compose / AI（Audio / Net / Image 規劃中）
+- 🎞️ **22 個節點** 分散在 5 個分類 — Subtitle / Video / Analysis / Compose（含 audio chain）/ AI（standalone Audio / Net / Image 規劃中）
 - 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + tensor_fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
 - 🚀 **智慧 GPU codec 預設** — 偵測到 NVENC 自動用 `h264_nvenc`，沒 GPU 的機器自動 fallback `libx264`。不必手動切、不會在沒卡的環境壞掉
 - 📡 **API-ready 輸出** — 每個產出檔案的節點都同時 emit ComfyUI `ui.images` metadata，`/history/<prompt_id>` 直接看到輸出檔名，`/view?filename=X&subfolder=Y&type=output` 可下載（見 [Using via API](#using-via-api)）
@@ -27,7 +27,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 2. [Using via API（API 工作流）](#using-via-api)
 3. [智慧 GPU codec 預設](#智慧-gpu-codec-預設)
 4. [為什麼選這個 plugin（vs VideoHelperSuite）](#為什麼選這個-pluginvs-videohelpersuite)
-5. [節點清單（18）](#節點清單18)
+5. [節點清單（22）](#節點清單22)
 6. [AI Provider Recipes](#ai-provider-recipes)
 7. [Hidden Contracts（內部型別契約）](#hidden-contracts內部型別契約)
 8. [Architecture](#architecture)
@@ -59,20 +59,27 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 | `MF_DetectSilence` | `noise_db = -30`, `min_duration_sec = 1.5` |
 | `MF_TrimByRanges` | `mode = "remove"` |
 
-### 2. Compose 聯合：浮水印 + 開場文字，**只走一次** re-encode（5 個節點）
+### 2. Compose 聯合:浮水印 + 開場文字 + BGM + 字幕,**只走一次** re-encode(5 個節點)
 
 ```
-[ComposeStart]──▶[ComposeWatermark]──▶[ComposeOverlayText]──▶[ComposeFinalize]──▶ output.mp4
+[ComposeWatermark]→[ComposeOverlayText]→[ComposeBurnSubtitle]→ MF_COMPOSE_OPS ─┐
+                                                                                ▼
+[ComposeAudioMix(bgm.mp3)] ──────────────── MF_COMPOSE_AUDIO_OPS ──► [ComposeVideo] → output.mp4
+                                                                                ↑
+                                                                                video_path
 ```
 
 | 節點 | 關鍵設定 |
 |---|---|
-| `MF_ComposeStart` | `video_path = "clip.mp4"`, `target_width = 1920`, `target_height = 1080` |
-| `MF_ComposeWatermark` | `image_path = "logo.png"`, `placement = "BR"`, `relative_scale = 0.12`, `opacity = 0.6` |
-| `MF_ComposeOverlayText` | `text = "Episode 01"`, `font_size = 64`, `start_sec = 0`, `end_sec = 5` |
-| `MF_ComposeFinalize` | `encoder = "h264"`, `crf = 20` |
+| `MF_ComposeWatermark` | `image_path = "logo.png"`, `placement = "bottom_right"`, `relative_scale = 0.12`, `opacity = 0.6` |
+| `MF_ComposeOverlayText` | `text = "Episode 01"`, `fontsize = 64`, `start_sec = 0`, `end_sec = 5` |
+| `MF_ComposeBurnSubtitle` | `srt_path = "subs.srt"`, `font = "msjh.ttc"`, `font_size = 24` |
+| `MF_ComposeAudioMix` | `audio_path = "bgm.mp3"`, `keep_source = True`, `bgm_volume = 0.3` |
+| `MF_ComposeVideo` | `video_path = "clip.mp4"`, `target_*=0`(沿用 source), `codec = "h264_nvenc"`, `crf = 18` |
 
-所有 overlay 操作累積到 Compose IR、最後編譯成**一份** `filter_complex_script` — 輸入只 decode 一次、輸出只 encode 一次。疊 10 層 overlay 也只付一次 re-encode 成本。
+四個效果累積到 Compose IR、最後編譯成**一份** `filter_complex_script` — 輸入只 decode 一次、輸出只 encode 一次。疊 10 層 overlay + 4 個 audio op 也只付一次 re-encode 成本。
+
+> **從 v1 遷移?** `MF_ComposeStart` + `MF_ComposeFinalize` 已合併進 `MF_ComposeVideo`。見 [遷移指南](#從-compose-v1-遷移)。
 
 ### 3. AI 自動字幕：轉錄 → 翻譯 → 燒入（6 個節點，最進階）
 
@@ -93,7 +100,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## Using via API
 
-所有產出檔案的節點（BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeFinalize / ConvertChinese）都同時 emit ComfyUI `ui.images` metadata 跟 STRING path 兩種輸出。API 客戶端不必自己 parse 路徑就能拿到產出檔。
+所有產出檔案的節點(BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo / ConvertChinese) 都同時 emit ComfyUI `ui.images` metadata 跟 STRING path 兩種輸出。API 客戶端不必自己 parse 路徑就能拿到產出檔。
 
 ### 1. 送 workflow 上去
 
@@ -143,7 +150,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 
 ## 智慧 GPU codec 預設
 
-所有 encode 能力節點（BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeFinalize）的 `codec` dropdown 預設值在啟動時動態挑：偵測到 ffmpeg 支援 NVENC 就用 **`h264 NVIDIA GPU (h264_nvenc)`**，沒有就 fallback **`h264 (libx264)`** — CPU-only 機器不會壞、不必每次手動切。
+所有 encode 能力節點(BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo) 的 `codec` dropdown 預設值在啟動時動態挑:偵測到 ffmpeg 支援 NVENC 就用 **`h264 NVIDIA GPU (h264_nvenc)`**,沒有就 fallback **`h264 (libx264)`** — CPU-only 機器不會壞、不必每次手動切。
 
 Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec()`），檢查 `ffmpeg -encoders` 有沒有 `h264_nvenc`。NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）只在可用時加進 dropdown；`av1_nvenc` 需要 Ada Lovelace（RTX 4000+）。
 
@@ -167,7 +174,7 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 
 **結論**：兩個都裝。VHS 用於快速 IMAGE batch workflow；MediaForge 用於廣播級編碼、檔案級操作、Compose pipeline、AI 字幕。
 
-## 節點清單（18）
+## 節點清單（22）
 
 > **Dual-input 註記**：下列標 **(dual-input)** 的 node 同時接受兩種 input：(a) 既有的 `video_path` STRING 欄位，(b) 新加的 `frames` + `tensor_fps` + `audio` 三件套 optional 輸入。連 tensor 時 MediaForge 內部會寫一個 temp .mp4 給 FFmpeg 吃。Path 模式仍是預設的 fast path — MediaForge 之間串接時不會被迫多走一次無謂的 decode/encode。
 >
@@ -297,7 +304,7 @@ FFmpeg decode 任意容器／codec → `IMAGE` batch `[B,H,W,C] float32 [0,1]` +
 - `video_codec`（STRING）— 例如 `"h264"`、`"hevc"`、`"av1"`、無影片時是 `""`。
 - `audio_codec`（STRING）— 例如 `"aac"`、`"opus"`、無音訊時是 `""`。
 
-跟 `MF_LoadVideoFrames`（先 probe 拿尺寸、再 load）跟 Compose pipeline（餵尺寸給 `MF_ComposeStart`）天然配對。
+跟 `MF_LoadVideoFrames`(先 probe 拿尺寸、再 load) 跟 Compose pipeline(餵尺寸給 `MF_ComposeVideo`、或留 `target_*=0` 沿用 source) 天然配對。
 
 #### 🤫 Detect Silence (`MF_DetectSilence`)
 
@@ -309,34 +316,118 @@ FFmpeg `silencedetect` 包裝 → `SILENCE_RANGES` list（`[[start_sec, end_sec]
 
 **輸出**：`ranges`（SILENCE_RANGES）。空 list = 沒偵到靜音；下游 `MF_TrimByRanges` 空 list + `mode="remove"` 視為 identity（保留整片）。
 
-### `MediaForge/Compose` — 單次編碼多層 overlay pipeline
+### `MediaForge/Compose` — 單次編碼 pipeline(視訊 overlay + 音訊 chain)
 
-`MF_Compose*` 系列串接 `MF_COMPOSE` IR（FFmpeg `filter_complex` graph 編譯器）。只有 `MF_ComposeFinalize` 會跑 ffmpeg — 所有中間操作累積進 IR，最後編譯成一份 `filter_complex_script`。**多層 overlay 無損疊加**，不再 N 次 re-encode。
+Compose pipeline 讓 overlay / 字幕 / 音訊操作**單次 ffmpeg encode** 完成。兩條並行 chain(視訊 overlay + 音訊 op) 接進 `MF_ComposeVideo`、一次跑出成品。
 
-#### 🎬 Compose Start (`MF_ComposeStart`) **(dual-input)**
-初始化 IR，設 `target_width / target_height / target_fps`。連 `frames` 時 temp .mp4 在這裡產生，但清理延後到 `MF_ComposeFinalize`（透過 `ComposeIR.tmp_paths_to_cleanup`）— 這樣 temp 檔能活過整條 Compose chain。
+```
+[OverlayText] → [Watermark] → [BurnSubtitle] ──► MF_COMPOSE_OPS ─┐
+                                                                  ▼
+[Volume] → [AudioMix(+bgm)] → [Fade] → [Normalize] ── AUDIO_OPS ──► [ComposeVideo] → output.mp4
+                                                                          ↑
+                                                                          video_path
+```
+
+**最簡工作流** 2 個節點:拖一個 overlay 節點、wire 進 `ComposeVideo`。沒 audio chain 也可、純 transcode 也可。
+
+#### 🎬 Compose Video (`MF_ComposeVideo`) **(dual-input)**
+
+Compose 工作流的單一終點 — 取代舊的 `ComposeStart` + `ComposeFinalize` 兩節點模式。
+
+**設定**:
+- `video_path`(STRING) + dual-input `frames` / `tensor_fps` / `audio` — source media。
+- `target_fps`(FLOAT,**預設 0.0**) + `target_width`(INT,預設 0) + `target_height`(INT,預設 0) — `0` = **沿用 source**(透過 ffprobe 偵測、含 rotation-aware dims)。多數 workflow 留 0 即可。
+- `codec` / `crf` / `preset` — `codec` smart default 偵測到 NVENC 用 `h264_nvenc`、否則 `libx264`。NVENC variants(`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`) 自動加入 dropdown。CRF 範圍 0–51(預設 18 = 視覺無損)。
+- `keep_audio`(BOOLEAN、預設 True) — 沒接 audio chain 時是否保留 source 自帶音軌。
+
+**Optional chain 輸入**:
+- `overlays`(`MF_COMPOSE_OPS`) — 從任一組合的 `ComposeOverlayText` / `ComposeOverlayImage` / `ComposeWatermark` / `ComposeBurnSubtitle` 串接過來。列表順序 = z-order(後面的疊在前面之上)。
+- `audio_ops`(`MF_COMPOSE_AUDIO_OPS`) — 從 `ComposeVolume` / `ComposeAudioMix` / `ComposeAudioFade` / `ComposeNormalize` 串接。順序 = filter chain 順序。
+
+**輸出**:`filename_prefix`(預設 `MediaForge/composed`) → `output/<prefix>_<NNNNN>.mp4`(或 ProRes 走 `.mov`)。回傳 path + 編譯後的 `filter_complex_script`(debug 用)。emit `ui.images` metadata 給 API `/history` 暴露。
+
+**行為**:編譯後 graph 超過 6000 字元自動切到 `-filter_complex_script <tempfile>`(避免 Windows command-line 長度限制)。
 
 #### ✏️ Compose Overlay Text (`MF_ComposeOverlayText`)
-追加 `drawtext` 操作。`start_sec`/`end_sec` 走 enable expression 控時間窗。支援自訂 `fontfile`。文字透過 `textfile=` 傳入，安全處理單引號、百分號、換行等難 escape 字元。
+
+Append 一個 `drawtext` op spec 進 overlay chain。
+
+- `text`(multiline STRING) — 編譯時透過 `textfile=` 傳給 ffmpeg、安全處理單引號 / % / 換行。
+- `x_expr` / `y_expr` — FFmpeg drawtext 表達式(可用變數 `w` / `h` / `text_w` / `text_h` / `t`)。預設置中下。
+- `fontsize` / `fontcolor` / `borderw` / `bordercolor` — 標準樣式。
+- `fontfile` — 留空讓 ComposeVideo 退階到 bundled font(Windows 原生 ffmpeg 沒 fontconfig)。
+- `start_sec` / `end_sec` — 時間區間。兩者 0 = 全長顯示。
 
 #### 🖼️ Compose Overlay Image (`MF_ComposeOverlayImage`)
-追加通用 `overlay` 操作。可選 `scale_w` 縮放；可加時間窗。
+
+通用圖片 overlay。
+
+- `image_path` — PNG / JPG 等。
+- `x_expr` / `y_expr` — 絕對或表達式位置。
+- `scale_w` — 寬度像素(0 = 原圖、高度按 aspect ratio 自動算)。
+- `start_sec` / `end_sec` — 時間區間。
 
 #### 💧 Compose Watermark (`MF_ComposeWatermark`)
-完整 UX 的浮水印 preset：`placement`（TL/TR/BL/BR/center/tile）、`relative_scale`（畫面寬度的 0.05–0.5）、`opacity`（走 colorchannelmixer alpha）、各邊邊距、`visible_start/end_sec` 時間窗。
 
-#### ✅ Compose Finalize (`MF_ComposeFinalize`)
-編譯 Compose IR → **一次** FFmpeg encode 涵蓋所有 overlay。每條 Compose chain 的終點。
+浮水印 preset — 對最常見場景的便利 UI。
 
-**設定**：
-- `codec`（dropdown）— `libx264` / `libx265` / `libsvtav1` / `prores_ks` / `h264_nvenc` / `hevc_nvenc` / `av1_nvenc`（NVENC variants 自動偵測）。偵測到 NVENC 預設 `h264_nvenc`、否則 `libx264`。
-- `crf`（INT 0–51，預設 18）— 品質目標。對 NVENC 而言內部映射成 `-rc vbr -cq <crf>` 達到等效控制。
-- `preset`（dropdown、預設 `medium`）— encoder 速度／檔案大小 trade-off。對 NVENC 映射成 `p1..p7`（`p1`=最快、`p7`=最慢）。
-- `keep_audio`（BOOLEAN、預設 True）— 是否保留 main video 的 audio 軌。
+- `image_path` — 建議用帶 alpha 的 PNG。
+- `placement` — `top_left` / `top_right` / `bottom_left` / `bottom_right` / `center` / `tile`(用真實 aspect 自動算 row × col)。
+- `relative_scale`(0.05–0.5) — 浮水印寬度 / frame width 比例。compile 時用 `ComposeVideo.target_width` 解析成絕對像素。
+- `opacity`(0–1) — 走 `colorchannelmixer alpha`、保留 PNG 原 alpha。
+- `margin_top` / `right` / `bottom` / `left` — 四邊獨立 margin。
+- `visible_start/end_sec` — 兩者 0 = 全長顯示。
 
-**輸出**：`final_video_path`（STRING）+ `filter_complex_script`（STRING，debug 用 — 編譯後的 filter graph）。
+#### 🔥 Compose Burn Subtitle (`MF_ComposeBurnSubtitle`)
 
-**行為**：編譯後的 graph 超過 6000 字元自動切到 `-filter_complex_script <tempfile>`（避免 Windows command-line 長度限制）。容器副檔名自動修正：`prores_ks` → `.mov`、其他 → `.mp4`。
+v2 的旗艦新功能 — 字幕燒錄**進到 Compose pipeline 內**、 `字幕 + 浮水印 + 音訊 mix` 可一次 encode 完成。
+
+設定 widget 跟 `MF_BurnSubtitle` 一致(font dropdown、完整 ASS 樣式、alignment、margins、顏色)。把 `.ttf` / `.otf` / `.ttc` 丟進 plugin 的 `font/` 目錄、dropdown 自動掃描。`fontTools` 自動偵測 TTF 內部 Family Name 給 libass(lazy-imported,建議 `pip install fontTools`)。
+
+獨立的 `MF_BurnSubtitle`(在 Subtitle 分類) 仍保留,給「只燒字幕不疊其他 overlay」的場景。
+
+#### 🔊 Compose Volume (`MF_ComposeVolume`)
+
+Append `volume=N` 音訊 filter op。
+
+- `scale`(FLOAT 0.0–2.0、預設 1.0) — `0.0` 靜音、`0.5` 半音量、`1.0` 原音、`2.0` 2× boost(注意 clipping)。
+
+#### 🎵 Compose Audio Mix (`MF_ComposeAudioMix`) **(dual-input audio)**
+
+把外部 BGM 跟 source audio 混音、或完全用外部音源取代 source。
+
+- `audio_path`(STRING) — BGM 檔案路徑、或 wire `audio` pin (AUDIO dict)。AUDIO dict 會 materialize 成 temp WAV、encode 完自動清理。
+- `keep_source`(BOOLEAN、預設 True) — `True` 走 `amix` 混 source+BGM;`False` 捨棄 source、純粹用 BGM。
+- `bgm_volume`(FLOAT 0.0–2.0、預設 0.3) — BGM 在 mix 前的音量衰減。預設 0.3 讓 voice 蓋過 BGM、podcast/vlog 慣例。
+- `duration` — `first` (輸出長度 = source audio) / `longest` / `shortest`。
+
+#### 🌅 Compose Audio Fade (`MF_ComposeAudioFade`)
+
+Append `afade` op (淡入 / 淡出)。
+
+- `direction` — `in`(靜→全) 或 `out`(全→靜)。
+- `start_sec` / `duration_sec` — fade 視窗。`out` 用 `start_sec = video_duration - duration_sec`。
+- `curve` — 10 種 FFmpeg curve:`tri`(線性,預設) / `qsin`(quarter sine,聽起來最自然) / `esin` / `hsin` / `log` / `par` / `qua` / `cub` / `squ` / `cbr`。
+
+#### 📏 Compose Normalize (`MF_ComposeNormalize`)
+
+EBU R128 / streaming 級響度標準化(走 `loudnorm` 單 pass)。
+
+- `target_i`(LUFS、預設 -16) — Apple Podcasts / Spotify spoken-word 目標。YouTube / TikTok 用 -14、廣電 EBU R128 用 -23。
+- `target_tp`(dBTP、預設 -1.0) — true-peak 上限。-1 dBTP 避免在 consumer 端 clip。
+- `target_lra`(LU、預設 11.0) — loudness range、值越大保留越多動態。
+- `linear`(BOOLEAN、預設 True) — `True` 避免 dynamic range compression。設 False 會強制壓平到 target 範圍、犧牲動態。
+
+> **單 pass** 對 streaming 用途夠用。嚴格 EBU R128 broadcast 認證需要 two-pass(measure → 再套),MediaForge 目前不提供。
+
+### 從 Compose v1 遷移
+
+含 `MF_ComposeStart` / `MF_ComposeFinalize` 的 workflow JSON 載入 ComfyUI 會看到 "Missing nodes" 警告。手動 migrate 步驟:
+
+1. 拖一個新的 `MF_ComposeVideo`。把舊 `ComposeStart` 的 `video_path` / `target_*` + 舊 `ComposeFinalize` 的 `codec` / `crf` / `preset` / `keep_audio` 填過來。
+2. 刪掉舊的 `MF_ComposeStart` 跟 `MF_ComposeFinalize` 兩個節點。
+3. 把 overlay chain 的最後輸出(原本是 `MF_COMPOSE` IR) 接到 `MF_ComposeVideo` 的新 `overlays` pin(類型現在是 `MF_COMPOSE_OPS`、chain 結構相同)。
+4. 如果原本另外用 `MF_BurnSubtitle` 二次 encode 字幕、改用 `MF_ComposeBurnSubtitle` 串進 chain、可以併進單次 encode 省一輪。
 
 ### `MediaForge/AI` — provider-agnostic
 
@@ -421,11 +512,15 @@ comfyui_MediaForge/
 ├── nodes/                   # 一節點一檔，類別命名 MF_<Verb><Noun>
 │   ├── ai_config.py            # MF_AIConfig
 │   ├── burn_subtitle.py        # MF_BurnSubtitle  — 使用 font/ 子目錄
-│   ├── compose_start.py        # MF_ComposeStart
+│   ├── compose_video.py        # MF_ComposeVideo  — Compose v2 終點(取代 Start+Finalize)
 │   ├── compose_overlay_text.py # MF_ComposeOverlayText
 │   ├── compose_overlay_image.py# MF_ComposeOverlayImage
 │   ├── compose_watermark.py    # MF_ComposeWatermark
-│   ├── compose_finalize.py     # MF_ComposeFinalize
+│   ├── compose_burn_subtitle.py# MF_ComposeBurnSubtitle  — 字幕進 Compose chain(單次 encode)
+│   ├── compose_volume.py       # MF_ComposeVolume  — 音訊 chain
+│   ├── compose_audio_mix.py    # MF_ComposeAudioMix  — BGM 混音(dual-input audio)
+│   ├── compose_audio_fade.py   # MF_ComposeAudioFade
+│   ├── compose_normalize.py    # MF_ComposeNormalize  — loudnorm
 │   ├── concat_videos.py        # MF_ConcatVideos
 │   ├── convert_chinese.py      # MF_ConvertChinese  — OpenCC 簡繁轉換
 │   ├── detect_silence.py       # MF_DetectSilence
@@ -438,8 +533,11 @@ comfyui_MediaForge/
 │   ├── trim_by_ranges.py       # MF_TrimByRanges
 │   └── whisper_transcribe.py   # MF_WhisperTranscribe
 ├── utils/
-│   ├── color.py             # hex_to_ass_color：#RRGGBB → ASS BGR+alpha
-│   ├── compose_ir.py        # ComposeIR + compile_ir() + tmp_paths_to_cleanup hook
+│   ├── ass_style.py         # ASS 字幕 style helpers(BurnSubtitle + ComposeBurnSubtitle 共用)
+│   ├── audio_mix.py         # amix / afade / volume / loudnorm filter builders
+│   ├── color.py             # hex_to_ass_color:#RRGGBB → ASS BGR+alpha
+│   ├── compose_ir.py        # ComposeIR + AudioOp + compile_ir + compile_audio_chain
+│   ├── compose_ops.py       # MF_COMPOSE_OPS / AUDIO_OPS dispatch + watermark resolver
 │   ├── encoder.py           # codec catalog + NVENC probe + pick_default_codec + build_encoder_args
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
 │   ├── output_path.py       # resolve_output_path + output_path_to_ui_entry (API metadata helper)
@@ -530,7 +628,7 @@ A：可以 — FFmpeg + `faster-whisper` 都支援 M1/M2/M3。faster-whisper 沒
 A：對方會看到 "Missing nodes" 警告。叫他開 ComfyUI Manager → "Install Missing Custom Nodes" 即可。ComfyUI 標準流程。
 
 **Q：為什麼還沒有 Audio domain 節點？**
-A：Phase 6 — AI shakedown 之後做。會涵蓋去噪、normalize、混音、ducking。`MediaForge/Audio` 分類名稱已保留。
+A:Phase 4.5 已有「Compose chain 內」的音訊 op(Volume / AudioMix / Fade / Normalize、跟視訊 overlay 共享一次 encode)。獨立的 Phase 6 audio domain(檔案級 denoise、normalize-file、cut/trim、ducking) 在 AI shakedown 之後做、`MediaForge/Audio` 分類名稱已保留。
 
 ## 測試
 
@@ -550,10 +648,11 @@ real-ffmpeg 系列需要 PATH 上有 `ffmpeg`。
 
 - **Phase 2** ✅ Foundation bridges — LoadVideoFrames / SaveVideoFrames
 - **Phase 3** ✅ Gap-priority — DetectSilence / TrimByRanges / ConcatVideos
-- **Phase 4** ✅ Compose pipeline — single-encode multi-overlay
-- **Phase 5** 🚧 AI — WhisperTranscribe / TranslateSubtitle（schema 仍 experimental）
-- **Phase 6** ⏳ Audio domain — 去噪、normalize、混音、ducking
-- **Phase 7** ⏳ Net domain — yt-dlp ingest、HTTP fetch（lazy import）
+- **Phase 4** ✅ Compose pipeline v1 — single-encode multi-overlay (Start + Finalize)
+- **Phase 4.5** ✅ Compose pipeline v2 — 合一 ComposeVideo + 字幕進 chain + audio chain(Volume / AudioMix / Fade / Normalize)
+- **Phase 5** 🚧 AI — WhisperTranscribe / TranslateSubtitle(schema 仍 experimental)
+- **Phase 6** ⏳ 獨立 Audio domain — 檔案級 denoise、normalize-file、audio cut/trim、ducking(Phase 4.5 的 Compose audio chain 是子集)
+- **Phase 7** ⏳ Net domain — yt-dlp ingest、HTTP fetch(lazy import)
 
 ## License
 

@@ -10,7 +10,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 
 ## Highlights
 
-- 🎞️ **18 nodes** across 6 categories — Subtitle / Video / Analysis / Compose / AI (+ Audio / Net / Image planned)
+- 🎞️ **22 nodes** across 5 categories — Subtitle / Video / Analysis / Compose (now with audio chain) / AI (+ standalone Audio / Net / Image planned)
 - 🔗 **Dual-input bridge** — file-consumer nodes accept *either* a `video_path` string *or* an in-memory `IMAGE + AUDIO + tensor_fps` triplet, so MediaForge chains with VHS / AnimateDiff / any IMAGE-pipeline plugin without a SaveVideoFrames round-trip
 - 🚀 **Smart GPU codec default** — `h264_nvenc` is auto-selected when NVENC is available, libx264 fallback on CPU-only systems. No per-workflow switching needed
 - 📡 **API-ready output** — every file-producing node emits ComfyUI `ui.images` metadata so `/history/<prompt_id>` exposes the output filename; download via `/view?filename=X&subfolder=Y&type=output` (see [Using via API](#using-via-api))
@@ -59,20 +59,27 @@ Strip dead air from a lecture recording or podcast.
 | `MF_DetectSilence` | `noise_db = -30`, `min_duration_sec = 1.5` |
 | `MF_TrimByRanges` | `mode = "remove"` |
 
-### 2. Compose: watermark + intro text in **one** re-encode (5 nodes)
+### 2. Compose: watermark + intro text + BGM + subtitle in **one** re-encode (5 nodes)
 
 ```
-[ComposeStart]──▶[ComposeWatermark]──▶[ComposeOverlayText]──▶[ComposeFinalize]──▶ output.mp4
+[ComposeWatermark]→[ComposeOverlayText]→[ComposeBurnSubtitle]→ MF_COMPOSE_OPS ─┐
+                                                                                ▼
+[ComposeAudioMix(bgm.mp3)] ────────────────────── MF_COMPOSE_AUDIO_OPS ──► [ComposeVideo] → output.mp4
+                                                                                ↑
+                                                                                video_path
 ```
 
 | Node | Key inputs |
 |---|---|
-| `MF_ComposeStart` | `video_path = "clip.mp4"`, `target_width = 1920`, `target_height = 1080` |
-| `MF_ComposeWatermark` | `image_path = "logo.png"`, `placement = "BR"`, `relative_scale = 0.12`, `opacity = 0.6` |
-| `MF_ComposeOverlayText` | `text = "Episode 01"`, `font_size = 64`, `start_sec = 0`, `end_sec = 5` |
-| `MF_ComposeFinalize` | `encoder = "h264"`, `crf = 20` |
+| `MF_ComposeWatermark` | `image_path = "logo.png"`, `placement = "bottom_right"`, `relative_scale = 0.12`, `opacity = 0.6` |
+| `MF_ComposeOverlayText` | `text = "Episode 01"`, `fontsize = 64`, `start_sec = 0`, `end_sec = 5` |
+| `MF_ComposeBurnSubtitle` | `srt_path = "subs.srt"`, `font = "msjh.ttc"`, `font_size = 24` |
+| `MF_ComposeAudioMix` | `audio_path = "bgm.mp3"`, `keep_source = True`, `bgm_volume = 0.3` |
+| `MF_ComposeVideo` | `video_path = "clip.mp4"`, `target_*=0` (inherit), `codec = "h264_nvenc"`, `crf = 18` |
 
-All overlay ops accumulate into the Compose IR and compile to **one** `filter_complex_script` — the input is decoded once and encoded once. Stack 10 overlays and you still pay one re-encode.
+All four effects accumulate and compile to **one** `filter_complex_script` — the input decodes once and encodes once. Stack 10 overlays + 4 audio ops and you still pay one re-encode.
+
+> **Migrating from v1?** `MF_ComposeStart` + `MF_ComposeFinalize` were merged into `MF_ComposeVideo`. See [the migration guide](#migrating-from-compose-v1).
 
 ### 3. AI auto-subtitle: transcribe → translate → burn (6 nodes — most powerful)
 
@@ -167,7 +174,7 @@ To override per-node, just pick from the dropdown — existing workflows that ha
 
 **TL;DR:** Install both. VHS for fast IMAGE-batch workflows; MediaForge for broadcast encoding, file-level ops, Compose pipeline, and AI-driven subtitle work.
 
-## Nodes (18)
+## Nodes (22)
 
 > **Dual-input note**: nodes marked **(dual-input)** below accept *either* a file path (existing `video_path` STRING widget) *or* an in-memory tensor (wire `frames` + `tensor_fps` + `audio` from VHS / AnimateDiff / `MF_LoadVideoFrames` / etc.). When tensor is wired, MediaForge writes a temp .mp4 internally and FFmpeg processes that. Path mode stays the default fast path — no quality loss when chaining MediaForge-to-MediaForge.
 >
@@ -297,7 +304,7 @@ Stitch multiple video files end-to-end at the path level. Two strategies for dif
 - `video_codec` (STRING) — e.g. `"h264"`, `"hevc"`, `"av1"`, `""` if no video stream.
 - `audio_codec` (STRING) — e.g. `"aac"`, `"opus"`, `""` if no audio stream.
 
-Pairs naturally with `MF_LoadVideoFrames` (probe first for dimensions, then load) and the Compose pipeline (feed dimensions to `MF_ComposeStart`).
+Pairs naturally with `MF_LoadVideoFrames` (probe first for dimensions, then load) and the Compose pipeline (feed dimensions to `MF_ComposeVideo` — or leave its `target_*` at 0 to inherit automatically).
 
 #### 🤫 Detect Silence (`MF_DetectSilence`)
 
@@ -309,34 +316,118 @@ FFmpeg `silencedetect` wrapper → `SILENCE_RANGES` list (`[[start_sec, end_sec]
 
 **Output**: `ranges` (SILENCE_RANGES). Empty list = no silence found; downstream `MF_TrimByRanges` treats empty + `mode="remove"` as identity (full clip preserved).
 
-### `MediaForge/Compose` — single-encode multi-overlay pipeline
+### `MediaForge/Compose` — single-encode pipeline (video overlays + audio chain)
 
-`MF_Compose*` nodes chain a `MF_COMPOSE` IR (FFmpeg `filter_complex` graph compiler). Only `MF_ComposeFinalize` runs ffmpeg — all intermediate ops accumulate into the IR and compile to one `filter_complex_script`. **Lossless overlay stacking** vs. N re-encodes.
+The Compose pipeline gives you **one ffmpeg encode** for any combination of overlays, subtitles, and audio operations. Build two chains in parallel (video overlays + audio ops), feed both into `MF_ComposeVideo`, ship a single output file.
 
-#### 🎬 Compose Start (`MF_ComposeStart`) **(dual-input)**
-Init the IR. Sets `target_width / target_height / target_fps`. When `frames` is wired, the temp .mp4 is created here but cleanup is deferred to `MF_ComposeFinalize` (via `ComposeIR.tmp_paths_to_cleanup`) so it survives the full Compose chain.
+```
+[OverlayText] → [Watermark] → [BurnSubtitle] ──► MF_COMPOSE_OPS ─┐
+                                                                  ▼
+[Volume] → [AudioMix(+bgm)] → [Fade] → [Normalize] ── AUDIO_OPS ──► [ComposeVideo] → output.mp4
+                                                                          ↑
+                                                                          video_path
+```
 
-#### ✏️ Compose Overlay Text (`MF_ComposeOverlayText`)
-Append `drawtext` op. Temporal window via `start_sec`/`end_sec` (enable expression). Custom `fontfile` supported. Text is passed via `textfile=` to safely escape apostrophes, percents, and newlines.
+The **minimal workflow** is 2 nodes: drop a single overlay node, wire it into `ComposeVideo`. Skip the audio chain entirely for video-only work, or vice versa.
 
-#### 🖼️ Compose Overlay Image (`MF_ComposeOverlayImage`)
-Append generic `overlay` op. Optional `scale_w` for resize; temporal window supported.
+#### 🎬 Compose Video (`MF_ComposeVideo`) **(dual-input)**
 
-#### 💧 Compose Watermark (`MF_ComposeWatermark`)
-Preset overlay with full UX: `placement` (TL/TR/BL/BR/center/tile), `relative_scale` (0.05–0.5 of frame width), `opacity` (via colorchannelmixer alpha), per-side margins, `visible_start/end_sec` temporal window.
-
-#### ✅ Compose Finalize (`MF_ComposeFinalize`)
-Compile the Compose IR → **one** FFmpeg encode covering all overlays. The endpoint of every Compose chain.
+The endpoint of every Compose workflow — replaces the older `ComposeStart` + `ComposeFinalize` two-node pattern with one node.
 
 **Settings**:
-- `codec` (dropdown) — `libx264` / `libx265` / `libsvtav1` / `prores_ks` / `h264_nvenc` / `hevc_nvenc` / `av1_nvenc` (NVENC variants auto-detected). Defaults to `h264_nvenc` when NVENC available, else `libx264`.
-- `crf` (INT 0–51, default 18) — quality target. For NVENC, internally maps to `-rc vbr -cq <crf>` for equivalent quality control.
-- `preset` (dropdown, default `medium`) — encoder speed-vs-size tradeoff. For NVENC, mapped to `p1..p7` (`p1`=fastest, `p7`=slowest).
-- `keep_audio` (BOOLEAN, default True) — preserve the main video's audio track in the output.
+- `video_path` (STRING) + dual-input `frames` / `tensor_fps` / `audio` — source media.
+- `target_fps` (FLOAT, **default 0.0**) + `target_width` (INT, default 0) + `target_height` (INT, default 0) — `0` = **inherit from source** (probed via ffprobe + rotation-aware dims). Most workflows leave these at 0.
+- `codec` / `crf` / `preset` — `codec` smart-defaults to `h264_nvenc` when NVENC is available, else `libx264`. NVENC variants (`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`) auto-detected. CRF range 0–51 (default 18 = visually lossless).
+- `keep_audio` (BOOLEAN, default True) — when no audio chain is wired, preserve the source's audio track.
 
-**Outputs**: `final_video_path` (STRING) + `filter_complex_script` (STRING, debug aid — the compiled filter graph).
+**Optional chain inputs**:
+- `overlays` (`MF_COMPOSE_OPS`) — chain output from any combination of `ComposeOverlayText` / `ComposeOverlayImage` / `ComposeWatermark` / `ComposeBurnSubtitle`. List order = z-order (later = on top).
+- `audio_ops` (`MF_COMPOSE_AUDIO_OPS`) — chain output from `ComposeVolume` / `ComposeAudioMix` / `ComposeAudioFade` / `ComposeNormalize`. Order = filter chain order.
 
-**Behavior**: auto-switches to `-filter_complex_script <tempfile>` when the compiled graph exceeds 6000 chars (avoids Windows command-line length limits). Container auto-corrects: `prores_ks` → `.mov`, everything else → `.mp4`.
+**Output**: `filename_prefix` (default `MediaForge/composed`) → `output/<prefix>_<NNNNN>.mp4` (or `.mov` for ProRes). Returns the path + the compiled `filter_complex_script` (debug aid). Emits `ui.images` metadata for API `/history` exposure.
+
+**Behavior**: auto-switches to `-filter_complex_script <tempfile>` when the compiled graph exceeds 6000 chars (avoids Windows command-line length limits).
+
+#### ✏️ Compose Overlay Text (`MF_ComposeOverlayText`)
+
+Append a `drawtext` op spec into the overlay chain.
+
+- `text` (multiline STRING) — passed via `textfile=` at compile time to safely escape apostrophes, percents, newlines.
+- `x_expr` / `y_expr` — FFmpeg drawtext expressions (variables `w` / `h` / `text_w` / `text_h` / `t` available). Default centers near bottom.
+- `fontsize` / `fontcolor` / `borderw` / `bordercolor` — standard styling.
+- `fontfile` — leave empty for ComposeVideo to fallback to a bundled font (Windows native ffmpeg has no fontconfig).
+- `start_sec` / `end_sec` — temporal window. Both 0 = always visible.
+
+#### 🖼️ Compose Overlay Image (`MF_ComposeOverlayImage`)
+
+Append a generic `overlay` op for arbitrary image placement.
+
+- `image_path` — PNG / JPG / etc.
+- `x_expr` / `y_expr` — absolute or expression-based position.
+- `scale_w` — width in pixels (0 = original size, height auto-scaled by aspect ratio).
+- `start_sec` / `end_sec` — temporal window.
+
+#### 💧 Compose Watermark (`MF_ComposeWatermark`)
+
+Watermark preset on top of overlay — more convenient UI for the most common case.
+
+- `image_path` — PNG with alpha recommended.
+- `placement` — `top_left` / `top_right` / `bottom_left` / `bottom_right` / `center` / `tile` (auto-computes rows/cols from image aspect).
+- `relative_scale` (0.05–0.5) — watermark width as fraction of frame width. Resolved at compile time using `ComposeVideo.target_width`.
+- `opacity` (0–1) — via `colorchannelmixer alpha`, preserves PNG's own alpha.
+- `margin_top` / `right` / `bottom` / `left` — per-side margins.
+- `visible_start/end_sec` — both 0 = always visible.
+
+#### 🔥 Compose Burn Subtitle (`MF_ComposeBurnSubtitle`)
+
+The headline addition in v2 — subtitles burn **inside the Compose pipeline**, so you can stack `subtitle + watermark + audio mix` and pay only one encode.
+
+Same widget set as `MF_BurnSubtitle` (font dropdown, full ASS styling, alignment, margins, colors). Drop a `.ttf` / `.otf` / `.ttc` into the plugin's `font/` directory; the dropdown auto-populates. `fontTools` is used to auto-detect the TTF's internal Family Name for libass (lazy-imported — `pip install fontTools` recommended).
+
+The standalone `MF_BurnSubtitle` (in the Subtitle category) stays for one-shot subtitle burning when you don't need other overlays.
+
+#### 🔊 Compose Volume (`MF_ComposeVolume`)
+
+Append a `volume=N` audio filter op.
+
+- `scale` (FLOAT 0.0–2.0, default 1.0) — `0.0` mutes, `0.5` halves, `1.0` original, `2.0` doubles (watch for clipping).
+
+#### 🎵 Compose Audio Mix (`MF_ComposeAudioMix`) **(dual-input audio)**
+
+Mix an external BGM track with the source audio — or replace the source audio entirely.
+
+- `audio_path` (STRING) — BGM file path, or wire `audio` pin (AUDIO dict from another node) for tensor-based input. AUDIO dict materializes to a temp WAV, cleaned up after encode.
+- `keep_source` (BOOLEAN, default True) — `True` mixes source + BGM via `amix`; `False` discards source audio and uses only the BGM.
+- `bgm_volume` (FLOAT 0.0–2.0, default 0.3) — BGM-side volume scaling applied before mix. The default 0.3 keeps voice dominant in podcast/vlog use.
+- `duration` — `first` (output length = source audio) / `longest` / `shortest`.
+
+#### 🌅 Compose Audio Fade (`MF_ComposeAudioFade`)
+
+Append an `afade` op (in / out).
+
+- `direction` — `in` (silent → full) or `out` (full → silent).
+- `start_sec` / `duration_sec` — fade window. For `out`, set `start_sec = video_duration - duration_sec`.
+- `curve` — 10 FFmpeg curve names: `tri` (linear, default) / `qsin` (quarter sine, smoothest perceptually) / `esin` / `hsin` / `log` / `par` / `qua` / `cub` / `squ` / `cbr`.
+
+#### 📏 Compose Normalize (`MF_ComposeNormalize`)
+
+EBU R128 / streaming-grade loudness normalization via `loudnorm` (single pass).
+
+- `target_i` (LUFS, default -16) — Apple Podcasts / Spotify spoken-word target. YouTube / TikTok use -14; broadcast EBU R128 uses -23.
+- `target_tp` (dBTP, default -1.0) — true-peak ceiling. -1 dBTP avoids clipping on consumer playback chains.
+- `target_lra` (LU, default 11.0) — loudness range; larger = more dynamics preserved.
+- `linear` (BOOLEAN, default True) — `True` avoids dynamic-range compression. Set False to forcefully flatten to the target window (sacrifices dynamics for strict LUFS compliance).
+
+> **Single pass** is enough for streaming use. Strict EBU R128 broadcast certification needs two-pass (measure → re-apply), which MediaForge doesn't currently provide.
+
+### Migrating from Compose v1
+
+If you have workflow JSONs containing `MF_ComposeStart` / `MF_ComposeFinalize`, ComfyUI will show "Missing nodes" warnings. To migrate:
+
+1. Drop a new `MF_ComposeVideo`. Copy the old `ComposeStart`'s `video_path` / `target_*` settings + the old `ComposeFinalize`'s `codec` / `crf` / `preset` / `keep_audio` settings into it.
+2. Delete the old `MF_ComposeStart` and `MF_ComposeFinalize` nodes.
+3. Take the overlay chain's last output (was an `MF_COMPOSE` IR) and wire it into `MF_ComposeVideo`'s new `overlays` pin (the type is now `MF_COMPOSE_OPS` — same chain topology).
+4. If you had `MF_BurnSubtitle` running separately, replace with `MF_ComposeBurnSubtitle` in the chain to fold it into the single encode.
 
 ### `MediaForge/AI` — provider-agnostic
 
@@ -421,11 +512,15 @@ comfyui_MediaForge/
 ├── nodes/                   # one file per node, MF_<Verb><Noun>
 │   ├── ai_config.py            # MF_AIConfig
 │   ├── burn_subtitle.py        # MF_BurnSubtitle  — uses font/ subdir
-│   ├── compose_start.py        # MF_ComposeStart
+│   ├── compose_video.py        # MF_ComposeVideo  — Compose v2 endpoint (replaces Start + Finalize)
 │   ├── compose_overlay_text.py # MF_ComposeOverlayText
 │   ├── compose_overlay_image.py# MF_ComposeOverlayImage
 │   ├── compose_watermark.py    # MF_ComposeWatermark
-│   ├── compose_finalize.py     # MF_ComposeFinalize
+│   ├── compose_burn_subtitle.py# MF_ComposeBurnSubtitle  — subtitle in Compose chain (single encode)
+│   ├── compose_volume.py       # MF_ComposeVolume  — audio chain
+│   ├── compose_audio_mix.py    # MF_ComposeAudioMix  — BGM mix (dual-input audio)
+│   ├── compose_audio_fade.py   # MF_ComposeAudioFade
+│   ├── compose_normalize.py    # MF_ComposeNormalize  — loudnorm
 │   ├── concat_videos.py        # MF_ConcatVideos
 │   ├── convert_chinese.py      # MF_ConvertChinese  — OpenCC simp↔trad
 │   ├── detect_silence.py       # MF_DetectSilence
@@ -438,10 +533,13 @@ comfyui_MediaForge/
 │   ├── trim_by_ranges.py       # MF_TrimByRanges
 │   └── whisper_transcribe.py   # MF_WhisperTranscribe
 ├── utils/
+│   ├── ass_style.py         # ASS subtitle style helpers (shared by BurnSubtitle + ComposeBurnSubtitle)
+│   ├── audio_mix.py         # amix / afade / volume / loudnorm filter builders
 │   ├── color.py             # hex_to_ass_color: #RRGGBB → ASS BGR+alpha
-│   ├── compose_ir.py        # ComposeIR + compile_ir() + tmp_paths_to_cleanup hook
+│   ├── compose_ir.py        # ComposeIR + AudioOp + compile_ir + compile_audio_chain
+│   ├── compose_ops.py       # MF_COMPOSE_OPS / AUDIO_OPS dispatch + watermark resolver
 │   ├── encoder.py           # codec catalog + NVENC probe + pick_default_codec + build_encoder_args
-│   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
+│   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / probe_has_audio_stream
 │   ├── output_path.py       # resolve_output_path + output_path_to_ui_entry (API metadata helper)
 │   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO + encode_tensor_to_tempfile
 ├── font/                    # drop .ttf / .otf here for MF_BurnSubtitle font_file dropdown
@@ -530,7 +628,7 @@ A: Yes — FFmpeg + `faster-whisper` both work on M1/M2/M3. Metal isn't supporte
 A: They'll see "Missing nodes" warnings. Direct them to ComfyUI Manager → "Install Missing Custom Nodes". Standard ComfyUI plugin behavior.
 
 **Q: Why no Audio domain nodes yet?**
-A: Phase 6 — coming after AI shakedown. Will cover denoise, normalize, mix, ducking. The `MediaForge/Audio` category name is reserved.
+A: Phase 4.5 already ships **Compose-chain** audio ops (Volume / AudioMix / Fade / Normalize — folded into the single-encode pipeline alongside video overlays). The dedicated Phase 6 standalone Audio domain (file-level denoise, normalize-file, cut/trim, ducking) comes after AI shakedown. The `MediaForge/Audio` category name is reserved for those standalone nodes.
 
 ## Testing
 
@@ -550,9 +648,10 @@ Real-ffmpeg tests require `ffmpeg` on PATH.
 
 - **Phase 2** ✅ Foundation bridges — LoadVideoFrames / SaveVideoFrames
 - **Phase 3** ✅ Gap-priority — DetectSilence / TrimByRanges / ConcatVideos
-- **Phase 4** ✅ Compose pipeline — single-encode multi-overlay
+- **Phase 4** ✅ Compose pipeline v1 — single-encode multi-overlay (Start + Finalize)
+- **Phase 4.5** ✅ Compose pipeline v2 — merged ComposeVideo + subtitle-in-chain + audio chain (Volume / AudioMix / Fade / Normalize)
 - **Phase 5** 🚧 AI — WhisperTranscribe / TranslateSubtitle (experimental schema)
-- **Phase 6** ⏳ Audio domain — denoise, normalize, mix, ducking
+- **Phase 6** ⏳ Standalone Audio domain — file-level denoise, normalize-file, audio cut/trim, ducking (the Compose chain audio ops in Phase 4.5 are a subset)
 - **Phase 7** ⏳ Net domain — yt-dlp ingest, HTTP fetch (lazy-import)
 
 ## License
