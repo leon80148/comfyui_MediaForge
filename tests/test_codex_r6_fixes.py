@@ -22,25 +22,25 @@ def test_concat_transition_clamped_to_shortest_clip():
     # 直接驗 filter graph 構造 — 不真 ffmpeg run（會慢）
     # 用 mock: 替 _probe 跟 probe_video_duration 注入 fake 答案
     import comfyui_MediaForge.nodes.concat_videos as cv
+    import comfyui_MediaForge.utils.ffmpeg as ff
 
-    # Monkey-patch ffmpeg probe to avoid hitting disk
-    saved = []
+    # 為什麼這裡要 save+restore cv.run_ffmpeg：
+    # concat_videos.py top 是 `from ..utils.ffmpeg import run_ffmpeg` — 在 cv 模組裡
+    # 形成獨立 binding。改 cv.run_ffmpeg 不會影響 ff.run_ffmpeg，反之亦然。所以兩邊都
+    # 各別 save+restore 才不會把 fake 漏給後續 test (例如 test_review_p0_concat_special_paths
+    # 一旦看到 cv.run_ffmpeg 是 fake，就會「concat 假裝成功」但 disk 上沒檔，assert 全死。
+    orig_cv_run = cv.run_ffmpeg
+    orig_pv = ff.probe_video_duration
+    orig_probe_fn = ff.probe
     try:
-        # 先側錄 _concat_transcode 行為：直接呼叫並攔截 ffmpeg call
         captured = {}
 
         def fake_run_ffmpeg(cmd, tag="FFmpeg"):
             captured["cmd"] = cmd
             return True  # 假裝成功
         cv.run_ffmpeg = fake_run_ffmpeg
-
-        # Mock probe / probe_video_duration import path 內部使用
-        import comfyui_MediaForge.utils.ffmpeg as ff
-        orig_pv = ff.probe_video_duration
-        orig_probe_fn = ff.probe
         ff.probe_video_duration = lambda p: 0.5  # 每段都是 0.5s
         ff.probe = lambda p: {"streams": [{"codec_type": "video"}, {"codec_type": "audio"}]}
-        saved = [("probe_video_duration", orig_pv), ("probe", orig_probe_fn)]
 
         # 兩段 0.5s clips + 1s transition (應 clamp 到 0.495s)
         import tempfile
@@ -69,8 +69,9 @@ def test_concat_transition_clamped_to_shortest_clip():
             )
             print(f"[OK] R6 P2: concat transition clamped from 1.0s → {dur:.4f}s")
     finally:
-        for name, val in saved:
-            setattr(ff, name, val)
+        cv.run_ffmpeg = orig_cv_run
+        ff.probe_video_duration = orig_pv
+        ff.probe = orig_probe_fn
 
 
 def test_compose_ir_clone_deep_copies_params():

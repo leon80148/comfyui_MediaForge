@@ -15,22 +15,64 @@ if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
 
 
-def test_whisper_runtime_picks_default_per_provider(monkeypatch=None):
-    """Whisper 在 cfg.model='' 時，依 provider 選正確 backend default；
-    cfg.model 像 STT shape 則尊重它。對齊 production 的 _looks_like_stt_model 啟發式。"""
-    from comfyui_MediaForge.nodes.whisper_transcribe import _looks_like_stt_model
+def test_whisper_default_does_not_break_local_backend():
+    """[R3 P2 + 6adbd27 refactor] model_override widget 已移除（dead UI），現在 effective_model
+    完全由 cfg.model + provider 決定。本 test 鎖住 regression：
 
-    def resolve(cfg_model, provider):
+    1. INPUT_TYPES 不可以再回 model_override（避免重新引入 dead widget）
+    2. effective_model 落點仍然 backend-aware：
+       - openai_compatible + cfg.model='' → 'whisper-1'
+       - faster_whisper_local + cfg.model='' → 'base'
+
+    為什麼這 test 還活著：原 R3 P2 的精神（不能硬塞固定字串蓋掉 local backend 的
+    'base'/'small'/'large-v3'）今天仍要驗 — 只是改成驗 effective_model 邏輯，不再驗
+    widget default。
+    """
+    from comfyui_MediaForge.nodes.whisper_transcribe import (
+        MF_WhisperTranscribe, _looks_like_stt_model,
+    )
+
+    types = MF_WhisperTranscribe.INPUT_TYPES()
+    req = types["required"]
+    opt = types.get("optional", {})
+    # 1. dead widget 不能 resurrect
+    assert "model_override" not in req and "model_override" not in opt, (
+        "model_override widget 在 6adbd27 被移除（dead UI）。test_whisper_default 鎖住"
+        "regression — 別再加回來；effective_model 已純由 cfg.model + provider 決定。"
+    )
+
+    # 2. effective_model 仍 backend-aware（不會用 'whisper-1' 蓋掉 faster_whisper_local）
+    def _effective_model(cfg_model, provider):
+        cfg_model = (cfg_model or "").strip()
+        if _looks_like_stt_model(cfg_model):
+            return cfg_model
+        return "base" if provider == "faster_whisper_local" else "whisper-1"
+
+    assert _effective_model("", "faster_whisper_local") == "base"
+    assert _effective_model("", "openai_compatible") == "whisper-1"
+    # cfg.model='gpt-4o-mini' (non-STT shape) 不應被當 STT model → 退回 backend 預設
+    assert _effective_model("gpt-4o-mini", "faster_whisper_local") == "base"
+    # 但 STT-shape model id 走 cfg.model
+    assert _effective_model("large-v3", "faster_whisper_local") == "large-v3"
+    print("[OK] R3 P2 (post-6adbd27): model_override widget 已移除、effective_model 仍 backend-aware")
+
+
+def test_whisper_runtime_picks_default_per_provider(monkeypatch=None):
+    """Whisper 在 model_override='' 且 cfg.model='' 時，依 provider 選正確 backend default。"""
+    # 直接驗 effective_model 決策邏輯（不真的 call API）
+    def resolve(override, cfg_model, provider):
+        u = (override or "").strip()
         c = (cfg_model or "").strip()
-        if _looks_like_stt_model(c):
+        if u:
+            return u
+        if c:
             return c
         return "whisper-1" if provider == "openai_compatible" else "base"
 
-    assert resolve("", "openai_compatible") == "whisper-1"
-    assert resolve("", "faster_whisper_local") == "base"
-    assert resolve("large-v3", "faster_whisper_local") == "large-v3"
-    # chat-shape cfg.model 不該被當 STT
-    assert resolve("gpt-4o-mini", "openai_compatible") == "whisper-1"
+    assert resolve("", "", "openai_compatible") == "whisper-1"
+    assert resolve("", "", "faster_whisper_local") == "base"
+    assert resolve("", "large-v3", "faster_whisper_local") == "large-v3"
+    assert resolve("custom-model", "base", "openai_compatible") == "custom-model"
     print("[OK] R3 P2: effective_model resolution matrix 通過")
 
 
@@ -72,9 +114,15 @@ def test_trim_xfade_clamps_to_shortest_segment():
 
 
 def test_watermark_tile_uses_real_aspect_ratio():
-    """[R3 P3] tile mode 必須 probe watermark 真實尺寸算 rows，不能假設正方形。"""
+    """[R3 P3] tile mode 必須 probe watermark 真實尺寸算 rows，不能假設正方形。
+
+    Compose v2 (Phase 4.5)：MF_ComposeWatermark 變成純 op-spec emitter (回 MF_COMPOSE_OPS
+    list[dict])、tile 計算搬到 utils/compose_ops.resolve_watermark_params 在 ComposeVideo
+    compile 時做。Test 也跟著 port：先呼叫 add() 拿 op spec、再 call resolve_*params 驗
+    tile 行列數對寬 logo 正確（aspect-corrected）。
+    """
     from comfyui_MediaForge.nodes.compose_watermark import MF_ComposeWatermark
-    from comfyui_MediaForge.utils.compose_ir import ComposeIR
+    from comfyui_MediaForge.utils.compose_ops import resolve_watermark_params
 
     # 建一張 200x50 寬 logo
     with tempfile.TemporaryDirectory() as td:
@@ -86,21 +134,25 @@ def test_watermark_tile_uses_real_aspect_ratio():
             check=True, capture_output=True,
         )
 
-        ir = ComposeIR(target_width=1920, target_height=1080)
-        ir.add_video_input("/tmp/fake.mp4", is_main=True)
-
         node = MF_ComposeWatermark()
-        (out_ir,) = node.watermark(
-            compose=ir,
+        (ops,) = node.add(
             image_path=wm,
             placement="tile",
-            relative_scale=0.1,  # → scale_w = 192
+            relative_scale=0.1,  # → scale_w = 192 @ target_width=1920
             opacity=1.0,
             margin_top=0, margin_right=0, margin_bottom=0, margin_left=0,
             visible_start_sec=0.0, visible_end_sec=0.0,
         )
-        op = out_ir.ops[-1]
-        tile = op.params.get("tile", "")
+        assert len(ops) == 1 and ops[0]["type"] == "watermark", (
+            f"add() 應 emit 1 op type=watermark；實際 ops={ops}"
+        )
+
+        # Resolve 到 IR overlay params (compile time)
+        resolved = resolve_watermark_params(
+            ops[0]["params"], wm,
+            target_width=1920, target_height=1080,
+        )
+        tile = resolved.get("tile", "")
         cols, rows = tile.split("x")
         cols, rows = int(cols), int(rows)
         # logo 200x50，scale 到寬度 192 → 高度 ≈ 48；
@@ -111,8 +163,9 @@ def test_watermark_tile_uses_real_aspect_ratio():
 
 
 if __name__ == "__main__":
+    test_whisper_default_does_not_break_local_backend()
     test_whisper_runtime_picks_default_per_provider()
     test_trim_xfade_actually_implemented()
     test_trim_xfade_clamps_to_shortest_segment()
     test_watermark_tile_uses_real_aspect_ratio()
-    print("\n=== Codex R3 fixes: all 4 cases passed ===")
+    print("\n=== Codex R3 fixes: all 5 cases passed ===")

@@ -28,6 +28,7 @@ Thumbs.db
 desktop.ini
 
 # Development docs & internal records (local-only, not for public repo)
+.claude/
 docs/
 NOTES.md
 TODO.md
