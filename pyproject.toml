@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-mediaforge"
-description = "MediaForge — FFmpeg-powered media utility nodes for ComfyUI. Subtitle burn-in, video loop, media probe, with an extensible structure for image / audio / AI work."
+description = "Power-user FFmpeg toolkit for ComfyUI. Tensor<->media bridge with broadcast-grade codec control: subtitle burn-in, multi-overlay Compose pipeline, provider-agnostic AI transcribe/translate, NVENC-aware. Depth > breadth."
 version = "0.1.0"
 license = { file = "LICENSE" }
 dependencies = []
