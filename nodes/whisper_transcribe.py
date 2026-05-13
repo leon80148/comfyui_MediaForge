@@ -166,7 +166,7 @@ def _extract_wav(path):
             pass
         raise RuntimeError(
             f"[Whisper Transcribe] FFmpeg 抽 WAV 後 size={size} byte 過小（無效音訊），"
-            f"input 可能是 silent video 或非預期格式。"
+            f"input 可能是 silent video 或非預期格式。請改傳有音訊的檔案、或先用 MF_ProbeMedia 確認 audio stream 存在"
         )
     return tmp
 

@@ -42,7 +42,10 @@ class MF_ProbeMedia:
 
             info = ffprobe_data(source_path)
             if not info:
-                raise RuntimeError(f"[Probe Media] ffprobe 無法解析：{source_path}")
+                raise RuntimeError(
+                    f"[Probe Media] ffprobe 無法解析：{source_path}。"
+                    "請檢查檔案是否損毀、或容器格式 ffprobe 是否認得"
+                )
 
             duration = 0.0
             try:

@@ -56,11 +56,17 @@ class MF_TranslateSubtitle:
                 "並把 base_url 指過去、provider 仍填 'openai_compatible'。"
             )
         if not srt_text.strip():
-            raise ValueError("[Translate Subtitle] srt_text 為空")
+            raise ValueError(
+                "[Translate Subtitle] srt_text 為空。"
+                "請接 MF_WhisperTranscribe 輸出或手動填 SRT 格式字串"
+            )
 
         blocks = _parse_srt(srt_text)
         if not blocks:
-            raise ValueError("[Translate Subtitle] 無法解析 srt_text 為合法 SRT 格式")
+            raise ValueError(
+                "[Translate Subtitle] 無法解析 srt_text 為合法 SRT 格式。"
+                "請檢查輸入是否為標準 SRT（含 idx / 時間戳 / 文本 三段）"
+            )
 
         translated_lines = self._translate_in_batches(
             [b[2] for b in blocks], ai_config, target_lang, system_prompt, batch_size,
@@ -68,7 +74,8 @@ class MF_TranslateSubtitle:
         if len(translated_lines) != len(blocks):
             raise RuntimeError(
                 f"[Translate Subtitle] 翻譯回傳段數 {len(translated_lines)} ≠ "
-                f"原段數 {len(blocks)}，無法對齊時間戳"
+                f"原段數 {len(blocks)}，無法對齊時間戳。"
+                "請縮小 batch_size 重試，或改用更穩定的 model"
             )
 
         out_parts = []

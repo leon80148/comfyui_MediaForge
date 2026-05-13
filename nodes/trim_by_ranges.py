@@ -93,7 +93,10 @@ class MF_TrimByRanges:
 
             duration = probe_video_duration(source_path)
             if duration is None or duration <= 0:
-                raise RuntimeError(f"[Trim By Ranges] 無法讀取影片長度：{source_path}")
+                raise RuntimeError(
+                    f"[Trim By Ranges] 無法讀取影片長度：{source_path}。"
+                    "請先用 MF_ProbeMedia 驗證檔案可解析"
+                )
 
             # mode=remove + 空 ranges → 整段保留（identity），是合法 no-op
             if mode == "remove":

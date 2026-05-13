@@ -98,13 +98,19 @@ class MF_ComposeVideo:
             # Probe source 拿尺寸 / fps / has_audio (給 0-sentinel resolve 用 + 音訊 chain decision)
             info = probe(source_path)
             if not info:
-                raise RuntimeError(f"[Compose Video] ffprobe 無法解析:{source_path}")
+                raise RuntimeError(
+                    f"[Compose Video] ffprobe 無法解析:{source_path}。"
+                    "請先用 MF_ProbeMedia 驗證檔案可解析、或檢查是否為損毀影片"
+                )
             v_stream = next(
                 (s for s in info.get("streams", []) if s.get("codec_type") == "video"),
                 None,
             )
             if not v_stream:
-                raise RuntimeError(f"[Compose Video] source 沒有 video stream:{source_path}")
+                raise RuntimeError(
+                    f"[Compose Video] source 沒有 video stream:{source_path}。"
+                    "請改傳影片檔（不能用純音訊檔當 ComposeVideo 的 source）"
+                )
             has_audio = probe_has_audio_stream(source_path)
 
             # 0-sentinel resolve target dimensions

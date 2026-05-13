@@ -102,7 +102,10 @@ class MF_LoopVideo:
 
             source_dur = probe_video_duration(source_path)
             if source_dur is None or source_dur <= 0:
-                raise RuntimeError(f"[Loop Video] 無法讀取影片長度：{source_path}")
+                raise RuntimeError(
+                    f"[Loop Video] 無法讀取影片長度：{source_path}。"
+                    "請先用 MF_ProbeMedia 驗證檔案可解析，或檢查容器/編碼是否被 ffprobe 支援"
+                )
 
             effective_dur = source_dur / speed
             has_audio = keep_audio and probe_has_audio_stream(source_path)
@@ -235,7 +238,10 @@ class MF_LoopVideo:
                     prev_a = out_label
 
         else:
-            raise ValueError(f"Unknown loop_mode: {mode}")
+            raise ValueError(
+                f"[Loop Video] 未支援的 loop_mode={mode!r}，"
+                "請改用 'strict' / 'pingpong' / 'crossfade' 其中一個"
+            )
 
         return parts, "looped_v", "looped_a"
 
