@@ -8,7 +8,13 @@ import json
 import os
 
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
-from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, probe, probe_video_duration, run_ffmpeg
+from ..utils.ffmpeg import (
+    ensure_ffmpeg,
+    escape_filter_path,
+    probe_has_audio_stream,
+    probe_video_duration,
+    run_ffmpeg,
+)
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
 
@@ -110,8 +116,7 @@ class MF_TrimByRanges:
                     f"[Trim By Ranges] mode={mode} 處理後沒有剩下任何片段（檢查 ranges 是否覆蓋整段影片）"
                 )
 
-            info = probe(source_path)
-            has_audio = bool(info and any(s.get("codec_type") == "audio" for s in info.get("streams", [])))
+            has_audio = probe_has_audio_stream(source_path)
 
             cmd = self._build_concat_command(
                 source_path, output_path, keep_ranges, crossfade_sec, has_audio,

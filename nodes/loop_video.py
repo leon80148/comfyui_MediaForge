@@ -2,7 +2,7 @@ import math
 import os
 
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
-from ..utils.ffmpeg import ensure_ffmpeg, probe, probe_video_duration, run_ffmpeg
+from ..utils.ffmpeg import ensure_ffmpeg, probe_has_audio_stream, probe_video_duration, run_ffmpeg
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
 
@@ -29,13 +29,6 @@ def _atempo_chain(speed):
     if abs(r - 1.0) > 1e-9:
         parts.append(f"atempo={r:.6f}")
     return parts
-
-
-def _source_has_audio(path):
-    info = probe(path)
-    if not info:
-        return False
-    return any(s.get("codec_type") == "audio" for s in info.get("streams", []))
 
 
 class MF_LoopVideo:
@@ -112,7 +105,7 @@ class MF_LoopVideo:
                 raise RuntimeError(f"[Loop Video] 無法讀取影片長度：{source_path}")
 
             effective_dur = source_dur / speed
-            has_audio = keep_audio and _source_has_audio(source_path)
+            has_audio = keep_audio and probe_has_audio_stream(source_path)
 
             if loop_mode == "crossfade" and crossfade_sec >= effective_dur:
                 print(f"[Loop Video] 警告：crossfade_sec({crossfade_sec}) >= 有效片段長度({effective_dur:.2f}s)，改用 strict")

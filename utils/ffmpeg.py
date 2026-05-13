@@ -199,6 +199,19 @@ def probe_duration(path):
         return None
 
 
+def probe_has_audio_stream(path):
+    """Return True iff ffprobe 顯示 path 有 audio stream。
+
+    用途:burn_subtitle / loop_video / trim_by_ranges / compose audio chain compile
+    都需要決定「source 有沒有可混音的音軌」。集中在這裡避免邏輯重複。
+    Probe 失敗 (檔案不存在 / 不是媒體檔) 視為「沒音軌」、不 raise。
+    """
+    info = probe(path)
+    if not info:
+        return False
+    return any(s.get("codec_type") == "audio" for s in info.get("streams", []))
+
+
 def get_video_display_dims(stream):
     """從 ffprobe 的 video stream dict 算出「顯示尺寸」(post auto-rotate)。
 

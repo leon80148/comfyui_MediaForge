@@ -59,28 +59,10 @@ def test_save_keeps_full_video_when_audio_shorter():
         print(f"[OK] R4 P2: short audio + long video → keeps full video ({dur:.2f}s)")
 
 
-def test_compose_finalize_uses_explicit_t_not_shortest():
-    """[R4 P2] compose_finalize 應 build 出 `-t <main_duration>` 而非 `-shortest`
-    (透過 mock probe_duration 驗 cmd 構造)。"""
-    # 簡單做法：靜態檢查源碼，確認 -t / probe_duration 出現、-shortest 落到退階分支
-    src = open(os.path.join(_PLUGIN_DIR, "nodes/compose_finalize.py"), encoding="utf-8").read()
-    # R5 後改用 probe_video_duration (差異化 video stream vs container)
-    assert ("probe_video_duration(main_video_path)" in src
-            or "probe_duration(main_video_path)" in src), (
-        "compose_finalize 應呼叫 probe_(video_)duration 取主影片時長"
-    )
-    assert '"-t"' in src or "'-t'" in src, "compose_finalize 應加 -t flag"
-    # -shortest 仍可作 fallback、但不該是 unconditional。忽略註解行（# 開頭）
-    code_lines = [l for l in src.splitlines() if "-shortest" in l and not l.lstrip().startswith("#")]
-    for l in code_lines:
-        # 可接受：(a) print 訊息字串中提到 -shortest，(b) 落在退階 else / except 內部
-        is_in_string = l.lstrip().startswith("print") or "print(" in l
-        is_fallback_branch = "退階" in l or "fallback" in l or "probe 失敗" in l
-        is_append = "cmd.append(\"-shortest\")" in l  # 退階分支的實際 append
-        assert is_in_string or is_fallback_branch or is_append, (
-            f"compose_finalize 仍有 unconditional -shortest:\n  {l!r}"
-        )
-    print("[OK] R4 P2: compose_finalize 改用 -t、-shortest 僅 fallback")
+# NOTE: R4 P2 test_compose_finalize_uses_explicit_t_not_shortest removed
+# Compose pipeline v2 refactor 刪掉了 compose_finalize.py、新的 MF_ComposeVideo 完全
+# 不用 `-shortest`(amix duration=first 自然把音訊綁到 source 視訊時長)。
+# 原 R4 P2 的擔憂(audio 比 video 短時 -shortest 截掉 video) 在新架構不存在。
 
 
 def test_whisper_empty_override_skips_cfg_chat_model():
@@ -135,7 +117,6 @@ def test_save_unaffected_when_audio_longer_than_video():
 
 if __name__ == "__main__":
     test_save_keeps_full_video_when_audio_shorter()
-    test_compose_finalize_uses_explicit_t_not_shortest()
     test_whisper_empty_override_skips_cfg_chat_model()
     test_save_unaffected_when_audio_longer_than_video()
-    print("\n=== Codex R4 fixes: all 4 cases passed ===")
+    print("\n=== Codex R4 fixes: 3 cases passed (P2 compose_finalize 因架構重構移除) ===")

@@ -1,7 +1,9 @@
-"""MF_ComposeOverlayImage — Compose IR 上 append overlay op (一般圖片用)。"""
-import os
+"""MF_ComposeOverlayImage — append overlay op spec into MF_COMPOSE_OPS chain。
 
-from ..utils.compose_ir import ComposeIR
+跟 ComposeWatermark 的差別:overlay image 是「絕對位置 + 絕對縮放」的通用 overlay、
+watermark 是「相對位置 preset + relative_scale + tile/opacity」的便利版。
+"""
+import os
 
 
 class MF_ComposeOverlayImage:
@@ -9,40 +11,43 @@ class MF_ComposeOverlayImage:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "compose": ("MF_COMPOSE",),
                 "image_path": ("STRING", {"default": "input/overlay.png"}),
                 "x_expr": ("STRING", {"default": "10"}),
                 "y_expr": ("STRING", {"default": "10"}),
-                # 縮放：0 = 原圖大小；>0 = 寬度像素 (高度等比例)
+                # 縮放:0 = 原圖大小;>0 = 寬度像素 (高度等比例)
                 "scale_w": ("INT", {"default": 0, "min": 0, "max": 7680, "step": 2}),
                 "start_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
                 "end_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
             },
+            "optional": {
+                "overlays": ("MF_COMPOSE_OPS",),
+            },
         }
 
-    RETURN_TYPES = ("MF_COMPOSE",)
-    RETURN_NAMES = ("compose",)
-    FUNCTION = "overlay_image"
+    RETURN_TYPES = ("MF_COMPOSE_OPS",)
+    RETURN_NAMES = ("overlays",)
+    FUNCTION = "add"
     CATEGORY = "MediaForge/Compose"
 
-    def overlay_image(self, compose, image_path, x_expr, y_expr, scale_w, start_sec, end_sec):
-        if not isinstance(compose, ComposeIR):
-            raise ValueError(
-                f"[Compose Overlay Image] 輸入不是 MF_COMPOSE IR，拿到 {type(compose).__name__}"
-            )
+    def add(self, image_path, x_expr, y_expr, scale_w, start_sec, end_sec,
+            overlays=None):
         if not os.path.exists(image_path):
-            raise FileNotFoundError(f"[Compose Overlay Image] 找不到圖片：{image_path}")
+            raise FileNotFoundError(f"[Compose Overlay Image] 找不到圖片:{image_path}")
 
-        ir = compose.clone()
-        wm_label = ir.add_image_input(image_path)
         params = {"x": x_expr, "y": y_expr}
         if scale_w > 0:
             params["scale_w"] = int(scale_w)
         if end_sec > start_sec:
             params["start_sec"] = float(start_sec)
             params["end_sec"] = float(end_sec)
-        ir.append_op("overlay", params, extra_input=wm_label)
-        return (ir,)
+
+        ops = list(overlays) if overlays else []
+        ops.append({
+            "type": "overlay",
+            "image_path": image_path,
+            "params": params,
+        })
+        return (ops,)
 
 
 NODE_CLASS_MAPPINGS = {"MF_ComposeOverlayImage": MF_ComposeOverlayImage}

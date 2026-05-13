@@ -94,9 +94,29 @@ class ComposeOp:
 
 
 @dataclass
+class AudioOp:
+    """Audio chain operation — 跟 ComposeOp 平行,負責 audio filter graph。
+
+    支援 kinds:
+    - 'volume': scale 音量
+    - 'amix': 混兩條音軌(keep_source=True) 或純粹用外部音軌(keep_source=False)
+    - 'afade': 淡入淡出
+    - 'loudnorm': 響度標準化(單 pass)
+
+    compile_audio_chain 依 kind dispatch 到 utils/audio_mix.py 的對應 builder。
+    """
+    kind: str
+    params: dict
+    depends_on: str  # 此 op 的 audio stream label (上一個 op 的 output / main_audio_label)
+    label: str       # 此 op 的 output label
+    extra_audio_input: str | None = None  # amix 第二條 input (BGM)
+
+
+@dataclass
 class ComposeIR:
     inputs: dict[str, ComposeInput] = field(default_factory=dict)
     ops: list[ComposeOp] = field(default_factory=list)
+    audio_ops: list[AudioOp] = field(default_factory=list)  # Phase 6: audio chain
     _label_counter: int = 0
     main_label: str = ""  # 第一個 video input 的 stream label，op chain 起點
     main_audio_label: str | None = None  # 第一個 video input 的 audio (若有)，Finalize 直接 map
@@ -127,6 +147,42 @@ class ComposeIR:
         key = f"in{idx}"
         self.inputs[key] = ComposeInput(source_type="image_path", path=path, index=idx)
         return f"{idx}:v"  # image 也用 :v 取 video stream
+
+    def add_audio_input(self, path: str) -> str:
+        """External audio file 加進 ffmpeg `-i` list (e.g., BGM .mp3 / temp WAV from AUDIO dict)。
+        Returns audio stream label 'N:a' where N = input index."""
+        idx = len(self.inputs)
+        key = f"in{idx}"
+        self.inputs[key] = ComposeInput(source_type="audio_path", path=path, index=idx)
+        return f"{idx}:a"
+
+    def append_audio_op(self, kind: str, params: dict, *,
+                        depends_on: str | None = None,
+                        extra_audio_input: str | None = None) -> str:
+        """Append audio op,自動處理 chain head。回傳 op output label。
+
+        depends_on=None → 自動指向上一個 audio op 的 output、或 main_audio_label。
+        amix 在 keep_source=False 模式時應顯式傳 depends_on=external_audio_label
+        (因為 chain 起點變成外部音源、不從 main_audio_label 出發)。
+        """
+        src = depends_on if depends_on is not None else self._latest_audio_label()
+        out_label = self.alloc_label("a")
+        self.audio_ops.append(AudioOp(
+            kind=kind, params=params,
+            depends_on=src, label=out_label,
+            extra_audio_input=extra_audio_input,
+        ))
+        return out_label
+
+    def _latest_audio_label(self) -> str:
+        if self.audio_ops:
+            return self.audio_ops[-1].label
+        if not self.main_audio_label:
+            raise RuntimeError(
+                "[ComposeIR] 還沒有 main audio stream — 第一個 audio op 必須是 amix "
+                "with keep_source=False (從外部音源引入) 或者 source 影片要自帶音軌。"
+            )
+        return self.main_audio_label
 
     def append_op(self, kind: str, params: dict, *, depends_on: str | None = None,
                   extra_input: str | None = None) -> str:
@@ -159,9 +215,15 @@ class ComposeIR:
             new_op = ComposeOp(**op.__dict__)
             new_op.params = dict(op.params)
             cloned_ops.append(new_op)
+        cloned_audio_ops = []
+        for aop in self.audio_ops:
+            new_aop = AudioOp(**aop.__dict__)
+            new_aop.params = dict(aop.params)
+            cloned_audio_ops.append(new_aop)
         new = ComposeIR(
             inputs=dict(self.inputs),
             ops=cloned_ops,
+            audio_ops=cloned_audio_ops,
             _label_counter=self._label_counter,
             main_label=self.main_label,
             main_audio_label=self.main_audio_label,
@@ -179,6 +241,7 @@ class ComposeIR:
                 for k, v in self.inputs.items()
             },
             "ops": [op.__dict__ for op in self.ops],
+            "audio_ops": [op.__dict__ for op in self.audio_ops],
             "_label_counter": self._label_counter,
             "main_label": self.main_label,
             "main_audio_label": self.main_audio_label,
@@ -311,7 +374,115 @@ def _render_op(op: ComposeOp, label_in: str, label_extra: str | None) -> str:
             f"end={float(p.get('end_sec', 0))},setpts=PTS-STARTPTS[{op.label}]"
         )
 
+    if op.kind == "subtitle":
+        # 字幕燒錄 op (from MF_ComposeBurnSubtitle) — 走 utils/ass_style 共用 helper、
+        # 跟 MF_BurnSubtitle 字幕渲染邏輯完全一致。
+        from .ass_style import build_subtitles_filter
+        p = op.params
+        sub_filter = build_subtitles_filter(
+            srt_path=p["srt_path"],
+            style_string=p["style_string"],
+            fontsdir=p.get("fontsdir"),  # None → 用 ass_style.FONT_DIR 預設
+        )
+        return f"[{label_in}]{sub_filter}[{op.label}]"
+
     raise NotImplementedError(f"[ComposeIR] 未支援的 op.kind={op.kind!r}")
+
+
+def _render_audio_op(op: AudioOp, label_in: str, label_extra: str | None) -> str:
+    """單個 audio op → filter graph chunk (含 input labels + filter + output label)。
+
+    `label_in` = chain 上游 label (對 amix 是 source audio、對其他 op 是上一個 op 輸出)。
+    `label_extra` = amix 的第二條 input (BGM)、其他 op kinds 不用。
+    """
+    from .audio_mix import (
+        build_afade_filter,
+        build_amix_filter,
+        build_loudnorm_filter,
+        build_volume_filter,
+    )
+    p = op.params
+
+    if op.kind == "volume":
+        return build_volume_filter(label_in, float(p.get("scale", 1.0)), out_label=op.label)
+
+    if op.kind == "amix":
+        keep_source = p.get("keep_source", True)
+        if not keep_source:
+            # 純外部音源:跳過 amix、用 anull 把外部 label 重命名成 op.label。
+            # depends_on 就是外部 label (caller 在 append_audio_op 顯式傳)、extra_audio_input=None。
+            return f"[{label_in}]anull[{op.label}]"
+        # 混音模式:可選 BGM volume 衰減,常用 0.3 讓 source voice 蓋過
+        if not label_extra:
+            raise RuntimeError(f"[ComposeIR] amix op {op.label} keep_source=True 需要 extra_audio_input")
+        bgm_volume = float(p.get("bgm_volume", 1.0))
+        if bgm_volume != 1.0:
+            scaled_bgm = f"{op.label}_bgmvol"
+            return (
+                build_volume_filter(label_extra, bgm_volume, out_label=scaled_bgm) + ";" +
+                build_amix_filter(
+                    [label_in, scaled_bgm],
+                    duration=p.get("duration", "first"),
+                    dropout_transition=int(p.get("dropout_transition", 0)),
+                    out_label=op.label,
+                )
+            )
+        return build_amix_filter(
+            [label_in, label_extra],
+            duration=p.get("duration", "first"),
+            dropout_transition=int(p.get("dropout_transition", 0)),
+            out_label=op.label,
+        )
+
+    if op.kind == "afade":
+        return build_afade_filter(
+            label_in,
+            direction=p.get("direction", "in"),
+            start_sec=float(p.get("start_sec", 0.0)),
+            duration_sec=float(p.get("duration_sec", 2.0)),
+            curve=p.get("curve", "tri"),
+            out_label=op.label,
+        )
+
+    if op.kind == "loudnorm":
+        return build_loudnorm_filter(
+            label_in,
+            target_i=float(p.get("target_i", -16.0)),
+            target_tp=float(p.get("target_tp", -1.0)),
+            target_lra=float(p.get("target_lra", 11.0)),
+            linear=bool(p.get("linear", True)),
+            out_label=op.label,
+        )
+
+    raise NotImplementedError(f"[ComposeIR] 未支援的 audio op.kind={op.kind!r}")
+
+
+def compile_audio_chain(ir: ComposeIR) -> tuple[str | None, str | None]:
+    """IR.audio_ops → (audio_filter_script, final_audio_label).
+
+    Returns:
+        audio_filter_script: ";"-joined filter chunks for audio chain,或 None 表示 no audio_ops
+        final_audio_label: 最後一個 audio op 的 output label,或 ir.main_audio_label 表示
+            chain 為空、直接用 source audio。可能是 None (source 也沒音軌)。
+
+    跟 compile_ir 分開的設計原因:
+    - 音訊 / 視訊在 ffmpeg `-filter_complex` 是獨立 chain,語意上分離
+    - compile_ir 既有 caller (test_compose_ir / Compose chain) 不需要動 signature
+    - ComposeVideo 把兩個 script 用 ";" join 後傳給 ffmpeg 即可
+
+    Chain 規則 (跟 video 一致、linear):
+    - 第一個 op 的 depends_on 通常是 ir.main_audio_label (source audio)
+    - amix keep_source=False 例外:第一個 op depends_on=external_audio_label
+    - 之後每個 op depends_on 必須是上一個 op 的 output label
+    """
+    if not ir.audio_ops:
+        return None, ir.main_audio_label
+
+    parts = []
+    for op in ir.audio_ops:
+        parts.append(_render_audio_op(op, op.depends_on, op.extra_audio_input))
+
+    return ";".join(parts), ir.audio_ops[-1].label
 
 
 def compile_ir(ir: ComposeIR) -> tuple[str, str, list[str]]:
