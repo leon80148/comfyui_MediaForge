@@ -9,7 +9,7 @@ v2.1 ROADMAP Phase 5。`AI_CONFIG` 連線型別在 Phase 5 內仍 `experimental`
         'base_url': str,
         'api_key': str,
         'model': str,
-        'extra': dict,   # 任意額外設定
+        'device': str,
     }
 """
 
@@ -26,7 +26,6 @@ class MF_AIConfig:
                 "model": ("STRING", {"default": "gpt-4o-mini"}),
                 # local faster_whisper 適用：'base' / 'small' / 'medium' / 'large-v3'
                 "device": (["cpu", "cuda", "auto"], {"default": "auto"}),
-                "extra_json": ("STRING", {"default": "{}", "multiline": True}),
             },
         }
 
@@ -35,33 +34,19 @@ class MF_AIConfig:
     FUNCTION = "config"
     CATEGORY = "MediaForge/AI"
 
-    def config(self, provider, base_url, api_key, model, device, extra_json):
+    def config(self, provider, base_url, api_key, model, device):
         """Build AI_CONFIG dict from widget values.
 
-        Returns single-element tuple wrapping ``cfg`` dict (ComfyUI 強制 tuple)。
-        ``cfg`` 含 provider / base_url (尾斜線已 strip) / api_key / model / device /
-        extra (parse 自 extra_json 的 dict)。`api_key` 在 print log 中只露前 4 字 + ***
-        以避免 screen-share / log 外流；下游 node 自行決定如何 sanitize。
+        `api_key` 在 print log 中只露前 4 字 + *** 以避免 screen-share / log 外流；
+        下游 node 自行決定如何 sanitize。
         """
-        import json
-        try:
-            extra = json.loads(extra_json) if extra_json.strip() else {}
-        except json.JSONDecodeError as e:
-            raise ValueError(f"[AI Config] extra_json 解析失敗：{e}") from e
-        if not isinstance(extra, dict):
-            raise ValueError(
-                f"[AI Config] extra_json 必須是 JSON object，但拿到 {type(extra).__name__}"
-            )
-
         cfg = {
             "provider": provider,
             "base_url": base_url.rstrip("/"),
             "api_key": api_key,
             "model": model,
             "device": device,
-            "extra": extra,
         }
-        # 不在 log 印 api_key — 顯示時 mask
         masked = (api_key[:4] + "***") if len(api_key) > 4 else "***"
         print(f"[AI Config] provider={provider} model={model} base={cfg['base_url']} key={masked}")
         return (cfg,)

@@ -127,26 +127,9 @@ def test_save_video_drops_degenerate_audio_dict():
         print(f"[OK] R2 P2: degenerate audio dict 被剔除，duration={dur:.2f}s")
 
 
-def test_whisper_model_override_supports_separate_stt_id():
-    """[R2 P2] Whisper INPUT_TYPES 必須有 model_override，避免與 chat completion 共用 cfg.model。"""
-    from comfyui_MediaForge.nodes.whisper_transcribe import MF_WhisperTranscribe
-
-    types = MF_WhisperTranscribe.INPUT_TYPES()
-    assert "model_override" in types["required"], "MF_WhisperTranscribe.INPUT_TYPES 缺 model_override"
-    spec = types["required"]["model_override"]
-    assert spec[0] == "STRING"
-    # 預設應是 'whisper-1' 或類似 STT model id (不能是 chat model id)
-    default = spec[1].get("default", "")
-    assert "whisper" in default.lower() or default == "", (
-        f"model_override 預設值 {default!r} 看起來不是 STT model id"
-    )
-    print(f"[OK] R2 P2: Whisper model_override input 存在，預設={default!r}")
-
-
 if __name__ == "__main__":
     test_trim_concat_interleaves_video_audio_pairs()
     test_trim_concat_no_audio_video_only()
     test_load_silent_video_returns_none_audio()
     test_save_video_drops_degenerate_audio_dict()
-    test_whisper_model_override_supports_separate_stt_id()
-    print("\n=== Codex R2 fixes: all 5 cases passed ===")
+    print("\n=== Codex R2 fixes: all 4 cases passed ===")

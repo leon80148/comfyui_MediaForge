@@ -114,7 +114,7 @@ def test_ai_config_schema_required_widgets():
     from comfyui_MediaForge.nodes.ai_config import MF_AIConfig
     types = MF_AIConfig.INPUT_TYPES()
     req = types["required"]
-    for k in ("provider", "base_url", "api_key", "model", "device", "extra_json"):
+    for k in ("provider", "base_url", "api_key", "model", "device"):
         assert k in req, f"MF_AIConfig 缺 {k}"
     # provider 必須是兩個 backend 的 dropdown
     providers = req["provider"][0]
@@ -129,50 +129,12 @@ def test_ai_config_strips_trailing_slash_from_base_url():
         provider="openai_compatible",
         base_url="https://api.openai.com/v1/",   # trailing slash
         api_key="sk-test", model="gpt-4o-mini",
-        device="auto", extra_json="{}",
+        device="auto",
     )
     assert cfg["base_url"] == "https://api.openai.com/v1", (
         f"trailing slash 沒被 strip: {cfg['base_url']!r}"
     )
     print("[OK] P3-9: MF_AIConfig 自動 strip base_url trailing slash")
-
-
-def test_ai_config_extra_json_must_be_object():
-    """extra_json 是 list / number / null 應 raise；只有 dict 通過。"""
-    from comfyui_MediaForge.nodes.ai_config import MF_AIConfig
-    node = MF_AIConfig()
-    for invalid in ("[1,2,3]", "42", "null", '"string"'):
-        try:
-            node.config(
-                provider="openai_compatible", base_url="https://x.y", api_key="",
-                model="m", device="auto", extra_json=invalid,
-            )
-        except ValueError as e:
-            assert "JSON object" in str(e), f"訊息應提示 JSON object：{e}"
-        else:
-            raise AssertionError(f"extra_json={invalid!r} 應 raise 但沒有")
-    # dict 通過 + extra 解析正確
-    (cfg,) = node.config(
-        provider="openai_compatible", base_url="https://x.y", api_key="",
-        model="m", device="auto", extra_json='{"timeout": 30}',
-    )
-    assert cfg["extra"] == {"timeout": 30}
-    print("[OK] P3-9: MF_AIConfig.extra_json 嚴格 dict-only")
-
-
-def test_ai_config_invalid_json_raises_value_error():
-    from comfyui_MediaForge.nodes.ai_config import MF_AIConfig
-    node = MF_AIConfig()
-    try:
-        node.config(
-            provider="openai_compatible", base_url="https://x.y", api_key="",
-            model="m", device="auto", extra_json="{not json",
-        )
-    except ValueError as e:
-        assert "extra_json" in str(e) and "解析失敗" in str(e)
-        print("[OK] P3-9: extra_json 壞掉 → ValueError 帶友善訊息")
-        return
-    raise AssertionError("invalid JSON 應 raise ValueError")
 
 
 def test_ai_config_api_key_logged_masked():
@@ -190,7 +152,7 @@ def test_ai_config_api_key_logged_masked():
     with contextlib.redirect_stdout(buf):
         node.config(
             provider="openai_compatible", base_url="https://x.y",
-            api_key=long_key, model="m", device="auto", extra_json="{}",
+            api_key=long_key, model="m", device="auto",
         )
     output = buf.getvalue()
     assert long_key not in output, (
@@ -350,8 +312,6 @@ if __name__ == "__main__":
     test_select_video_is_changed_placeholder_returns_zero()
     test_ai_config_schema_required_widgets()
     test_ai_config_strips_trailing_slash_from_base_url()
-    test_ai_config_extra_json_must_be_object()
-    test_ai_config_invalid_json_raises_value_error()
     test_ai_config_api_key_logged_masked()
     test_convert_chinese_schema_required_widgets()
     test_convert_chinese_text_empty_and_no_input_path_raises()

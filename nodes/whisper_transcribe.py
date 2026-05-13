@@ -20,14 +20,6 @@ class MF_WhisperTranscribe:
                 "ai_config": ("AI_CONFIG",),
                 "audio_path": ("STRING", {"default": "input/sample.mp4"}),
                 "language": ("STRING", {"default": "zh"}),
-                # STT 與 chat completion 必須用不同 model id；
-                # 留空 → 用 ai_config.model；填值 → override 給 STT 端點使用。
-                # 這是 Codex Round 2 P2 finding：原版讓 Whisper / Translate 共用 cfg.model，
-                # OpenAI 端點 /audio/transcriptions 要 'whisper-1'、/chat/completions 要 'gpt-4o-mini'，
-                # 共用會被 422 / 400 拒。
-                # R3 P2 修正：預設留空、不寫死 'whisper-1'，否則會把 faster_whisper_local 後端
-                # (期望 'base' / 'small' / 'large-v3') 的有效 cfg.model 蓋掉。
-                "model_override": ("STRING", {"default": ""}),
             },
             "optional": {
                 "audio": ("AUDIO",),
@@ -39,7 +31,7 @@ class MF_WhisperTranscribe:
     FUNCTION = "transcribe"
     CATEGORY = "MediaForge/AI"
 
-    def transcribe(self, ai_config, audio_path, language, model_override, audio=None):
+    def transcribe(self, ai_config, audio_path, language, audio=None):
         if not isinstance(ai_config, dict):
             raise ValueError(
                 f"[Whisper Transcribe] ai_config 必須是 AI_CONFIG dict，"
@@ -61,20 +53,13 @@ class MF_WhisperTranscribe:
                 source = _extract_wav(audio_path)
                 cleanup = source
 
-            # Provider-aware fallback (R4/R5/R7 dialectic 最終形)：
-            #   R4: openai_compatible + cfg.model='gpt-4o-mini' → STT default 'whisper-1'。
-            #   R5: faster_whisper_local + cfg.model='large-v3' → 尊重 cfg.model。
-            #   R7: faster_whisper_local + cfg.model='gpt-4o-mini' (因為 MF_AIConfig 預設是 chat
-            #       model) → 應視為「未設」，走 STT default 'base'。
-            # 偵測「chat-shaped」字串：gpt-, claude-, gemini-, llama-, qwen-。命中 → 當 unset。
-            # R10 P2 fix：openai_compatible 也用 STT-shape 啟發式 — 否則 Groq's
-            # 'whisper-large-v3' / 'gpt-4o-transcribe' 等真實 STT 模型會被忽略硬塞 'whisper-1'。
-            # Symmetric with faster_whisper_local 行為。
-            user_override = model_override.strip()
+            # STT 跟 chat completion 用不同 model id (Codex R2 P2 finding)：OpenAI
+            # /audio/transcriptions 要 'whisper-1'、/chat/completions 要 'gpt-4o-mini'。
+            # 同一個 AIConfig 若要餵 Whisper + Translate，cfg.model 不能兩端通吃 —
+            # 用 STT-shape heuristic 判斷 cfg.model 是否像 STT 模型 id；不像就退回
+            # backend 預設 ('base' for faster_whisper_local, 'whisper-1' for openai_compatible)。
             cfg_model = (ai_config.get("model") or "").strip()
-            if user_override:
-                effective_model = user_override
-            elif _looks_like_stt_model(cfg_model):
+            if _looks_like_stt_model(cfg_model):
                 effective_model = cfg_model
             elif provider == "faster_whisper_local":
                 effective_model = "base"

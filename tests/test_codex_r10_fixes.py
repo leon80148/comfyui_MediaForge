@@ -15,31 +15,22 @@ if _PLUGIN_DIR not in sys.path:
 
 
 def test_whisper_openai_compat_honors_stt_cfg_model():
-    """[R10 P2] cfg.model='gpt-4o-transcribe' / 'whisper-large-v3' 對 openai_compatible 也是
-    合法 STT model — 空 override 應使用它，不能硬塞 'whisper-1'。"""
-    # 直接驗 logic
+    """[R10 P2] cfg.model='whisper-large-v3' 對 openai_compatible 也是合法 STT model，
+    應被尊重，不能硬塞 'whisper-1'。"""
     from comfyui_MediaForge.nodes.whisper_transcribe import _looks_like_stt_model
 
-    def resolve(override, cfg_model, provider):
-        u = (override or "").strip()
+    def resolve(cfg_model, provider):
         c = (cfg_model or "").strip()
-        if u:
-            return u
         if _looks_like_stt_model(c):
             return c
         return "base" if provider == "faster_whisper_local" else "whisper-1"
 
     # R10 specific: Groq's whisper-large-v3 for openai_compatible
-    assert resolve("", "whisper-large-v3", "openai_compatible") == "whisper-large-v3"
+    assert resolve("whisper-large-v3", "openai_compatible") == "whisper-large-v3"
     # 但 gpt-4o-mini (chat) 不該被當 STT
-    assert resolve("", "gpt-4o-mini", "openai_compatible") == "whisper-1"
-    # gpt-4o-transcribe 是 OpenAI 的新 STT model 名 — 應被認可
-    # （需要加到 STT 字首白名單）
-    # ※ 我們的啟發式目前以 prefix 'gpt-' 排除；對 'gpt-4o-transcribe' 會被排除。
-    # 這個 case 在實務上罕見 (gpt-4o-transcribe is hypothetical from review)；
-    # 主要驗 whisper-* 系列被認可即可。
+    assert resolve("gpt-4o-mini", "openai_compatible") == "whisper-1"
     # local 維持 R5 行為
-    assert resolve("", "large-v3", "faster_whisper_local") == "large-v3"
+    assert resolve("large-v3", "faster_whisper_local") == "large-v3"
     print("[OK] R10 P2: openai_compat 接受 STT cfg.model")
 
 

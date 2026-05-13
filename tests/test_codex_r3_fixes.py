@@ -15,36 +15,22 @@ if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
 
 
-def test_whisper_default_does_not_break_local_backend():
-    """[R3 P2] model_override 預設不能硬塞 'whisper-1'，會蓋掉 faster_whisper_local
-    的 'base'/'small'/'large-v3'。"""
-    from comfyui_MediaForge.nodes.whisper_transcribe import MF_WhisperTranscribe
-
-    types = MF_WhisperTranscribe.INPUT_TYPES()
-    default = types["required"]["model_override"][1].get("default", "")
-    assert default == "" or default.startswith("MEDIAFORGE_AUTO"), (
-        f"model_override 預設 {default!r} 仍是固定字串，會蓋掉 cfg.model — "
-        "R3 P2 要求預設留空，runtime 再依 provider 選 backend-specific 預設"
-    )
-    print(f"[OK] R3 P2: Whisper model_override default 為空 (={default!r})")
-
-
 def test_whisper_runtime_picks_default_per_provider(monkeypatch=None):
-    """Whisper 在 model_override='' 且 cfg.model='' 時，依 provider 選正確 backend default。"""
-    # 直接驗 effective_model 決策邏輯（不真的 call API）
-    def resolve(override, cfg_model, provider):
-        u = (override or "").strip()
+    """Whisper 在 cfg.model='' 時，依 provider 選正確 backend default；
+    cfg.model 像 STT shape 則尊重它。對齊 production 的 _looks_like_stt_model 啟發式。"""
+    from comfyui_MediaForge.nodes.whisper_transcribe import _looks_like_stt_model
+
+    def resolve(cfg_model, provider):
         c = (cfg_model or "").strip()
-        if u:
-            return u
-        if c:
+        if _looks_like_stt_model(c):
             return c
         return "whisper-1" if provider == "openai_compatible" else "base"
 
-    assert resolve("", "", "openai_compatible") == "whisper-1"
-    assert resolve("", "", "faster_whisper_local") == "base"
-    assert resolve("", "large-v3", "faster_whisper_local") == "large-v3"
-    assert resolve("custom-model", "base", "openai_compatible") == "custom-model"
+    assert resolve("", "openai_compatible") == "whisper-1"
+    assert resolve("", "faster_whisper_local") == "base"
+    assert resolve("large-v3", "faster_whisper_local") == "large-v3"
+    # chat-shape cfg.model 不該被當 STT
+    assert resolve("gpt-4o-mini", "openai_compatible") == "whisper-1"
     print("[OK] R3 P2: effective_model resolution matrix 通過")
 
 
@@ -125,9 +111,8 @@ def test_watermark_tile_uses_real_aspect_ratio():
 
 
 if __name__ == "__main__":
-    test_whisper_default_does_not_break_local_backend()
     test_whisper_runtime_picks_default_per_provider()
     test_trim_xfade_actually_implemented()
     test_trim_xfade_clamps_to_shortest_segment()
     test_watermark_tile_uses_real_aspect_ratio()
-    print("\n=== Codex R3 fixes: all 5 cases passed ===")
+    print("\n=== Codex R3 fixes: all 4 cases passed ===")
