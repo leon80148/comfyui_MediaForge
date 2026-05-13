@@ -11,8 +11,11 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 ## 亮點
 
 - 🎞️ **18 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Compose / AI（Audio / Net / Image 規劃中）
-- 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
-- 🧪 **廣播級編碼控制** — H.264 / HEVC / AV1 / ProRes，支援 CRF / bitrate / target-size 三種編碼模式
+- 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + tensor_fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
+- 🚀 **智慧 GPU codec 預設** — 偵測到 NVENC 自動用 `h264_nvenc`，沒 GPU 的機器自動 fallback `libx264`。不必手動切、不會在沒卡的環境壞掉
+- 📡 **API-ready 輸出** — 每個產出檔案的節點都同時 emit ComfyUI `ui.images` metadata，`/history/<prompt_id>` 直接看到輸出檔名，`/view?filename=X&subfolder=Y&type=output` 可下載（見 [Using via API](#using-via-api)）
+- 🎙️ **內建音訊混音** — BurnSubtitle 的 `keep_source_audio`（預設開）用 `amix` 把外部 audio pin 跟 source 自帶音軌混在一起；支援 cinematic fps（23.976 / 29.97 / 59.94 等 FLOAT 值）
+- 🧪 **廣播級編碼控制** — H.264 / HEVC / AV1 / ProRes，支援 CRF / bitrate / target-size 三種編碼模式；NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）由 `ffmpeg -encoders` probe 自動加入 dropdown
 - 🎚️ **單次編碼、多層 overlay 的 Compose pipeline** — `filter_complex` graph 編譯器，N 層 overlay 仍只走一次 re-encode
 - 🤖 **Provider-agnostic AI** — `MF_AIConfig` 讓 Whisper / Translate 在 OpenAI / Groq / Ollama / 本地 backend 之間一處切換
 - 🪶 **零硬性 Python 相依** — 只要 PATH 有 `ffmpeg` + `ffprobe`。`requests` / `faster-whisper` 用到才 lazy import
@@ -21,18 +24,20 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 ## 目錄
 
 1. [Quick Start](#quick-start)
-2. [為什麼選這個 plugin（vs VideoHelperSuite）](#為什麼選這個-pluginvs-videohelpersuite)
-3. [節點清單（16）](#節點清單16)
-4. [AI Provider Recipes](#ai-provider-recipes)
-5. [Hidden Contracts（內部型別契約）](#hidden-contracts內部型別契約)
-6. [Architecture](#architecture)
-7. [系統需求](#系統需求)
-8. [安裝](#安裝)
-9. [疑難排解](#疑難排解)
-10. [常見問題](#常見問題)
-11. [測試](#測試)
-12. [Roadmap](#roadmap)
-13. [License & 致謝](#license)
+2. [Using via API（API 工作流）](#using-via-api)
+3. [智慧 GPU codec 預設](#智慧-gpu-codec-預設)
+4. [為什麼選這個 plugin（vs VideoHelperSuite）](#為什麼選這個-pluginvs-videohelpersuite)
+5. [節點清單（18）](#節點清單18)
+6. [AI Provider Recipes](#ai-provider-recipes)
+7. [Hidden Contracts（內部型別契約）](#hidden-contracts內部型別契約)
+8. [Architecture](#architecture)
+9. [系統需求](#系統需求)
+10. [安裝](#安裝)
+11. [疑難排解](#疑難排解)
+12. [常見問題](#常見問題)
+13. [測試](#測試)
+14. [Roadmap](#roadmap)
+15. [License & 致謝](#license)
 
 ## Quick Start
 
@@ -86,6 +91,64 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 具體 `base_url` / `model` 組合可直接複貼 — 見下方 [AI Provider Recipes](#ai-provider-recipes)。
 
+## Using via API
+
+所有產出檔案的節點（BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeFinalize / ConvertChinese）都同時 emit ComfyUI `ui.images` metadata 跟 STRING path 兩種輸出。API 客戶端不必自己 parse 路徑就能拿到產出檔。
+
+### 1. 送 workflow 上去
+
+```bash
+curl -X POST http://localhost:8188/prompt \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": <workflow_json>}'
+# → {"prompt_id": "abc-123", "number": 1, ...}
+```
+
+### 2. 拿 history 查產出
+
+```bash
+curl http://localhost:8188/history/abc-123
+```
+
+每個產檔節點在 outputs 內會同時暴露：
+
+```json
+{
+  "abc-123": {
+    "outputs": {
+      "<node_id>": {
+        "images": [
+          {"filename": "subtitled_00001.mp4", "subfolder": "MediaForge", "type": "output"}
+        ]
+      }
+    }
+  }
+}
+```
+
+（`images` 是 ComfyUI 通用 UI key — 影片 / 音訊 / 任意檔都走這個 key。下游 wire 拿到的 STRING `final_video_path` 仍然有效，metadata 是「**加上去**」而非取代。）
+
+### 3. 下載產出檔
+
+```bash
+curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaForge&type=output" \
+  -o final.mp4
+```
+
+`type` 永遠是 `output`。每次跑 workflow 自動接 counter（`_00001.mp4` → `_00002.mp4` → ...）、不會 silently 覆蓋前次成品。
+
+### 字幕 / 文字輸出
+
+`MF_ConvertChinese` 寫 `.srt` 或 `.txt`（heuristic：轉換後字串含 `-->` 視為 SRT）。`MF_WhisperTranscribe` / `MF_TranslateSubtitle` 回傳 SRT **字串內容**而非檔案 — 直接 wire 給下游 `MF_BurnSubtitle`，或先過 `MF_ConvertChinese`（填 `filename_prefix`）才會落地成檔。
+
+## 智慧 GPU codec 預設
+
+所有 encode 能力節點（BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeFinalize）的 `codec` dropdown 預設值在啟動時動態挑：偵測到 ffmpeg 支援 NVENC 就用 **`h264 NVIDIA GPU (h264_nvenc)`**，沒有就 fallback **`h264 (libx264)`** — CPU-only 機器不會壞、不必每次手動切。
+
+Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec()`），檢查 `ffmpeg -encoders` 有沒有 `h264_nvenc`。NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）只在可用時加進 dropdown；`av1_nvenc` 需要 Ada Lovelace（RTX 4000+）。
+
+要 per-node 覆寫直接在 dropdown 選就好 — 既有 workflow 已存了 codec 值（如 `"h264 (libx264)"`）載入時不受影響，新 default 只影響**新拖出來的節點**。
+
 ## 為什麼選這個 plugin（vs VideoHelperSuite）
 
 | 能力 | VHS | MediaForge | 註 |
@@ -106,7 +169,9 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## 節點清單（18）
 
-> **Dual-input 註記**：下列標 **(dual-input)** 的 node 同時接受兩種 input：(a) 既有的 `video_path` STRING 欄位，(b) 新加的 `frames` + `fps` + `audio` 三件套 optional 輸入。連 tensor 時 MediaForge 內部會寫一個 temp .mp4 給 FFmpeg 吃。Path 模式仍是預設的 fast path — MediaForge 之間串接時不會被迫多走一次無謂的 decode/encode。
+> **Dual-input 註記**：下列標 **(dual-input)** 的 node 同時接受兩種 input：(a) 既有的 `video_path` STRING 欄位，(b) 新加的 `frames` + `tensor_fps` + `audio` 三件套 optional 輸入。連 tensor 時 MediaForge 內部會寫一個 temp .mp4 給 FFmpeg 吃。Path 模式仍是預設的 fast path — MediaForge 之間串接時不會被迫多走一次無謂的 decode/encode。
+>
+> 前端 extension `web/dual_input_lock.js` 把 widget 可見性跟 wiring 狀態連動：接 `frames` 時 path widget 自動收起（tensor 模式）、`tensor_fps` 只在接了 frames 時才顯示。Path-mode-only 的 widget（如 BurnSubtitle 的 `keep_source_audio`）在 tensor 模式自動隱藏。
 
 ### `MediaForge/Subtitle`
 
@@ -136,7 +201,25 @@ SRT → 硬燒字幕，完整 ASS 風格控制。顏色輸入 `#RRGGBB`，內部
 
 #### 🔁 Loop Video (`MF_LoopVideo`) **(dual-input)**
 
-循環至目標時長，支援 `strict` / `ping_pong` / `crossfade` 模式，可加速、可反向。`xfade` chain 上限 50 圈；`crossfade_sec >= 有效片段長度` 自動退階回 `strict`（合理退階，不報錯）。FFmpeg `loop` filter 的 frame 緩衝上限是 `MAX_LOOP_FRAMES = 32767`（INT16），超長素材高 fps 要改用 `crossfade` mode。`audio_volume`（FLOAT 0.0–1.0、預設 1.0）走 FFmpeg `volume` filter 衰減音量 — `0.0` 靜音、`0.5` 半音量、`1.0` 原音。
+把影片循環到目標時長。三種模式對應不同接縫處理需求，可加速、可反向。
+
+**Loop modes**：
+- **`strict`** — 硬接重複到精確時長（無接縫平滑），最快、最可預測。
+- **`ping_pong`** — A→A 反向→A→A 反向（順暢來回，無可見接縫）。
+- **`crossfade`** — 重複片段之間走 `xfade` chain；上限 50 圈；`crossfade_sec >= 有效片段長度` 時自動退階回 `strict`(合理退階、不報錯)。
+
+**核心設定**:
+- `target_duration_sec`（FLOAT，預設 30.0）— 輸出時長（秒）。
+- `crossfade_sec`（FLOAT，預設 1.0）— 重複片段間的重疊長度；只在 `crossfade` mode 用。
+- `speed`（FLOAT 0.25–4.0，預設 1.0）— 播放速度（走 `setpts` + `atempo` chain；超出範圍會自動 chain）。
+- `reverse`（BOOLEAN）— 先把 source 反向再 loop。
+- `keep_audio`（BOOLEAN，預設 True）+ `audio_volume`（FLOAT 0.0–1.0，預設 1.0）— 衰減音量。`0.0` 靜音、`0.5` 半音量、`1.0` 原音。
+
+**編碼**：`codec` / `crf`（預設 18）/ `preset`（預設 `medium`）— `codec` 在偵測到 NVENC 時預設 GPU 加速。見 [智慧 GPU codec 預設](#智慧-gpu-codec-預設)。
+
+**輸出**：`filename_prefix`（預設 `MediaForge/looped`）→ `output/MediaForge/looped_<NNNNN>.mp4`（auto-counter）。
+
+**硬限制**：FFmpeg `loop` filter 的 frame 緩衝上限是 `MAX_LOOP_FRAMES = 32767`（INT16），超長素材高 fps 會撞牆 — 改用 `crossfade` mode（xfade chain 無單一 buffer 上限）或降 fps。
 
 #### 📥 Load Video Frames (`MF_LoadVideoFrames`)
 
@@ -144,25 +227,87 @@ FFmpeg decode 任意容器／codec → `IMAGE` batch `[B,H,W,C] float32 [0,1]` +
 
 #### 📤 Save Video Frames (`MF_SaveVideoFrames`)
 
-`IMAGE` batch + 可選 `AUDIO` dict → H.264 / HEVC / AV1 / ProRes 檔，三種編碼模式：**CRF（預設）** / bitrate / target-size。容器副檔名自動修正（ProRes → `.mov`）。
+`IMAGE` batch（+ 可選 `AUDIO` dict）→ 編碼後影片檔。canonical 的 tensor→file producer；跟 `MF_LoadVideoFrames` 形成對稱 roundtrip。
+
+**編碼模式**（單一 dropdown、互斥）：
+- **`crf`（預設）** — 等質編碼（數字越低品質越高、檔案越大）。`crf` 0=無損、18=視覺無損、23=libx264 標準、28=堪用、51=最差。
+- **`bitrate`** — 指定 `bitrate_kbps`（如 4000 = 4 Mbps）。
+- **`target_size`** — 給 `target_size_mb` 上限、自動算 bitrate（從 duration 估算 two-pass-style）。
+
+**Codecs**（容器副檔名自動修正）：
+- H.264 / HEVC / AV1 / ProRes — 全部 CPU + NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）自動偵測。
+- ProRes → `.mov`（其他 codec → `.mp4`）。`prores_ks` 用 `yuv422p10le` pix_fmt 保留 10-bit 精度。
+
+**Tensor → fps**：`fps` 控制 raw video pipe 的來源 frame rate。從 `MF_LoadVideoFrames` 接過來時用其輸出的 `meta_fps`。
+
+**輸出**：`filename_prefix` → `output/<prefix>_<NNNNN>.<ext>`（ext 自動選）。
 
 #### ✂️ Trim by Ranges (`MF_TrimByRanges`) **(dual-input)**
 
-吃 `SILENCE_RANGES`（從 `MF_DetectSilence`）或原始 JSON `[[s,e],...]`。Mode：`keep` / `remove`。Seam 處可走 xfade chain 做接縫淡入淡出；音影 interleaved concat；empty list 視為 identity（no-op）。
+按時間區間裁切影片。主要使用情境是接 `MF_DetectSilence` 自動裁靜默，但也支援手填 JSON 區間做手動編輯。
+
+**Ranges 輸入**（兩種、互斥）：
+- `ranges`（pin）— 從上游（通常是 `MF_DetectSilence`）接的 `SILENCE_RANGES` 列表 `[[start_sec, end_sec], ...]`。
+- `ranges_json`（STRING widget，JSON literal）— 手填覆寫，例如 `[[1.5, 3.0], [10.0, 12.5]]`。
+
+**Modes**：
+- **`keep`** — 保留指定區間、刪掉其他。空 ranges → raise（沒東西可保留、拒絕輸出空檔）。
+- **`remove`** — 刪掉指定區間、保留其他。空 ranges → identity（no-op，回原片）。
+
+**接縫處理**：
+- `crossfade_sec`（FLOAT，預設 0.0）— 相鄰保留段之間走 `xfade` chain 做淡入淡出。0 = 硬切。
+
+**編碼**：跟其他 encode 節點同一組 `codec` / `crf` / `preset`；GPU NVENC 預設。
+
+**輸出**：`filename_prefix`（預設 `MediaForge/trimmed`）→ `output/<prefix>_<NNNNN>.mp4`。
+
+**音訊處理**：音影 interleaved concat（`[v0][a0][v1][a1]...concat=n=N:v=1:a=1`）讓音訊跨切點保持同步。沒音軌的 source 自動處理。
 
 #### 🔗 Concat Videos (`MF_ConcatVideos`) **(dual-input, prepend 語意)**
 
-多檔路徑級拼接。`copy` mode → FFmpeg concat demuxer（同 codec 快路徑）。`transcode` mode → filter_complex 加可選 `xfade` 過場（`fade` / `wipeleft` / `wiperight` / `slideleft` / `slideright` / `circleopen` / `circleclose` / `dissolve`）。沒音軌的輸入自動補 `anullsrc` 靜音。`frames` 連線時 tensor 寫成 path[0] (prepend)、`video_paths` 列表 shift 到 path[1..N] — 需要至少 1 條 path 才能湊到 2 段才能 concat。
+多檔路徑級拼接。兩種策略對應不同速度／相容性 trade-off。
+
+**Modes**：
+- **`copy`** — FFmpeg concat demuxer、stream copy 不 re-encode。極快但要求輸入的 codec / 解析度 / fps / pix_fmt 完全一致。最適合同台相機輸出或預先 normalize 過的素材。
+- **`transcode`** — `filter_complex` graph 加可選過場。一定可用、一定 re-encode。當 source 在 codec / 尺寸 / fps 不一致時必須走這個。
+
+**過場**（`transcode` mode、`transition_sec > 0` 才用）：
+- `fade`、`wipeleft`、`wiperight`、`slideleft`、`slideright`、`circleopen`、`circleclose`、`dissolve` — FFmpeg `xfade` 內建。
+
+**輸入**：
+- `video_paths`（STRING widget、多行）— 每行一個絕對路徑。至少 2 段。
+- `frames`（IMAGE pin、optional）— 接線時 tensor 寫成 path[0]（prepend）、`video_paths` 列表 shift 到 path[1..N]。至少要有 1 條 path 才能湊到 2 段。
+
+**Transcode 設定**：`fps` / `width` / `height` / `crf` / `codec` / `preset`。GPU NVENC 預設。
+
+**輸出**：`filename_prefix`（預設 `MediaForge/concat`）→ `output/<prefix>_<NNNNN>.mp4`。
+
+**行為註記**：沒音軌的輸入自動補 `anullsrc` 靜音（只 transcode mode）；demuxer mode 在音訊串流不一致時會拒絕。
 
 ### `MediaForge/Analysis`
 
 #### 🔍 Probe Media (`MF_ProbeMedia`) **(dual-input)**
 
-ffprobe 拿到時長、尺寸、fps、影／音 codec。回傳的是**影片串流的時長**（跟容器時長可能不一樣 — 故意分開）。
+`ffprobe` 包裝，回任意 media 檔的結構化 metadata。純讀、不會跑 FFmpeg encode。
+
+**輸出**（6 個 port）：
+- `duration_sec`（FLOAT）— **影片串流的時長**。跟容器時長可能不一樣（MKV 之類 mux 容易有差異）；MediaForge 用影片時長當權威 timeline。
+- `width` / `height`（INT）— **display dimensions**（rotation-aware）。直拍手機影片帶 rotation metadata 會在這裡 swap，下游 Compose / Save 拿到的方向正確。
+- `fps`（FLOAT）— 從 `r_frame_rate` parse（例如 `30000/1001` → 29.97）。
+- `video_codec`（STRING）— 例如 `"h264"`、`"hevc"`、`"av1"`、無影片時是 `""`。
+- `audio_codec`（STRING）— 例如 `"aac"`、`"opus"`、無音訊時是 `""`。
+
+跟 `MF_LoadVideoFrames`（先 probe 拿尺寸、再 load）跟 Compose pipeline（餵尺寸給 `MF_ComposeStart`）天然配對。
 
 #### 🤫 Detect Silence (`MF_DetectSilence`)
 
-FFmpeg `silencedetect` 包裝 → `SILENCE_RANGES` list（`[[start_sec, end_sec], ...]`）。`noise_db` 閾值與 `min_duration_sec` 可調。配 `MF_TrimByRanges` 可做演講縮時／podcast 預剪／直播精華 workflow。
+FFmpeg `silencedetect` 包裝 → `SILENCE_RANGES` list（`[[start_sec, end_sec], ...]`）。`MF_TrimByRanges` 的標準上游、用在演講縮時／podcast 預剪／直播精華 workflow。
+
+**可調**：
+- `noise_db`（FLOAT，預設 -30.0）— dB 在此值以下且持續 ≥ `min_duration_sec` 就算靜音。較不負（-20）= 較積極；較負（-40）= 較嚴格。
+- `min_duration_sec`（FLOAT，預設 1.5）— 最短靜音長度才會被記錄、低於此值視為自然停頓忽略。
+
+**輸出**：`ranges`（SILENCE_RANGES）。空 list = 沒偵到靜音；下游 `MF_TrimByRanges` 空 list + `mode="remove"` 視為 identity（保留整片）。
 
 ### `MediaForge/Compose` — 單次編碼多層 overlay pipeline
 
@@ -181,7 +326,17 @@ FFmpeg `silencedetect` 包裝 → `SILENCE_RANGES` list（`[[start_sec, end_sec]
 完整 UX 的浮水印 preset：`placement`（TL/TR/BL/BR/center/tile）、`relative_scale`（畫面寬度的 0.05–0.5）、`opacity`（走 colorchannelmixer alpha）、各邊邊距、`visible_start/end_sec` 時間窗。
 
 #### ✅ Compose Finalize (`MF_ComposeFinalize`)
-IR 編譯 → 單次 FFmpeg encode（H.264 / HEVC / AV1 / ProRes）。回傳輸出路徑 + 編譯後的 `filter_complex_script`（debug 用）。超過 6000 字元自動切到 `-filter_complex_script <tempfile>`。
+編譯 Compose IR → **一次** FFmpeg encode 涵蓋所有 overlay。每條 Compose chain 的終點。
+
+**設定**：
+- `codec`（dropdown）— `libx264` / `libx265` / `libsvtav1` / `prores_ks` / `h264_nvenc` / `hevc_nvenc` / `av1_nvenc`（NVENC variants 自動偵測）。偵測到 NVENC 預設 `h264_nvenc`、否則 `libx264`。
+- `crf`（INT 0–51，預設 18）— 品質目標。對 NVENC 而言內部映射成 `-rc vbr -cq <crf>` 達到等效控制。
+- `preset`（dropdown、預設 `medium`）— encoder 速度／檔案大小 trade-off。對 NVENC 映射成 `p1..p7`（`p1`=最快、`p7`=最慢）。
+- `keep_audio`（BOOLEAN、預設 True）— 是否保留 main video 的 audio 軌。
+
+**輸出**：`final_video_path`（STRING）+ `filter_complex_script`（STRING，debug 用 — 編譯後的 filter graph）。
+
+**行為**：編譯後的 graph 超過 6000 字元自動切到 `-filter_complex_script <tempfile>`（避免 Windows command-line 長度限制）。容器副檔名自動修正：`prores_ks` → `.mov`、其他 → `.mp4`。
 
 ### `MediaForge/AI` — provider-agnostic
 
@@ -285,12 +440,15 @@ comfyui_MediaForge/
 ├── utils/
 │   ├── color.py             # hex_to_ass_color：#RRGGBB → ASS BGR+alpha
 │   ├── compose_ir.py        # ComposeIR + compile_ir() + tmp_paths_to_cleanup hook
+│   ├── encoder.py           # codec catalog + NVENC probe + pick_default_codec + build_encoder_args
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
-│   ├── output_path.py       # resolve_output_path：filename_prefix + ext → counter path
+│   ├── output_path.py       # resolve_output_path + output_path_to_ui_entry (API metadata helper)
 │   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO + encode_tensor_to_tempfile
 ├── font/                    # 丟 .ttf / .otf 進來給 MF_BurnSubtitle 的 font_file dropdown
 ├── web/
-│   └── dual_input_lock.js   # 前端 extension：frames pin 連上時把 path widget 收起來
+│   └── dual_input_lock.js   # 前端 extension：依 dual-input 模式隱藏不適用 widget
+│                            #   - lock_widget / hidden_when_connected: tensor 模式隱藏
+│                            #   - linked_widgets: path 模式隱藏
 └── tests/                   # 58 個測試，pytest 跑
     ├── test_compose_ir.py        # 8 個 IR spike case（Phase 4 prerequisite）
     ├── test_compose_e2e.py       # 3 個 real-ffmpeg e2e
