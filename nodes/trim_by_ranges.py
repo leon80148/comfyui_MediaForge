@@ -7,6 +7,7 @@ v2.1 ROADMAP Phase 3。
 import json
 import os
 
+from ..utils.encoder import build_encoder_args, get_available_codecs
 from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, probe, probe_video_duration, run_ffmpeg
 from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
@@ -15,6 +16,7 @@ from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
 class MF_TrimByRanges:
     @classmethod
     def INPUT_TYPES(s):
+        codec_choices = list(get_available_codecs().keys())
         return {
             "required": {
                 "video_path": ("STRING", {"default": "input/sample.mp4"}),
@@ -27,6 +29,14 @@ class MF_TrimByRanges:
                 ),
                 # crossfade 接縫時的淡入淡出 sec；0 = 直接 cut
                 "crossfade_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.05}),
+                # P1-4：codec / crf / preset 與其他 file-producer 對齊
+                "codec": (codec_choices, {"default": "h264 (libx264)"}),
+                "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
+                "preset": (
+                    ["ultrafast", "superfast", "veryfast", "faster", "fast",
+                     "medium", "slow", "slower", "veryslow"],
+                    {"default": "medium"},
+                ),
             },
             "optional": {
                 "ranges": ("SILENCE_RANGES",),
@@ -42,7 +52,9 @@ class MF_TrimByRanges:
     FUNCTION = "trim"
     CATEGORY = "MediaForge/Video"
 
-    def trim(self, video_path, filename_prefix, mode, ranges_json, crossfade_sec, ranges=None,
+    def trim(self, video_path, filename_prefix, mode, ranges_json, crossfade_sec,
+             codec="h264 (libx264)", crf=18, preset="medium",
+             ranges=None,
              frames=None, fps=30.0, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Trim By Ranges] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
@@ -101,7 +113,10 @@ class MF_TrimByRanges:
             info = probe(source_path)
             has_audio = bool(info and any(s.get("codec_type") == "audio" for s in info.get("streams", [])))
 
-            cmd = self._build_concat_command(source_path, output_path, keep_ranges, crossfade_sec, has_audio)
+            cmd = self._build_concat_command(
+                source_path, output_path, keep_ranges, crossfade_sec, has_audio,
+                codec=codec, crf=crf, preset=preset,
+            )
             if not run_ffmpeg(cmd, tag="Trim By Ranges"):
                 raise RuntimeError("[Trim By Ranges] FFmpeg 失敗，請查看上方 stderr 輸出。")
         finally:
@@ -130,7 +145,8 @@ class MF_TrimByRanges:
         return out
 
     @staticmethod
-    def _build_concat_command(video_path, output_path, keep_ranges, xfade, has_audio):
+    def _build_concat_command(video_path, output_path, keep_ranges, xfade, has_audio,
+                              *, codec="h264 (libx264)", crf=18, preset="medium"):
         # 對每個 keep range 用 trim+setpts 抽出來。filter graph 路徑不必 escape (是 -i)。
         parts = []
         seg_durations = []
@@ -196,10 +212,16 @@ class MF_TrimByRanges:
                 maps = ["-map", "[outv]", "-an"]
 
         _ = escape_filter_path  # 留 import，避免 ruff F401 未來重構時刪掉；此節點 -i 路徑不入 filter
+        # P1-4：解析 codec choice → encoder args (含 NVENC ↔ x264 preset 自動映射)
+        codec_map = get_available_codecs()
+        codec_id, default_pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+        encoder_args = build_encoder_args(codec_id, crf=crf, preset=preset)
         return [
             "ffmpeg", "-y", "-i", video_path,
             "-filter_complex", ";".join(parts),
             *maps,
+            *encoder_args,
+            "-pix_fmt", default_pix_fmt,
             output_path,
         ]
 

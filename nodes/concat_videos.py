@@ -7,6 +7,7 @@ mode='transcode' 走 filter concat 安全路徑（可跨 codec），可加 xfade
 import os
 import tempfile
 
+from ..utils.encoder import build_encoder_args, get_available_codecs
 from ..utils.ffmpeg import ensure_ffmpeg, run_ffmpeg
 from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile
@@ -19,6 +20,7 @@ from ..utils.video_io import encode_tensor_to_tempfile
 class MF_ConcatVideos:
     @classmethod
     def INPUT_TYPES(s):
+        codec_choices = list(get_available_codecs().keys())
         return {
             "required": {
                 # multiline STRING：一行一個檔案路徑
@@ -44,6 +46,13 @@ class MF_ConcatVideos:
                 "width": ("INT", {"default": 1920, "min": 16, "max": 7680, "step": 2}),
                 "height": ("INT", {"default": 1080, "min": 16, "max": 4320, "step": 2}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
+                # P1-4：codec / preset 與其他 file-producer 對齊；mode=copy 時忽略
+                "codec": (codec_choices, {"default": "h264 (libx264)"}),
+                "preset": (
+                    ["ultrafast", "superfast", "veryfast", "faster", "fast",
+                     "medium", "slow", "slower", "veryslow"],
+                    {"default": "medium"},
+                ),
             },
             "optional": {
                 # In-memory chain: 連 frames 時把它寫成 temp mp4 作為「第一段」（path[0]），
@@ -63,6 +72,7 @@ class MF_ConcatVideos:
 
     def concat(self, video_paths, filename_prefix, mode, transition_sec, transition_type,
                fps, width, height, crf,
+               codec="h264 (libx264)", preset="medium",
                frames=None, tensor_fps=30.0, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Concat Videos] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
@@ -109,6 +119,7 @@ class MF_ConcatVideos:
                     transition_sec=transition_sec,
                     transition_type=transition_type,
                     fps=fps, width=width, height=height, crf=crf,
+                    codec=codec, preset=preset,
                 )
 
             print(f"[Concat Videos] 輸出成功（{len(paths)} 段）: {output_path}")
@@ -152,7 +163,8 @@ class MF_ConcatVideos:
 
     @staticmethod
     def _concat_transcode(paths, output_path, *, transition_sec, transition_type,
-                          fps, width, height, crf):
+                          fps, width, height, crf,
+                          codec="h264 (libx264)", preset="medium"):
         from ..utils.ffmpeg import probe as _probe
         from ..utils.ffmpeg import probe_video_duration as _pd
 
@@ -254,12 +266,16 @@ class MF_ConcatVideos:
                 + f"concat=n={n}:v=1:a=1[outv][outa]"
             )
 
+        # P1-4：codec / preset 從外面 wire 進來；libx264 預設保留行為，使用者可選 NVENC 加速
+        codec_map = get_available_codecs()
+        codec_id, default_pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+        encoder_args = build_encoder_args(codec_id, crf=crf, preset=preset)
         cmd.extend([
             "-filter_complex", ";".join(parts),
             "-map", "[outv]", "-map", "[outa]",
-            "-c:v", "libx264", "-crf", str(crf), "-preset", "medium",
+            *encoder_args,
             "-c:a", "aac", "-b:a", "192k",
-            "-pix_fmt", "yuv420p",
+            "-pix_fmt", default_pix_fmt,
             output_path,
         ])
         if not run_ffmpeg(cmd, tag="Concat Videos"):

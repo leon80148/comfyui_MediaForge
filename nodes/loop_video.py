@@ -1,6 +1,7 @@
 import math
 import os
 
+from ..utils.encoder import build_encoder_args, get_available_codecs
 from ..utils.ffmpeg import ensure_ffmpeg, probe, probe_video_duration, run_ffmpeg
 from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
@@ -40,6 +41,9 @@ def _source_has_audio(path):
 class MF_LoopVideo:
     @classmethod
     def INPUT_TYPES(s):
+        # 與 SaveVideoFrames / BurnSubtitle / ComposeFinalize 共用 encoder catalog；
+        # NVENC variants 視 ffmpeg capability 動態加入。
+        codec_choices = list(get_available_codecs().keys())
         return {
             "required": {
                 "video_path": ("STRING", {"default": "input/sample.mp4"}),
@@ -52,6 +56,14 @@ class MF_LoopVideo:
                 "keep_audio": ("BOOLEAN", {"default": True}),
                 # 音量倍率 — 1.0 = 原音；0.0 = 靜音；0.5 = 半音量。只在 keep_audio=True 時生效
                 "audio_volume": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05}),
+                # P1-4：codec / crf / preset 與 BurnSubtitle 對齊；NVENC 自動進 dropdown
+                "codec": (codec_choices, {"default": "h264 (libx264)"}),
+                "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
+                "preset": (
+                    ["ultrafast", "superfast", "veryfast", "faster", "fast",
+                     "medium", "slow", "slower", "veryslow"],
+                    {"default": "medium"},
+                ),
             },
             "optional": {
                 # In-memory chain: 連 frames 後改走 tensor → temp mp4 → loop 流程
@@ -68,6 +80,7 @@ class MF_LoopVideo:
 
     def loop(self, video_path, filename_prefix, target_duration_sec, loop_mode,
              crossfade_sec, speed, reverse, keep_audio, audio_volume,
+             codec, crf, preset,
              frames=None, fps=30.0, audio=None):
 
         if not ensure_ffmpeg():
@@ -126,6 +139,11 @@ class MF_LoopVideo:
                 cmd.extend(["-map", f"[{a_out}]"])
             else:
                 cmd.append("-an")
+            # P1-4：跟 BurnSubtitle / SaveVideoFrames / ComposeFinalize 共用 encoder builder
+            codec_map = get_available_codecs()
+            codec_id, default_pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+            cmd.extend(build_encoder_args(codec_id, crf=crf, preset=preset))
+            cmd.extend(["-pix_fmt", default_pix_fmt])
             cmd.extend(["-t", f"{target_duration_sec}", output_path])
 
             if not run_ffmpeg(cmd, tag="Loop Video"):
