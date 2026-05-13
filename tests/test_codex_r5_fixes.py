@@ -18,6 +18,7 @@ if _PLUGIN_DIR not in sys.path:
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 import conftest  # noqa: E402,F401
+from conftest import unpack  # noqa: E402
 
 
 def test_drawtext_handles_apostrophe_via_textfile():
@@ -142,12 +143,12 @@ def test_concat_trims_audio_to_video_duration():
             check=True, capture_output=True,
         )
         node = MF_ConcatVideos()
-        (out,) = node.concat(
+        (out,) = unpack(node.concat(
             video_paths=f"{c1}\n{c2}",
             filename_prefix="MediaForge/test_r5_concat_audio_trim",
             mode="transcode", transition_sec=0.0, transition_type="fade",
             fps=24.0, width=320, height=180, crf=23,
-        )
+        ))
         info = subprocess.run(
             ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", out],
             check=True, capture_output=True, text=True,

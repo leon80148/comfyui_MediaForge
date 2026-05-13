@@ -18,6 +18,7 @@ if _PLUGIN_DIR not in sys.path:
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 import conftest  # noqa: E402,F401  (installs folder_paths stub for standalone runs)
+from conftest import unpack  # noqa: E402
 
 
 def _ffprobe_duration(path):
@@ -44,14 +45,14 @@ def test_save_keeps_full_video_when_audio_shorter():
             "sample_rate": sr,
         }
         node = MF_SaveVideoFrames()
-        (out,) = node.save(
+        (out,) = unpack(node.save(
             frames=frames, filename_prefix="MediaForge/test_r4_short_audio",
             fps=30.0,
             codec="h264 (libx264)", encode_mode="crf", crf=23,
             bitrate_kbps=4000, target_size_mb=8.0,
             preset="ultrafast", pix_fmt_override="",
             audio=audio,
-        )
+        ))
         dur = _ffprobe_duration(out)
         # video 應為 ~2s（之前 -shortest 會截到 0.5s）
         assert dur > 1.8, f"output duration={dur:.3f}s，video 被 audio 截短 (應 >=1.8s for 60 frames @ 30 fps)"
@@ -118,14 +119,14 @@ def test_save_unaffected_when_audio_longer_than_video():
             "sample_rate": sr,
         }
         node = MF_SaveVideoFrames()
-        (out,) = node.save(
+        (out,) = unpack(node.save(
             frames=frames, filename_prefix="MediaForge/test_r4_long_audio",
             fps=30.0,
             codec="h264 (libx264)", encode_mode="crf", crf=23,
             bitrate_kbps=4000, target_size_mb=8.0,
             preset="ultrafast", pix_fmt_override="",
             audio=audio,
-        )
+        ))
         dur = _ffprobe_duration(out)
         # 應接近 1.0s，不該被 audio 拉到 3s
         assert 0.8 < dur < 1.2, f"output={dur:.3f}s，audio 不該把 output 拉長 (應 ~1.0s)"

@@ -1,9 +1,9 @@
 import math
 import os
 
-from ..utils.encoder import build_encoder_args, get_available_codecs
+from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg, probe, probe_video_duration, run_ffmpeg
-from ..utils.output_path import resolve_output_path
+from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
 
 
@@ -57,7 +57,7 @@ class MF_LoopVideo:
                 # 音量倍率 — 1.0 = 原音；0.0 = 靜音；0.5 = 半音量。只在 keep_audio=True 時生效
                 "audio_volume": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05}),
                 # P1-4：codec / crf / preset 與 BurnSubtitle 對齊；NVENC 自動進 dropdown
-                "codec": (codec_choices, {"default": "h264 (libx264)"}),
+                "codec": (codec_choices, {"default": pick_default_codec()}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
                 "preset": (
                     ["ultrafast", "superfast", "veryfast", "faster", "fast",
@@ -68,7 +68,7 @@ class MF_LoopVideo:
             "optional": {
                 # In-memory chain: 連 frames 後改走 tensor → temp mp4 → loop 流程
                 "frames": ("IMAGE",),
-                "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
+                "tensor_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "audio": ("AUDIO",),
             },
         }
@@ -81,7 +81,7 @@ class MF_LoopVideo:
     def loop(self, video_path, filename_prefix, target_duration_sec, loop_mode,
              crossfade_sec, speed, reverse, keep_audio, audio_volume,
              codec, crf, preset,
-             frames=None, fps=30.0, audio=None):
+             frames=None, tensor_fps=30.0, audio=None):
 
         if not ensure_ffmpeg():
             raise RuntimeError("[Loop Video] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
@@ -96,7 +96,7 @@ class MF_LoopVideo:
             # 2. path mode + audio dict 接了 → pre-mux 兩者 (修 dangling-input bug)
             # 3. 純 path mode → 沿用 source 自帶 audio (或無 audio)
             if frames is not None:
-                source_path = encode_tensor_to_tempfile(frames, fps=fps, audio=audio)
+                source_path = encode_tensor_to_tempfile(frames, fps=tensor_fps, audio=audio)
                 cleanup_tmp = source_path
             else:
                 if not os.path.exists(video_path):
@@ -156,7 +156,7 @@ class MF_LoopVideo:
                     pass
 
         print(f"[Loop Video] 輸出成功: {output_path}")
-        return (output_path,)
+        return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
 
     @staticmethod
     def _build_filter(mode, eff_dur, target, xfade_dur, speed, reverse, has_audio, audio_volume):

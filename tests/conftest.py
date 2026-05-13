@@ -59,3 +59,13 @@ def _install_folder_paths_stub():
 
 
 _install_folder_paths_stub()
+
+
+def unpack(r):
+    """Unpack ComfyUI node return — tuple OR dict-with-result → plain tuple.
+
+    File-producing nodes（BurnSubtitle / LoopVideo / etc）改成 ComfyUI canonical
+    `{"ui": {...}, "result": (path,)}` return 後，test 端 unpack 需要兩邊都吃。
+    Tuple-only 節點（如 ProbeMedia / AIConfig）走 r 不是 dict 那條路、不受影響。
+    """
+    return r["result"] if isinstance(r, dict) else r

@@ -7,9 +7,9 @@ mode='transcode' 走 filter concat 安全路徑（可跨 codec），可加 xfade
 import os
 import tempfile
 
-from ..utils.encoder import build_encoder_args, get_available_codecs
+from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg, run_ffmpeg
-from ..utils.output_path import resolve_output_path
+from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile
 
 # 註：本 module 不 import `escape_filter_path` — concat demuxer 走 list 檔走 abspath、
@@ -47,7 +47,7 @@ class MF_ConcatVideos:
                 "height": ("INT", {"default": 1080, "min": 16, "max": 4320, "step": 2}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
                 # P1-4：codec / preset 與其他 file-producer 對齊；mode=copy 時忽略
-                "codec": (codec_choices, {"default": "h264 (libx264)"}),
+                "codec": (codec_choices, {"default": pick_default_codec()}),
                 "preset": (
                     ["ultrafast", "superfast", "veryfast", "faster", "fast",
                      "medium", "slow", "slower", "veryslow"],
@@ -123,7 +123,7 @@ class MF_ConcatVideos:
                 )
 
             print(f"[Concat Videos] 輸出成功（{len(paths)} 段）: {output_path}")
-            return (output_path,)
+            return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
         finally:
             if cleanup_tmp:
                 try:

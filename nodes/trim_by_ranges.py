@@ -7,9 +7,9 @@ v2.1 ROADMAP Phase 3。
 import json
 import os
 
-from ..utils.encoder import build_encoder_args, get_available_codecs
+from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, probe, probe_video_duration, run_ffmpeg
-from ..utils.output_path import resolve_output_path
+from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
 
 
@@ -30,7 +30,7 @@ class MF_TrimByRanges:
                 # crossfade 接縫時的淡入淡出 sec；0 = 直接 cut
                 "crossfade_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.05}),
                 # P1-4：codec / crf / preset 與其他 file-producer 對齊
-                "codec": (codec_choices, {"default": "h264 (libx264)"}),
+                "codec": (codec_choices, {"default": pick_default_codec()}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
                 "preset": (
                     ["ultrafast", "superfast", "veryfast", "faster", "fast",
@@ -42,7 +42,7 @@ class MF_TrimByRanges:
                 "ranges": ("SILENCE_RANGES",),
                 # In-memory chain: 連 frames 後改走 tensor → temp mp4 → trim 流程
                 "frames": ("IMAGE",),
-                "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
+                "tensor_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "audio": ("AUDIO",),
             },
         }
@@ -55,7 +55,7 @@ class MF_TrimByRanges:
     def trim(self, video_path, filename_prefix, mode, ranges_json, crossfade_sec,
              codec="h264 (libx264)", crf=18, preset="medium",
              ranges=None,
-             frames=None, fps=30.0, audio=None):
+             frames=None, tensor_fps=30.0, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Trim By Ranges] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
@@ -66,7 +66,7 @@ class MF_TrimByRanges:
             # Dual-input dispatch（與 BurnSubtitle / LoopVideo 的 source resolve 對稱）：
             # path mode + audio dict 同時接時要 pre-mux，否則 audio 會 silently drop
             if frames is not None:
-                source_path = encode_tensor_to_tempfile(frames, fps=fps, audio=audio)
+                source_path = encode_tensor_to_tempfile(frames, fps=tensor_fps, audio=audio)
                 cleanup_tmp = source_path
             else:
                 if not os.path.exists(video_path):
@@ -127,7 +127,7 @@ class MF_TrimByRanges:
                     pass
 
         print(f"[Trim By Ranges] 輸出成功（{len(keep_ranges)} 個片段，audio={has_audio}）: {output_path}")
-        return (output_path,)
+        return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
 
     @staticmethod
     def _parse_ranges_json(text):

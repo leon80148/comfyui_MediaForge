@@ -21,6 +21,7 @@ if _PLUGIN_DIR not in sys.path:
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 import conftest  # noqa: E402,F401
+from conftest import unpack  # noqa: E402
 
 
 def _has_ffmpeg() -> bool:
@@ -50,12 +51,12 @@ def _run_concat_copy(filenames, prefix):
             _make_clip(p)
             paths.append(p)
         node = MF_ConcatVideos()
-        (out,) = node.concat(
+        (out,) = unpack(node.concat(
             video_paths="\n".join(paths),
             filename_prefix=f"MediaForge/{prefix}",
             mode="copy", transition_sec=0.0, transition_type="fade",
             fps=24.0, width=320, height=180, crf=23,
-        )
+        ))
         assert os.path.exists(out) and os.path.getsize(out) > 1000, (
             f"output 不存在或太小: {out}"
         )

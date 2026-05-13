@@ -82,6 +82,29 @@ def get_available_encoders():
     return _ENCODER_SET_CACHE
 
 
+def pick_default_codec(prefer_gpu=True, by_id=False):
+    """Pick a sensible default codec — prefer h264_nvenc if available, fallback libx264.
+
+    Called from INPUT_TYPES() classmethod. ComfyUI 在 node 註冊時跑一次 INPUT_TYPES、
+    其後 default 字串就鎖定整個 session — encoder probe 發生在 ComfyUI startup、
+    不會 per-execution 跑。這個 helper 純粹是「啟動時挑一次」。
+
+    by_id=False (預設): 回 display name（給 BurnSubtitle / LoopVideo / etc 那種 dropdown
+                       塞 display string、執行時 codec_map.get(...) 回 codec_id 的 pattern）
+    by_id=True:        回 codec_id（給 ComposeFinalize 那種 dropdown 直接放 codec_id 的 pattern）
+
+    沒 NVIDIA / NVENC 不可用時自動退 libx264、不會 raise — 兩種命名 fallback 字串都是
+    `_CODECS_CPU` 內固定值、永遠在 dropdown 裡。
+    """
+    codecs = get_available_codecs()
+    has_nvenc = any(codec_id == "h264_nvenc" for codec_id, _ in codecs.values())
+    if by_id:
+        return "h264_nvenc" if (prefer_gpu and has_nvenc) else "libx264"
+    if prefer_gpu and "h264 NVIDIA GPU (h264_nvenc)" in codecs:
+        return "h264 NVIDIA GPU (h264_nvenc)"
+    return "h264 (libx264)"
+
+
 def get_available_codecs(include_gpu=True):
     """Return display_name → (codec_id, pix_fmt) dict。
 

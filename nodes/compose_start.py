@@ -23,7 +23,7 @@ class MF_ComposeStart:
                 # In-memory chain: 連 frames 後改走 tensor → temp mp4 → Compose 流程
                 # 注意：temp mp4 是 ComposeFinalize 之前的中介；ComposeFinalize 跑完才清掉
                 "frames": ("IMAGE",),
-                "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
+                "tensor_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "audio": ("AUDIO",),
             },
         }
@@ -34,7 +34,7 @@ class MF_ComposeStart:
     CATEGORY = "MediaForge/Compose"
 
     def start(self, video_path, target_fps, target_width, target_height,
-              frames=None, fps=30.0, audio=None):
+              frames=None, tensor_fps=30.0, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Compose Start] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
@@ -45,7 +45,7 @@ class MF_ComposeStart:
         # Dual-input dispatch（與 BurnSubtitle / LoopVideo / TrimByRanges 對稱）：
         # path mode + audio dict 同時接時必須 pre-mux，否則 audio 在 ComposeFinalize 端 silent drop
         if frames is not None:
-            source_path = encode_tensor_to_tempfile(frames, fps=fps, audio=audio)
+            source_path = encode_tensor_to_tempfile(frames, fps=tensor_fps, audio=audio)
             tmp_source = source_path
         else:
             if not os.path.exists(video_path):

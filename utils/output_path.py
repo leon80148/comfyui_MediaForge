@@ -55,3 +55,25 @@ def resolve_output_path(filename_prefix, ext):
     counter = max_n + 1
 
     return os.path.join(full_output_folder, f"{filename}_{counter:05d}{ext}")
+
+
+def output_path_to_ui_entry(output_path, type="output"):
+    """Absolute output path → ComfyUI UI dict entry for /history exposure.
+
+    搭配 resolve_output_path()。寫完檔後在 node 的 return 用：
+        return {"ui": {"images": [<entry>]}, "result": (output_path,)}
+
+    `images` 是 ComfyUI 通用 UI key（SaveImage canonical）— 影片 / 音訊 / 任意檔
+    都走這個 key，frontend 跟 API 客戶端用 /view?filename=X&subfolder=Y&type=output
+    下載。Windows 上 os.path.relpath 會吐 `\\` separator，所以 normalize 成 `/`
+    （ComfyUI /view URL parser 走 POSIX 風）。
+    """
+    import folder_paths
+    output_dir = folder_paths.get_output_directory()
+    rel = os.path.relpath(output_path, output_dir)
+    subfolder, filename = os.path.split(rel)
+    return {
+        "filename": filename,
+        "subfolder": subfolder.replace("\\", "/"),
+        "type": type,
+    }

@@ -16,7 +16,7 @@ class MF_ProbeMedia:
                 # In-memory chain: 連 frames 後改走 tensor → temp mp4 → probe 流程
                 # (tensor 進來 probe 算冗餘 — 但保持跟其他 file-consumer node 一致 UX)
                 "frames": ("IMAGE",),
-                "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
+                "tensor_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "audio": ("AUDIO",),
             },
         }
@@ -26,14 +26,14 @@ class MF_ProbeMedia:
     FUNCTION = "probe"
     CATEGORY = "MediaForge/Analysis"
 
-    def probe(self, media_path, frames=None, fps=30.0, audio=None):
+    def probe(self, media_path, frames=None, tensor_fps=30.0, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Probe Media] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
         cleanup_tmp = None
         try:
             if frames is not None:
-                source_path = encode_tensor_to_tempfile(frames, fps=fps, audio=audio)
+                source_path = encode_tensor_to_tempfile(frames, fps=tensor_fps, audio=audio)
                 cleanup_tmp = source_path
             else:
                 if not os.path.exists(media_path):

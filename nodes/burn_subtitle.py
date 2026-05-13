@@ -1,9 +1,9 @@
 import os
 
 from ..utils.color import hex_to_ass_color
-from ..utils.encoder import build_encoder_args, get_available_codecs
+from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, probe, run_ffmpeg
-from ..utils.output_path import resolve_output_path
+from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile, write_audio_dict_to_wav
 
 
@@ -98,7 +98,7 @@ class MF_BurnSubtitle:
                 # 跟 SaveVideoFrames / ComposeFinalize 共用 encoder catalog；
                 # 預設 libx264 / crf 18 / medium = 視覺無損 (~CRF 18) + 合理速度。
                 # NVENC 可用時自動進 dropdown — 對長片可大幅加速。
-                "codec": (codec_choices, {"default": "h264 (libx264)"}),
+                "codec": (codec_choices, {"default": pick_default_codec()}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
                 "preset": (
                     ["ultrafast", "superfast", "veryfast", "faster", "fast",
@@ -311,7 +311,9 @@ class MF_BurnSubtitle:
                         pass
 
         print(f"[Burn Subtitle] 輸出成功: {output_path}")
-        return (output_path,)
+        # UI emit：讓 ComfyUI /history/<prompt_id> 把成品檔案路徑暴露給 API 客戶端，
+        # `/view?filename=X&subfolder=Y&type=output` 可直接下載。result 保留 tuple、下游 wire 不變。
+        return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
 
 
 NODE_CLASS_MAPPINGS = {"MF_BurnSubtitle": MF_BurnSubtitle}

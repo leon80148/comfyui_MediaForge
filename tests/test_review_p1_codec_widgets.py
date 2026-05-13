@@ -20,6 +20,7 @@ if _PLUGIN_DIR not in sys.path:
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 import conftest  # noqa: E402,F401
+from conftest import unpack  # noqa: E402
 
 
 def _has_ffmpeg() -> bool:
@@ -89,14 +90,14 @@ def test_loop_video_uses_build_encoder_args_for_libx265():
         ], check=True, capture_output=True)
 
         node = MF_LoopVideo()
-        (out,) = node.loop(
+        (out,) = unpack(node.loop(
             video_path=src,
             filename_prefix="MediaForge/test_p1_loop_hevc",
             target_duration_sec=1.5, loop_mode="strict",
             crossfade_sec=1.0, speed=1.0, reverse=False, keep_audio=True,
             audio_volume=1.0,
             codec="hevc (libx265)", crf=28, preset="ultrafast",
-        )
+        ))
         info = probe(out)
         v = next(s for s in info["streams"] if s["codec_type"] == "video")
         assert v["codec_name"] in ("hevc", "h265"), (
@@ -121,12 +122,12 @@ def test_trim_by_ranges_uses_build_encoder_args_for_libx265():
         ], check=True, capture_output=True)
 
         node = MF_TrimByRanges()
-        (out,) = node.trim(
+        (out,) = unpack(node.trim(
             video_path=src,
             filename_prefix="MediaForge/test_p1_trim_hevc",
             mode="keep", ranges_json="[[0.0, 1.0]]", crossfade_sec=0.0,
             codec="hevc (libx265)", crf=28, preset="ultrafast",
-        )
+        ))
         info = probe(out)
         v = next(s for s in info["streams"] if s["codec_type"] == "video")
         assert v["codec_name"] in ("hevc", "h265"), (
@@ -153,13 +154,13 @@ def test_concat_videos_transcode_uses_build_encoder_args_for_libx265():
             ], check=True, capture_output=True)
 
         node = MF_ConcatVideos()
-        (out,) = node.concat(
+        (out,) = unpack(node.concat(
             video_paths=f"{c1}\n{c2}",
             filename_prefix="MediaForge/test_p1_concat_hevc",
             mode="transcode", transition_sec=0.0, transition_type="fade",
             fps=24.0, width=160, height=120, crf=28,
             codec="hevc (libx265)", preset="ultrafast",
-        )
+        ))
         info = probe(out)
         v = next(s for s in info["streams"] if s["codec_type"] == "video")
         assert v["codec_name"] in ("hevc", "h265"), (

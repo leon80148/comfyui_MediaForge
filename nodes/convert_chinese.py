@@ -11,7 +11,7 @@ I/O 三段式：
 """
 import os
 
-from ..utils.output_path import resolve_output_path
+from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 
 
 def _read_text_with_encoding_detect(path):
@@ -120,6 +120,12 @@ class MF_ConvertChinese:
             print(f"[Convert Chinese] 寫入: {saved_path}")
 
         print(f"[Convert Chinese] {profile_code}: {len(source_text)} 字 → {len(converted)} 字")
+        # UI emit 只在實際寫檔時加（filename_prefix 沒填就不需要）
+        if saved_path:
+            return {
+                "ui": {"images": [output_path_to_ui_entry(saved_path)]},
+                "result": (converted, saved_path),
+            }
         return (converted, saved_path)
 
 

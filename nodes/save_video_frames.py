@@ -3,9 +3,9 @@
 v2.1 ROADMAP Phase 2 foundation 節點。
 整合 v1 計畫中的 SaveVideo / Convert / Resize / ChangeFps / Compress / ReplaceAudio 為單一輸出節點。
 """
-from ..utils.encoder import get_available_codecs
+from ..utils.encoder import get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg
-from ..utils.output_path import resolve_output_path
+from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 from ..utils.video_io import encode_tensor_to_video
 
 
@@ -26,7 +26,7 @@ class MF_SaveVideoFrames:
                 "frames": ("IMAGE",),
                 "filename_prefix": ("STRING", {"default": "MediaForge/video"}),
                 "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
-                "codec": (list(codec_map.keys()), {"default": "h264 (libx264)"}),
+                "codec": (list(codec_map.keys()), {"default": pick_default_codec()}),
                 # CRF mode 為 v2.1 預設；bitrate>0 切到 bitrate mode；target_size_mb>0 切到 two-pass
                 "encode_mode": (["crf", "bitrate", "target_size"], {"default": "crf"}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
@@ -98,7 +98,7 @@ class MF_SaveVideoFrames:
                          crf=effective_crf, audio=audio)
 
         print(f"[Save Video Frames] 輸出成功: {output_path}")
-        return (output_path,)
+        return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
 
     @staticmethod
     def _encode(frames, output_path, fps, codec_id, pix_fmt, preset,

@@ -2,9 +2,9 @@
 import os
 
 from ..utils.compose_ir import ComposeIR, compile_ir, write_filter_script_if_long
-from ..utils.encoder import build_encoder_args, get_available_codecs
+from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg, probe_video_duration, run_ffmpeg
-from ..utils.output_path import resolve_output_path
+from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 
 
 class MF_ComposeFinalize:
@@ -16,7 +16,7 @@ class MF_ComposeFinalize:
             "required": {
                 "compose": ("MF_COMPOSE",),
                 "filename_prefix": ("STRING", {"default": "MediaForge/composed"}),
-                "codec": (codec_ids, {"default": "libx264"}),
+                "codec": (codec_ids, {"default": pick_default_codec(by_id=True)}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
                 "preset": (
                     ["ultrafast", "superfast", "veryfast", "faster", "fast",
@@ -126,7 +126,7 @@ class MF_ComposeFinalize:
                 f"{'已 dump 到 tempfile' if tmp_path else '直接走 CLI'}）"
             )
         print(f"[Compose Finalize] 輸出成功（{len(ir.ops)} ops）: {output_path}")
-        return (output_path, script)
+        return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path, script)}
 
 
 NODE_CLASS_MAPPINGS = {"MF_ComposeFinalize": MF_ComposeFinalize}

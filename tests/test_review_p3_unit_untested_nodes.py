@@ -19,6 +19,7 @@ if _PLUGIN_DIR not in sys.path:
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 import conftest  # noqa: E402,F401
+from conftest import unpack  # noqa: E402
 
 
 # =============================================================================
@@ -254,10 +255,10 @@ def test_convert_chinese_basic_simplified_to_traditional():
         return
     from comfyui_MediaForge.nodes.convert_chinese import MF_ConvertChinese
     node = MF_ConvertChinese()
-    (converted, saved) = node.convert(
+    (converted, saved) = unpack(node.convert(
         profile="s2t   (簡→繁通用)",  # 通用版避免詞庫差異
         text="计算机软件",  # 计算机软件 (simplified)
-    )
+    ))
     # 「計」(U+8A08) 應出現在 converted；「计」(U+8BA1) 不該出現
     assert "計" in converted, (
         f"s2t 沒把「计」轉成「計」: codepoints={[hex(ord(c)) for c in converted]}"
@@ -280,19 +281,19 @@ def test_convert_chinese_srt_heuristic_picks_srt_ext():
     node = MF_ConvertChinese()
 
     srt_text = "1\n00:00:01,000 --> 00:00:02,000\n你好\n"
-    (_, saved_srt) = node.convert(
+    (_, saved_srt) = unpack(node.convert(
         profile="t2s   (繁通用→簡)",  # 順向、不會改變 ASCII timestamp
         text=srt_text,
         filename_prefix="MediaForge/test_p39_srt_heuristic",
-    )
+    ))
     assert saved_srt.endswith(".srt"), f"含 --> 應選 .srt，但拿到 {saved_srt}"
 
     plain_text = "你好世界"
-    (_, saved_txt) = node.convert(
+    (_, saved_txt) = unpack(node.convert(
         profile="t2s   (繁通用→簡)",
         text=plain_text,
         filename_prefix="MediaForge/test_p39_txt_heuristic",
-    )
+    ))
     assert saved_txt.endswith(".txt"), f"無 --> 應選 .txt，但拿到 {saved_txt}"
 
     # 清理避免 counter 污染後續 run
@@ -325,11 +326,11 @@ def test_convert_chinese_input_path_with_explicit_text_takes_priority():
 
         # text 給 traditional「優先」(U+512A)；正確時 t2s 應吐 simplified「优先」(U+4F18)
         # 而不該出現「岁」(U+5C81)
-        (converted, _) = node.convert(
+        (converted, _) = unpack(node.convert(
             profile="t2s   (繁通用→簡)",
             text="優先用這個",
             input_path=path,
-        )
+        ))
         # 「优」(U+4F18) 應出現（對應 text 的「優」），「岁」(U+5C81) 不該出現
         assert "优" in converted, (
             "text 應被使用：「優」應轉成「优」(U+4F18)；"

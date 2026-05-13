@@ -22,6 +22,7 @@ if _PLUGIN_DIR not in sys.path:
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 import conftest  # noqa: E402,F401
+from conftest import unpack  # noqa: E402
 
 
 def test_trim_concat_interleaves_video_audio_pairs():
@@ -104,14 +105,14 @@ def test_save_video_drops_degenerate_audio_dict():
             "sample_rate": 44100,
         }
         node = MF_SaveVideoFrames()
-        (out,) = node.save(
+        (out,) = unpack(node.save(
             frames=frames, filename_prefix="MediaForge/test_r2_save_degenerate",
             fps=30.0,
             codec="h264 (libx264)", encode_mode="crf", crf=23,
             bitrate_kbps=4000, target_size_mb=8.0,
             preset="ultrafast", pix_fmt_override="",
             audio=fake_audio,
-        )
+        ))
         # 用 ffprobe 驗 duration
         info = subprocess.run(
             ["ffprobe", "-v", "error", "-print_format", "json",

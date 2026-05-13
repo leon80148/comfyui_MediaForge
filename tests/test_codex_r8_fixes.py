@@ -21,6 +21,7 @@ if _PLUGIN_DIR not in sys.path:
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 import conftest  # noqa: E402,F401  (installs folder_paths stub for standalone runs)
+from conftest import unpack  # noqa: E402
 
 
 def test_resolve_output_path_codec_aware_ext_independence():
@@ -66,13 +67,13 @@ def test_save_prores_writes_mov_via_filename_prefix():
     with tempfile.TemporaryDirectory() as _td:
         frames = torch.rand(10, 64, 64, 3)
         node = MF_SaveVideoFrames()
-        (result,) = node.save(
+        (result,) = unpack(node.save(
             frames=frames, filename_prefix="MediaForge/test_r8_save_prores",
             fps=10.0,
             codec="prores (prores_ks)", encode_mode="crf", crf=23,
             bitrate_kbps=4000, target_size_mb=8.0,
             preset="medium", pix_fmt_override="",
-        )
+        ))
         assert result.endswith(".mov"), f"prores 應產出 .mov 檔，但拿到 {result}"
         assert os.path.exists(result), f"檔案不存在：{result}"
         print(f"[OK] R8 P2: ProRes save 自動寫成 {os.path.basename(result)}")
@@ -86,13 +87,13 @@ def test_save_h264_writes_mp4_via_filename_prefix():
     with tempfile.TemporaryDirectory() as _td:
         frames = torch.rand(10, 64, 64, 3)
         node = MF_SaveVideoFrames()
-        (result,) = node.save(
+        (result,) = unpack(node.save(
             frames=frames, filename_prefix="MediaForge/test_r8_save_h264",
             fps=10.0,
             codec="h264 (libx264)", encode_mode="crf", crf=23,
             bitrate_kbps=4000, target_size_mb=8.0,
             preset="ultrafast", pix_fmt_override="",
-        )
+        ))
         assert result.endswith(".mp4"), f"libx264 應產出 .mp4 檔，但拿到 {result}"
         assert os.path.exists(result), f"檔案不存在：{result}"
         print(f"[OK] R8 P2 副驗: h264 save 寫成 {os.path.basename(result)}")

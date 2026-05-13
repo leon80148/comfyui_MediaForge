@@ -29,10 +29,10 @@ import { app } from "../../scripts/app.js";
 //   - everything else                      → both-mode, always show
 const DUAL_INPUT_NODES = {
     "MF_BurnSubtitle":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"], hidden_when_connected: ["keep_source_audio"] },
-    "MF_LoopVideo":     { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["fps"] },
-    "MF_TrimByRanges":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["fps"] },
-    "MF_ProbeMedia":    { trigger_input: "frames", lock_widget: "media_path", linked_widgets: ["fps"] },
-    "MF_ComposeStart":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["fps"] },
+    "MF_LoopVideo":     { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"] },
+    "MF_TrimByRanges":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"] },
+    "MF_ProbeMedia":    { trigger_input: "frames", lock_widget: "media_path", linked_widgets: ["tensor_fps"] },
+    "MF_ComposeStart":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"] },
 };
 
 // Wrap an existing prototype method (or assign if missing) so multiple

@@ -18,6 +18,7 @@ if _PLUGIN_DIR not in sys.path:
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 import conftest  # noqa: E402,F401
+from conftest import unpack  # noqa: E402
 
 
 def _ffprobe_duration(path):
@@ -45,13 +46,13 @@ def test_trim_empty_ranges_remove_mode_keeps_full_video():
         )
         node = MF_TrimByRanges()
         # 故意傳空 list (模擬 MF_DetectSilence 沒偵到任何靜音)
-        (out,) = node.trim(
+        (out,) = unpack(node.trim(
             video_path=src,
             filename_prefix="MediaForge/test_r7_trim_empty_remove",
             mode="remove",
             ranges_json="ignored, should not be used", crossfade_sec=0.0,
             ranges=[],  # ← 連線傳入空 list
-        )
+        ))
         dur = _ffprobe_duration(out)
         # 應接近 2s（整段保留）
         assert 1.8 < dur < 2.2, f"empty ranges + remove 應保留全段 (~2s)，但 dur={dur:.3f}s"
