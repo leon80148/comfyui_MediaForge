@@ -126,7 +126,7 @@ SRT → 硬燒字幕，完整 ASS 風格控制。顏色輸入 `#RRGGBB`，內部
 - **外框 / 陰影 / 底色塊**：`outline_color_hex` + `outline_width` + `shadow_depth` + `border_style`（1=outline 描邊、3=box 半透明底色配 `back_color_hex`）。
 - **位置**：`alignment` dropdown（9 個命名位置：`bottom_center (2)`、`top_right (9)`…）+ `margin_v` + `margin_l` + `margin_r`。字幕實際可用寬 = 播放區寬 − `margin_l` − `margin_r`（margin 不對稱時可同時控制「字幕往哪邊推」+「字幕多寬」）。
 
-進階 optional 輸入：`video_path`（檔案路徑、沒接 tensor 時走它）、`tensor_fps`（只在連 `frames` 時用）、`target_fps`（輸出畫格率覆寫；`0` = 沿用 source fps）。
+進階 optional 輸入：`video_path`（檔案路徑、沒接 tensor 時走它）、`tensor_fps`（只在連 `frames` 時用）、`keep_source_audio`（BOOLEAN，預設 `True` — 接了外部 `audio` pin 且 source 影片自帶音軌時 `amix` 混兩條；設 `False` 退回舊行為，外部音蓋過 source）、`target_fps`（輸出畫格率覆寫；`0.0` = 沿用 source fps — FLOAT 是為了支援廣電 / 手機素材常見的 cinematic 23.976 / 29.97 / 59.94）。
 
 ### `MediaForge/Video`
 

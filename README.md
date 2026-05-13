@@ -126,7 +126,7 @@ Styling knobs:
 - **Outline / shadow / box**: `outline_color_hex` + `outline_width` + `shadow_depth` + `border_style` (1=outline, 3=box with semi-transparent `back_color_hex`).
 - **Position**: `alignment` dropdown (9 named positions: `bottom_center (2)`, `top_right (9)`, etc.) + `margin_v` + `margin_l` + `margin_r`. Subtitle effective width = play area − `margin_l` − `margin_r` (so asymmetric margins push the text box left / right while controlling its width).
 
-Optional advanced inputs: `video_path` (file path, fallback when no tensor wired), `tensor_fps` (only used when `frames` is wired), `target_fps` (output fps override; `0` = sync to source).
+Optional advanced inputs: `video_path` (file path, fallback when no tensor wired), `tensor_fps` (only used when `frames` is wired), `keep_source_audio` (BOOLEAN, default `True` — when both an external `audio` pin and the source video carry audio, `amix` both tracks; set to `False` for the old replace-source-with-external behavior), `target_fps` (output fps override; `0.0` = sync to source — FLOAT to support cinematic rates like 23.976 / 29.97 / 59.94).
 
 ### `MediaForge/Video`
 
