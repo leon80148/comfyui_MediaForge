@@ -2,7 +2,7 @@ import os
 
 from ..utils.color import hex_to_ass_color
 from ..utils.encoder import build_encoder_args, get_available_codecs
-from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, run_ffmpeg
+from ..utils.ffmpeg import ensure_ffmpeg, escape_filter_path, probe, run_ffmpeg
 from ..utils.output_path import resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile, write_audio_dict_to_wav
 
@@ -136,8 +136,15 @@ class MF_BurnSubtitle:
                 "tensor_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "audio": ("AUDIO",),
 
-                # 進階：輸出畫格率覆寫；0 = 沿用 source fps
-                "target_fps": ("INT", {"default": 0, "min": 0, "max": 120, "step": 1}),
+                # 接 audio pin 時是否保留 source 自帶音軌（path mode + source 有音軌時生效）。
+                # True = amix 兩條音軌；False = 外部音訊蓋過 source（舊行為）。
+                # frames mode 不適用：encode_tensor_to_tempfile 已把 audio mux 進 temp.mp4、
+                # 只有一條音軌。
+                "keep_source_audio": ("BOOLEAN", {"default": True}),
+
+                # 進階：輸出畫格率覆寫；0.0 = 沿用 source fps。FLOAT 是為了支援 cinematic
+                # fps（23.976 / 29.97 / 59.94）— 廣電 / 手機素材常見,INT 會逼使用者四捨五入。
+                "target_fps": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 240.0, "step": 0.1}),
             },
         }
 
@@ -153,7 +160,8 @@ class MF_BurnSubtitle:
              outline_color_hex, outline_width, shadow_depth, border_style, back_color_hex,
              alignment, margin_v, margin_l, margin_r,
              frames=None, tensor_fps=30.0, audio=None,
-             target_fps=0):
+             keep_source_audio=True,
+             target_fps=0.0):
         if not ensure_ffmpeg():
             raise RuntimeError("[Burn Subtitle] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
         if not os.path.exists(srt_path):
@@ -229,15 +237,42 @@ class MF_BurnSubtitle:
 
             command = ["ffmpeg", "-y", "-i", source_path]
 
-            # Path mode + 使用者明確接了 audio dict → 走 second `-i` mux，獨立 audio 蓋過
-            # source 內嵌音軌。為什麼要這個分支：path mode 之前完全沒讀 audio 參數，使用者
-            # 把 video-only 上游 (e.g. LoopVideo with keep_audio=False) 接 video_path、
-            # 另接音樂到 audio pin，期待節點 mux — 實際是 silently 丟掉 audio。
+            # Path mode + 使用者明確接了 audio dict → 走 second `-i` mux。為什麼要這個分支：
+            # path mode 之前完全沒讀 audio 參數，使用者把 video-only 上游 (e.g. LoopVideo with
+            # keep_audio=False) 接 video_path、另接音樂到 audio pin，期待節點 mux — 實際是
+            # silently 丟掉 audio。
+            #
+            # keep_source_audio 決定兩條音軌怎麼處理：
+            #   True  + source 有音軌 → amix 兩條（混音）
+            #   True  + source 無音軌 → 只用外部音軌（amix 需要兩 input、無 fallback）
+            #   False → 外部音軌蓋過 source（舊行為）
+            audio_filter_complex = None
             if frames is None and audio is not None:
                 audio_wav = write_audio_dict_to_wav(audio)
                 cleanup_audio_tmp = audio_wav
                 command.extend(["-i", audio_wav])
-                audio_map = ["-map", "0:v", "-map", "1:a"]
+
+                # Probe source 自帶音軌 — amix 需要兩條 input 都存在、不然 ffmpeg error
+                source_info = probe(source_path)
+                source_has_audio = bool(
+                    source_info and any(
+                        s.get("codec_type") == "audio"
+                        for s in source_info.get("streams", [])
+                    )
+                )
+
+                if keep_source_audio and source_has_audio:
+                    # duration=first：輸出長度跟著 input 0 (video 自帶音軌) 走 — 字幕燒錄場景
+                    # 影片是 master timeline；外部音訊比影片長就截掉、短就尾端靜音。
+                    # dropout_transition=0：關掉 amix 預設 2s 淡入淡出（給「中途某條結束」的
+                    # 平滑用，這裡兩條都跑到尾不需要）
+                    audio_filter_complex = (
+                        "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+                    )
+                    audio_map = ["-map", "0:v", "-map", "[aout]"]
+                else:
+                    # replace mode 或 source 沒音軌可混 → 只取 input 1 的音訊
+                    audio_map = ["-map", "0:v", "-map", "1:a"]
             else:
                 # 沒接 audio dict → 沿用 input 0 自身音軌 (若有)；`?` 讓 source 無音軌不 raise
                 audio_map = ["-map", "0:v", "-map", "0:a?"]
@@ -251,6 +286,11 @@ class MF_BurnSubtitle:
             # P1-1：codec / crf / preset 共用 encoder builder（含 NVENC 自動切到 -rc vbr -cq）
             codec_map = get_available_codecs()
             codec_id, default_pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+            # -filter_complex 處理 audio amix；同時 -vf 仍跑 video subtitle chain。
+            # 兩者共存 OK（label 不衝突）— -vf 是 implicit single-IO video graph，
+            # -filter_complex 顯式 graph 處理跨輸入 audio mux。
+            if audio_filter_complex:
+                command.extend(["-filter_complex", audio_filter_complex])
             command.extend(audio_map)
             command.extend(["-vf", vf_arg])
             command.extend(build_encoder_args(codec_id, crf=crf, preset=preset))

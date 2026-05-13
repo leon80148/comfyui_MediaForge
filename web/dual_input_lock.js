@@ -15,13 +15,24 @@
 
 import { app } from "../../scripts/app.js";
 
-// node type → which path widget to lock when the IMAGE input named `trigger_input` is connected
+// node type → which widgets to flip when the IMAGE input named `trigger_input` connects/disconnects
+//   lock_widget           : reverse direction — visible only when trigger is DISCONNECTED (path mode)
+//   linked_widgets        : same direction    — visible only when trigger is CONNECTED   (tensor mode)
+//   hidden_when_connected : reverse direction — extra widgets to hide alongside lock_widget when
+//                           trigger is wired. Use for path-mode-only widgets that aren't the path
+//                           itself (e.g. keep_source_audio only matters when source comes from
+//                           video_path; tensor frames already pre-mux audio in encode_tensor_to_tempfile).
+//
+// Dead UI surface taxonomy on dual-input nodes:
+//   - lock_widget / hidden_when_connected  → path-mode-only, hide in tensor mode
+//   - linked_widgets                       → tensor-mode-only, hide in path mode
+//   - everything else                      → both-mode, always show
 const DUAL_INPUT_NODES = {
-    "MF_BurnSubtitle":  { trigger_input: "frames", lock_widget: "video_path" },
-    "MF_LoopVideo":     { trigger_input: "frames", lock_widget: "video_path" },
-    "MF_TrimByRanges":  { trigger_input: "frames", lock_widget: "video_path" },
-    "MF_ProbeMedia":    { trigger_input: "frames", lock_widget: "media_path" },
-    "MF_ComposeStart":  { trigger_input: "frames", lock_widget: "video_path" },
+    "MF_BurnSubtitle":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"], hidden_when_connected: ["keep_source_audio"] },
+    "MF_LoopVideo":     { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["fps"] },
+    "MF_TrimByRanges":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["fps"] },
+    "MF_ProbeMedia":    { trigger_input: "frames", lock_widget: "media_path", linked_widgets: ["fps"] },
+    "MF_ComposeStart":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["fps"] },
 };
 
 // Wrap an existing prototype method (or assign if missing) so multiple
@@ -61,8 +72,16 @@ function isTriggerConnected(node, trigger_name) {
 
 function applyLockState(node, config) {
     const connected = isTriggerConnected(node, config.trigger_input);
-    const widget = findWidget(node, config.lock_widget);
-    setWidgetHidden(widget, connected);
+    // lock_widget: reverse direction — hide when trigger is wired
+    setWidgetHidden(findWidget(node, config.lock_widget), connected);
+    // hidden_when_connected: reverse direction — extra path-mode-only widgets (besides the path itself)
+    for (const name of (config.hidden_when_connected || [])) {
+        setWidgetHidden(findWidget(node, name), connected);
+    }
+    // linked_widgets: same direction — hide when trigger is NOT wired (widget only matters in tensor mode)
+    for (const name of (config.linked_widgets || [])) {
+        setWidgetHidden(findWidget(node, name), !connected);
+    }
     // Force node to re-layout (size + redraw) after widget visibility change
     if (node.setSize && node.computeSize) {
         node.setSize(node.computeSize());
