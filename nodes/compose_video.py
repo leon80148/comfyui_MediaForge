@@ -88,8 +88,12 @@ class MF_ComposeVideo:
             if not os.path.exists(video_path):
                 raise FileNotFoundError(f"[Compose Video] 找不到影片:{video_path}")
             if audio is not None:
-                # path mode + audio dict 同時接:pre-mux,避免 audio 在 chain 下游 silent drop
-                source_path = mux_path_with_audio_dict(video_path, audio)
+                # path mode + audio dict 同時接:pre-mux,避免 audio 在 chain 下游 silent drop。
+                # keep_audio=True → 把原音 + 外接 audio amix(讓 keep_audio widget 行為符合命名);
+                # keep_audio=False → replace(只留外接 audio,使用者明確想蓋掉原音)。
+                source_path = mux_path_with_audio_dict(
+                    video_path, audio, keep_original=bool(keep_audio),
+                )
                 cleanup_source_tmp = source_path
             else:
                 source_path = video_path
@@ -186,13 +190,19 @@ class MF_ComposeVideo:
             # Map video output
             cmd.extend(["-map", f"[{final_v_label}]"])
 
-            # Map audio output:有 audio_ops 就用 chain output、沒有但 keep_audio + has_audio 就用 main_audio_label
+            # Map audio output 邏輯:
+            #   1. 有 audio_ops chain → 用 chain output [aN]
+            #   2. 沒 chain 但有 audio 可輸出 → 走 source audio (`0:a?`)。
+            #      "有 audio 可輸出" 的條件:
+            #        - keep_audio=True 且 source 有 audio (原音保留)
+            #        - 使用者外接了 audio dict (此時 source_path 已被 pre-mux 含外接 audio,
+            #          不管 keep_audio 是 True/False 都該輸出 — 否則使用者接 audio 卻聽不到)
+            #   3. 都不是 → -an (silent output)
+            external_audio_provided = audio is not None
             if final_a_label and audio_script:
-                # audio chain 跑了 → 用 [aN] label
                 cmd.extend(["-map", f"[{final_a_label}]"])
                 cmd.extend(["-c:a", "aac", "-b:a", "192k"])
-            elif keep_audio and has_audio:
-                # 純沿用 source audio
+            elif has_audio and (keep_audio or external_audio_provided):
                 cmd.extend(["-map", "0:a?"])
                 cmd.extend(["-c:a", "aac", "-b:a", "192k"])
             else:

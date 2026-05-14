@@ -317,7 +317,7 @@ def write_audio_dict_to_wav(audio_dict):
     return tmp_path
 
 
-def mux_path_with_audio_dict(video_path, audio_dict):
+def mux_path_with_audio_dict(video_path, audio_dict, *, keep_original=False):
     """Pre-mux 既有 video 檔案 + AUDIO dict → 一個 temp .mp4。
 
     用途：dual-input file-consumer node 在 path mode 同時收到 `video_path` (檔案) 跟
@@ -325,9 +325,15 @@ def mux_path_with_audio_dict(video_path, audio_dict):
     這個 helper 把兩者合成 temp.mp4，下游 filter graph 仍只需讀 `[0:v]` + `[0:a]`，
     幾乎不用改動 — 跟 tensor mode 走 encode_tensor_to_tempfile 後的 source_path 對稱。
 
+    `keep_original` (keyword-only)：
+        - False (default) → 用外接 audio 取代原音 (loop_video / trim_by_ranges 預期語意)
+        - True  → 若 source 含 audio，用 amix=inputs=2 把原音 + 外接 audio 混成單軌；
+                  source 無 audio 時自動退化成 replace、不會炸。
+                  compose_video 的 `keep_audio=True` 走這條，讓 widget 名稱與行為一致。
+
     為什麼 `-c:v copy` + AAC encode audio：video stream container-mux 即可、零 transcode
     開銷；audio 從 PCM WAV 一次轉 AAC 也很快。下游節點之後跑自己的 filter graph 才會
-    re-encode video — 這層的 video copy 是純 transit。
+    re-encode video — 這層的 video copy 是純 transit。amix 路徑也維持 video copy。
 
     Caller 必須在 finally 裡 `os.unlink()` 回傳的 path（同 encode_tensor_to_tempfile 的契約）。
     """
@@ -335,22 +341,40 @@ def mux_path_with_audio_dict(video_path, audio_dict):
     import subprocess
     import tempfile
 
-    from .ffmpeg import resolve_ffmpeg_cmd
+    from .ffmpeg import probe_has_audio_stream, resolve_ffmpeg_cmd
+
+    # source 有沒有 audio 軌決定 keep_original=True 走 amix 還是退化 replace
+    source_has_audio = keep_original and probe_has_audio_stream(video_path)
 
     wav_path = write_audio_dict_to_wav(audio_dict)
     fd, tmp_mp4 = tempfile.mkstemp(suffix=".mp4", prefix="mf_path_audio_mux_")
     os.close(fd)
     try:
-        cmd = resolve_ffmpeg_cmd([
+        base = [
             "ffmpeg", "-y", "-v", "error",
-            "-i", video_path,    # input 0：video (可能含 audio，但會被忽略)
+            "-i", video_path,    # input 0：video (可能含 audio)
             "-i", wav_path,      # input 1：dict-supplied audio
-            "-map", "0:v",       # 拿 input 0 的 video
-            "-map", "1:a",       # 用 input 1 的 audio，丟掉 input 0 自帶的 audio (若有)
+        ]
+        if source_has_audio:
+            # amix=duration=longest → 跟 video 等長(或更長)、不會 silently 截短
+            # dropout_transition=0 → 預設 2s 漸隱在短素材上不對勁，關掉讓 mix 全程均勻
+            base.extend([
+                "-filter_complex",
+                "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0[aout]",
+                "-map", "0:v",
+                "-map", "[aout]",
+            ])
+        else:
+            base.extend([
+                "-map", "0:v",       # 拿 input 0 的 video
+                "-map", "1:a",       # 用 input 1 的 audio (source 無 audio 或 keep_original=False)
+            ])
+        base.extend([
             "-c:v", "copy",      # 零 transcode 開銷
             "-c:a", "aac", "-b:a", "192k",
             tmp_mp4,
         ])
+        cmd = resolve_ffmpeg_cmd(base)
         r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
         if r.returncode != 0:
             try:

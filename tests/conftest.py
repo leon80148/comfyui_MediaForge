@@ -38,6 +38,40 @@ for p in (_CUSTOM_NODES_PARENT, _PLUGIN_DIR):
         sys.path.insert(0, p)
 
 
+# Worktree-aware package alias:當 plugin 被 git worktree 簽到 .claude/worktrees/<name>/
+# 時 dir name ≠ "comfyui_MediaForge",一般 `from comfyui_MediaForge.* import ...` 會
+# 回去找 main worktree 的(舊)code、跳過正在驗的改動。這裡強制把 _PLUGIN_DIR 自己
+# register 成 `comfyui_MediaForge` package、確保 test 跑的是本 plugin dir 的 source。
+# Main worktree (dir 已叫 comfyui_MediaForge) 跑時行為一致、無害。
+def _alias_plugin_as_comfyui_mediaforge():
+    import importlib.util
+
+    existing = sys.modules.get("comfyui_MediaForge")
+    existing_path = os.path.dirname(getattr(existing, "__file__", "") or "") if existing else ""
+    # 已是同一個 dir 載入 → 跳過,避免重複 exec_module
+    if existing_path == _PLUGIN_DIR:
+        return
+
+    spec = importlib.util.spec_from_file_location(
+        "comfyui_MediaForge",
+        os.path.join(_PLUGIN_DIR, "__init__.py"),
+        submodule_search_locations=[_PLUGIN_DIR],
+    )
+    if spec is None or spec.loader is None:
+        return  # __init__.py 不在 — 不是 plugin layout、放棄 alias
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["comfyui_MediaForge"] = mod
+    # 清掉前任 partial state (e.g. 已 register 過 main worktree 的 submodule)
+    for k in list(sys.modules):
+        if k.startswith("comfyui_MediaForge."):
+            del sys.modules[k]
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:
+        # exec 失敗(typically folder_paths stub 還沒裝)留給 _install_folder_paths_stub 之後再試
+        sys.modules.pop("comfyui_MediaForge", None)
+
+
 # Stable directories for the default stub。Module-level constants 不會隨 fixture lifecycle 變、
 # 也不會像 TemporaryDirectory 那樣被 weakref.finalize 偷掃。
 _STUB_BASE = tempfile.gettempdir()
@@ -84,6 +118,7 @@ def _install_folder_paths_stub():
 
 
 _install_folder_paths_stub()
+_alias_plugin_as_comfyui_mediaforge()
 
 
 @pytest.fixture(autouse=True)
