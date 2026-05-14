@@ -33,6 +33,7 @@ const DUAL_INPUT_NODES = {
     "MF_TrimByRanges":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"] },
     "MF_ProbeMedia":    { trigger_input: "frames", lock_widget: "media_path", linked_widgets: ["tensor_fps"] },
     "MF_ComposeStart":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"] },
+    "MF_ComposeVideo":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"] },
     // Audio-input dual mode: AUDIO socket replaces audio_path. No tensor_fps analog
     // because AUDIO dict carries its own sample_rate.
     "MF_WhisperTranscribe": { trigger_input: "audio", lock_widget: "audio_path" },
