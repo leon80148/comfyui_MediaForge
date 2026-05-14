@@ -538,7 +538,7 @@ Append a `drawtext` op spec into the overlay chain.
 | `borderw` | `2` (0–20) | Outline thickness in px |
 | `bordercolor` | `black` | Outline color |
 | `effect` | `none` | `none` / `slide_in_left|right|top|bottom` / `marquee_horizontal` |
-| `effect_duration` | `1.5` (0.1–60) | `slide_in_*`: secs to animate; `marquee_horizontal`: secs per full cycle |
+| `effect_duration` | `1.5` (0.1–60) | `slide_in_*`: secs to animate; `marquee_horizontal`: secs per full cycle. Hidden when `effect = none` |
 | `start_sec` / `end_sec` | `0.0` / `0.0` | Visibility window. Both `0` = always visible |
 
 **Optional**: `overlays` — upstream chain. Leave unwired to start a fresh chain.
@@ -581,7 +581,7 @@ When `effect != none`, your `x_expr` / `y_expr` become the **anchor** (final res
 
 | Preset | Behavior | `effect_duration` semantics |
 |---|---|---|
-| `none` | Use `x_expr` / `y_expr` verbatim | — (ignored) |
+| `none` | Use `x_expr` / `y_expr` verbatim | — (widget hidden) |
 | `slide_in_left` | Text slides in from off-screen-left, settles at anchor at `start_sec + effect_duration` | Slide-in time (sec) |
 | `slide_in_right` | Slides in from off-screen-right | Slide-in time |
 | `slide_in_top` | Slides in from above the frame | Slide-in time |
