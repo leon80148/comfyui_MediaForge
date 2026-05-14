@@ -356,10 +356,10 @@ Append a `drawtext` op spec into the overlay chain.
 
 - `text` (multiline STRING) — passed via `textfile=` at compile time to safely escape apostrophes, percents, newlines.
 - `x_expr` / `y_expr` — FFmpeg drawtext **position expressions**. Strings, not numbers — see the expression reference below.
+- `font` — dropdown of `.ttf` / `.otf` / `.ttc` files in plugin's `font/` directory (same source as `MF_BurnSubtitle`). Defaults to `msjh.ttc` (Microsoft JhengHei) when present, otherwise the first font alphabetically. When `font/` is empty, ComposeVideo falls back to a system font (Arial / Helvetica / DejaVu depending on OS). To add a custom font, drop the file into `font/` and refresh the browser.
 - `fontsize` / `fontcolor` / `borderw` / `bordercolor` — standard styling.
 - `effect` — animation preset (`none` / `slide_in_left|right|top|bottom` / `marquee_horizontal`). When not `none`, treats `x_expr` / `y_expr` as the **final anchor position** and wraps a motion expression around it. Default `none` = no animation (backward compatible).
 - `effect_duration` (FLOAT, default 1.5) — `slide_in_*`: seconds to animate in; `marquee_horizontal`: seconds per full scroll cycle. Ignored when `effect=none`.
-- `fontfile` — leave empty for ComposeVideo to fallback to a bundled font (Windows native ffmpeg has no fontconfig).
 - `start_sec` / `end_sec` — temporal **visibility** window. Both 0 = always visible. (Note: `effect_duration` is measured from `start_sec` — animation begins when the text appears.)
 
 ##### `x_expr` / `y_expr` expression language

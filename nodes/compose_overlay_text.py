@@ -7,7 +7,15 @@ Effect preset (2026-05-14):effect dropdown 把使用者填的 x_expr / y_expr
 當「最終停靠位置 (anchor)」、在節點層 wrap 一層動畫表達式後再交給 compose_ir。
 這樣 utils/compose_ir.py 完全不用改、既有 workflow JSON (沒有 effect 欄位) 用
 default `none` 落到原樣 return,行為 100% 兼容。
+
+Font dropdown (2026-05-14):把原本 `fontfile: STRING` 自由輸入欄換成跟
+MF_BurnSubtitle 同款的 `font` dropdown — 掃 plugin `font/` 目錄。placeholder
+(沒任何字型) 時不寫 fontfile,讓 compose_ir._resolve_default_fontfile 走 system
+font fallback,行為跟原本空字串時一致。
 """
+import os
+
+from ..utils.ass_style import FONT_DIR, NO_FONTS_PLACEHOLDER, list_fonts
 
 
 # Position effect presets。值是 dropdown enum、語意見 _resolve_position docstring。
@@ -99,12 +107,20 @@ def _resolve_position(effect: str, x_anchor: str, y_anchor: str,
 class MF_ComposeOverlayText:
     @classmethod
     def INPUT_TYPES(s):
+        # Font dropdown 跟 MF_BurnSubtitle 共用同一份 plugin/font/ 列表。
+        # msjh.ttc = Microsoft JhengHei,中文最常用;有就帶為預設。
+        fonts = list_fonts()
+        font_choices = fonts or [NO_FONTS_PLACEHOLDER]
+        default_font = "msjh.ttc" if "msjh.ttc" in fonts else font_choices[0]
         return {
             "required": {
                 "text": ("STRING", {"default": "Hello MediaForge", "multiline": True}),
                 # 位置:FFmpeg drawtext 接受表達式(w/h/text_w/text_h/t)、預設置中下
                 "x_expr": ("STRING", {"default": "(w-text_w)/2"}),
                 "y_expr": ("STRING", {"default": "h-text_h-40"}),
+                # 字型:plugin/font/ 內的 .ttf/.otf/.ttc;選 placeholder 表示沒丟字型,
+                # 由 compose_ir 走 system font fallback (跨平台 Arial/Helvetica/DejaVu)。
+                "font": (font_choices, {"default": default_font}),
                 "fontsize": ("INT", {"default": 36, "min": 8, "max": 300}),
                 "fontcolor": ("STRING", {"default": "white"}),
                 "borderw": ("INT", {"default": 2, "min": 0, "max": 20}),
@@ -113,7 +129,6 @@ class MF_ComposeOverlayText:
                 # 把 x_expr/y_expr 當 anchor、節點層 wrap 動畫表達式。詳見 README。
                 "effect": (list(POSITION_EFFECTS), {"default": "none"}),
                 "effect_duration": ("FLOAT", {"default": 1.5, "min": 0.1, "max": 60.0, "step": 0.1}),
-                "fontfile": ("STRING", {"default": ""}),  # 空 → ComposeVideo compile 時 fallback
                 # 時間區間:start=end=0 表全長顯示
                 "start_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
                 "end_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
@@ -129,8 +144,8 @@ class MF_ComposeOverlayText:
     FUNCTION = "add"
     CATEGORY = "MediaForge/Compose"
 
-    def add(self, text, x_expr, y_expr, fontsize, fontcolor,
-            borderw, bordercolor, effect, effect_duration, fontfile,
+    def add(self, text, x_expr, y_expr, font, fontsize, fontcolor,
+            borderw, bordercolor, effect, effect_duration,
             start_sec, end_sec, overlays=None):
         # 套 effect (none → 原樣;其他 → wrap 動畫表達式)
         final_x, final_y = _resolve_position(
@@ -147,8 +162,10 @@ class MF_ComposeOverlayText:
             "borderw": int(borderw),
             "bordercolor": bordercolor,
         }
-        if fontfile.strip():
-            params["fontfile"] = fontfile.strip()
+        # placeholder = 沒丟字型,留空讓 compose_ir._resolve_default_fontfile 走 system fallback
+        # (跟舊行為 fontfile="" 一致)。否則組絕對路徑,compose_ir 內 _escape_filter_path 處理 Windows `:` 衝突。
+        if font and font != NO_FONTS_PLACEHOLDER:
+            params["fontfile"] = os.path.join(FONT_DIR, font)
         if end_sec > start_sec:
             params["start_sec"] = float(start_sec)
             params["end_sec"] = float(end_sec)
