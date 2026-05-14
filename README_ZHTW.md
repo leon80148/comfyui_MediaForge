@@ -176,145 +176,302 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 
 ## 節點清單（22）
 
-> **Dual-input 註記**：下列標 **(dual-input)** 的 node 同時接受兩種 input：(a) 既有的 `video_path` STRING 欄位，(b) 新加的 `frames` + `tensor_fps` + `audio` 三件套 optional 輸入。連 tensor 時 MediaForge 內部會寫一個 temp .mp4 給 FFmpeg 吃。Path 模式仍是預設的 fast path — MediaForge 之間串接時不會被迫多走一次無謂的 decode/encode。
+每個節點區段都遵循同一個模板：**用途 → 適用情境 → 必填欄位 → 選用輸入 → 輸出 → 範例**。Widget 表掃過去就能找到要調的旋鈕，範例則給典型接線方式。
+
+> **Dual-input 註記**：下列標 **(dual-input)** 的 node 同時接受兩種 input：(a) 既有的 `video_path` STRING 欄位，(b) `frames` + `tensor_fps` + `audio` 三件套 optional 輸入。連 tensor 時 MediaForge 內部會寫一個 temp `.mp4` 給 FFmpeg 吃。
 >
-> 前端 extension `web/dual_input_lock.js` 把 widget 可見性跟 wiring 狀態連動：接 `frames` 時 path widget 自動收起（tensor 模式）、`tensor_fps` 只在接了 frames 時才顯示。Path-mode-only 的 widget（如 BurnSubtitle 的 `keep_source_audio`）在 tensor 模式自動隱藏。
+> 前端 extension `web/dual_input_lock.js` 把 widget 可見性跟 wiring 狀態連動：接 `frames` 時 path widget 自動收起（tensor 模式）、`tensor_fps` 只在 tensor 模式才顯示。Path-mode-only 的 widget（如 `keep_source_audio`）在 tensor 模式自動隱藏。
+>
+> **輸出檔名 pattern**：所有產出檔的 node 都用 `filename_prefix` + auto-counter（跟 ComfyUI 核心 `SaveImage` 同 pattern）。每次跑 workflow 寫 `output/<prefix>_00001.mp4` → `_00002.mp4` → ...，重跑不會 silently 覆蓋舊輸出。`filename_prefix` 可含子目錄（例 `MediaForge/subtitled`）。
 
 ### `MediaForge/Subtitle`
 
 #### 🀄 Convert Chinese (`MF_ConvertChinese`)
 
-OpenCC 簡繁中文轉換、對任意中文文字或 SRT 都通用。四個 profile：`s2twp`（簡→繁台灣詞庫，預設）/ `s2t`（簡→繁通用）/ `tw2sp`（繁台灣→簡）/ `t2s`（繁通用→簡）。三段式輸入：直接貼 `text` widget、wire 上游 STRING（如從 `MF_TranslateSubtitle` / `MF_WhisperTranscribe`）、或填 `input_path` 讀檔。`filename_prefix` 非空時自動 counter 寫到 `output/<prefix>_NNNNN.srt`（或 `.txt`，副檔名 auto-detect 看 `-->`）— 跟其他 file-producer 同 pattern。Lazy-import `opencc-python-reimplemented` — 安裝：`pip install opencc-python-reimplemented`。
+OpenCC 簡繁中文轉換，對純文字或 SRT 檔都通用。字元級對應，SRT 的時間戳 / 序號不會被動到。
+
+**適用情境**：把簡體中文字幕轉成台灣繁體（`s2twp` 在簡→繁基礎上加做 词→詞 詞庫轉換）、處理 crowd-sourced SRT、normalize 編碼混雜的字幕資料集。
+
+| Widget | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `profile` | dropdown | `s2twp (簡→繁台灣詞庫)` | `s2twp` / `s2t`（簡→繁通用）/ `tw2sp`（台灣→簡）/ `t2s`（繁→簡通用） |
+| `text` | STRING (multiline) | `""` | 直接貼或 wire 上游 STRING（例 `MF_TranslateSubtitle.translated_srt`） |
+| `input_path` *(選用)* | STRING | `""` | `text` 為空才讀。裝了 `charset-normalizer` 會自動偵測 UTF-8 / GBK / BIG5 / UTF-16 |
+| `filename_prefix` *(選用)* | STRING | `""` | 非空 → 寫 `output/<prefix>_NNNNN.srt`（不含 `-->` 則寫 `.txt`）。空 → 只 in-memory |
+
+**輸出**：`(converted_text: STRING, saved_path: STRING)`。`saved_path` 沒填 `filename_prefix` 時是空字串。
+
+**範例 chain**：`MF_TranslateSubtitle → MF_ConvertChinese (profile=s2twp) → MF_BurnSubtitle` — 先翻到簡體、用台灣詞庫 normalize、再硬燒。
+
+**相依套件**：lazy-import `opencc-python-reimplemented`（`pip install opencc-python-reimplemented`）。處理非 UTF-8 SRT 建議再裝 `charset-normalizer`。
+
+---
 
 #### 🔥 Burn Subtitle (`MF_BurnSubtitle`) **(dual-input)**
 
-SRT → 硬燒字幕，完整 ASS 風格控制。顏色輸入 `#RRGGBB`，內部轉成 ASS BGR-with-alpha。
+把 SRT 字幕硬燒進影片，完整 ASS 樣式控制。顏色輸入 `#RRGGBB`，內部轉成 ASS BGR-with-alpha。
 
-**輸出**：`filename_prefix` STRING（預設 `MediaForge/subtitled`）— 對齊 ComfyUI 核心 `SaveImage` 慣例，每次跑 workflow 自動接 counter：`output/<prefix>_00001.mp4` → `_00002.mp4` → ... 不會 silently 覆蓋先前產出。可含子目錄；`.mp4` 副檔名自動補上。
+**適用情境**：要出帶永久字幕的影片（YouTube 上片、社群短片、簡報側錄）。如果還要疊浮水印或加 BGM，改用 `MF_ComposeBurnSubtitle`（整條 chain 一次 encode）。
 
-可調樣式：
-- **字型**：`font` dropdown 讀 `<plugin>/font/*.ttf|.otf|.ttc`。把 TTF 丟到 `font/` 後從 dropdown 選即可 — MediaForge lazy-import `fontTools` 自動讀 TTF 內部的 Family Name 餵給 libass。沒裝 `fontTools` 時退用檔名 stem（建議 `pip install fontTools`）。
-- **粗細 / 風格**：`bold` + `italic` boolean、`letter_spacing` FLOAT（ASS Spacing，像素為單位）。
-- **外框 / 陰影 / 底色塊**：`outline_color_hex` + `outline_width` + `shadow_depth` + `border_style`（1=outline 描邊、3=box 半透明底色配 `back_color_hex`）。
-- **位置**：`alignment` dropdown（9 個命名位置：`bottom_center (2)`、`top_right (9)`…）+ `margin_v` + `margin_l` + `margin_r`。字幕實際可用寬 = 播放區寬 − `margin_l` − `margin_r`（margin 不對稱時可同時控制「字幕往哪邊推」+「字幕多寬」）。
+**必填 widget**（依 node body 由上而下排列）：
 
-進階 optional 輸入：`video_path`（檔案路徑、沒接 tensor 時走它）、`tensor_fps`（只在連 `frames` 時用）、`keep_source_audio`（BOOLEAN，預設 `True` — 接了外部 `audio` pin 且 source 影片自帶音軌時 `amix` 混兩條；設 `False` 退回舊行為，外部音蓋過 source）、`target_fps`（輸出畫格率覆寫；`0.0` = 沿用 source fps — FLOAT 是為了支援廣電 / 手機素材常見的 cinematic 23.976 / 29.97 / 59.94）。
+| Group | Widget | 預設 | 說明 |
+|---|---|---|---|
+| 來源 | `video_path` | `input/sample.mp4` | Tensor 模式時隱藏 |
+| 來源 | `srt_path` | `input/sample.srt` | UTF-8 SRT |
+| 輸出 | `filename_prefix` | `MediaForge/subtitled` | Auto-counter → `output/<prefix>_NNNNN.mp4` |
+| 編碼 | `codec` | smart（有 NVENC 用、沒有用 libx264） | 跟 SaveVideoFrames / ComposeVideo 共用 catalog |
+| 編碼 | `crf` | `18` (0–51) | 0 無損、18 視覺無損、23 標準、28 堪用 |
+| 編碼 | `preset` | `medium` | `ultrafast` … `veryslow` |
+| 字型 | `font` | `msjh.ttc` 有就用、否則第一個 | 讀 `<plugin>/font/*.ttf|.otf|.ttc`；`fontTools` 自動讀 Family Name |
+| 字型 | `font_size` | `24` (8–150) | px |
+| 字型 | `font_color_hex` | `#FFFFFF` | Hex RGB |
+| 字型 | `bold` / `italic` | `True` / `False` | ASS Bold / Italic flag |
+| 字型 | `letter_spacing` | `0.0` (0–20) | ASS Spacing（像素） |
+| 外框 | `outline_color_hex` | `#000000` | |
+| 外框 | `outline_width` | `2` (0–10) | px |
+| 外框 | `shadow_depth` | `1` (0–10) | px |
+| 外框 | `border_style` | `1` | `1` = 描邊+陰影、`3` = 配 `back_color_hex` 的不透明底色塊 |
+| 外框 | `back_color_hex` | `#000000` | 只在 `border_style=3` 看得到 |
+| 位置 | `alignment` | `bottom_center (2)` | 9 個命名位置（數字鍵盤 1–9 對映） |
+| 位置 | `margin_v` | `20` (0–500) | 距邊緣的垂直邊距（px） |
+| 位置 | `margin_l` / `margin_r` | `50` / `50` (0–1000) | 字幕可用寬 = 播放區寬 − `margin_l` − `margin_r` |
+
+**選用輸入**：
+
+| 輸入 | 型別 | 預設 | 何時用 |
+|---|---|---|---|
+| `frames` | IMAGE | — | Wire 來自 VHS / AnimateDiff / LoadVideoFrames；隱藏 `video_path` |
+| `tensor_fps` | FLOAT | `30.0` | 從 `frames` 寫 temp `.mp4` 的 fps |
+| `audio` | AUDIO | — | 外部音訊 pin，預設跟 source 音訊混音 |
+| `keep_source_audio` | BOOLEAN | `True` | Path 模式 + 接 `audio` + source 有音訊 → `amix` 兩條；`False` = 外部蓋過 source |
+| `target_fps` | FLOAT | `0.0` | `0` = 沿用 source；FLOAT 支援 23.976 / 29.97 / 59.94 等 cinematic fps |
+
+**輸出**：`final_video_path` STRING。
+
+**範例**：`MF_SelectVideo → MF_BurnSubtitle (font=msjh.ttc, font_size=28, alignment=bottom_center (2), outline_width=2)` 是典型 1080p YouTube 影片的配置。
+
+---
 
 ### `MediaForge/Video`
 
 #### 📂 Select Video (`MF_SelectVideo`)
 
-`ComfyUI/input/` 的影片檔 dropdown picker。會遞迴掃子目錄、列 `.mp4 / .mov / .mkv / .webm / .avi / .m4v / .mpg / .mpeg / .ts`。輸出 `STRING video_path` — 直接 wire 給任何 file-consumer node。`IS_CHANGED` 用 file mtime 做 cache key，同檔名換內容也會自動 invalidate 下游 cache。
+`ComfyUI/input/` 影片檔的 dropdown picker。遞迴掃子目錄、列 `.mp4 / .mov / .mkv / .webm / .avi / .m4v / .mpg / .mpeg / .ts`。
+
+**適用情境**：要選輸入影片但不想自己打路徑。輸出的 `video_path` 可以接任何 file-consumer node。
+
+| Widget | 型別 | 說明 |
+|---|---|---|
+| `video` | dropdown | `input/` 下所有符合副檔名的檔（相對路徑、`/` normalize）。空目錄會出現提示 |
+
+**輸出**：`video_path` STRING — runtime 透過 `folder_paths.get_input_directory()` 解析為絕對路徑。
+
+**說明**：`IS_CHANGED` 用 file mtime 做 cache key，同檔名換內容會自動 invalidate 下游 cache。新增檔到 `input/` 之後要重新整理瀏覽器才會重掃。
+
+---
 
 #### 🔁 Loop Video (`MF_LoopVideo`) **(dual-input)**
 
-把影片循環到目標時長。三種模式對應不同接縫處理需求，可加速、可反向。
+把影片循環到目標時長，三種接縫處理策略，可調速、可反向。
+
+**適用情境**：短片補長到指定時長（intro loop、ambient B-roll、social media 15s / 30s / 60s 多版本）。
 
 **Loop modes**：
-- **`strict`** — 硬接重複到精確時長（無接縫平滑），最快、最可預測。
-- **`ping_pong`** — A→A 反向→A→A 反向（順暢來回，無可見接縫）。
-- **`crossfade`** — 重複片段之間走 `xfade` chain；上限 50 圈；`crossfade_sec >= 有效片段長度` 時自動退階回 `strict`(合理退階、不報錯)。
+- `strict` — 硬接重複到精確時長。最快、最可預測、每個接縫看得見。
+- `ping_pong` — A → A-reversed → A → A-reversed（無縫來回、有效時長翻倍）。
+- `crossfade` — 重複片段間走 `xfade` chain（上限 50 圈）。`crossfade_sec >= 片段長度` 時自動退階回 `strict`。
 
-**核心設定**:
-- `target_duration_sec`（FLOAT，預設 30.0）— 輸出時長（秒）。
-- `crossfade_sec`（FLOAT，預設 1.0）— 重複片段間的重疊長度；只在 `crossfade` mode 用。
-- `speed`（FLOAT 0.25–4.0，預設 1.0）— 播放速度（走 `setpts` + `atempo` chain；超出範圍會自動 chain）。
-- `reverse`（BOOLEAN）— 先把 source 反向再 loop。
-- `keep_audio`（BOOLEAN，預設 True）+ `audio_volume`（FLOAT 0.0–1.0，預設 1.0）— 衰減音量。`0.0` 靜音、`0.5` 半音量、`1.0` 原音。
+**必填 widget**：
 
-**編碼**：`codec` / `crf`（預設 18）/ `preset`（預設 `medium`）— `codec` 在偵測到 NVENC 時預設 GPU 加速。見 [智慧 GPU codec 預設](#智慧-gpu-codec-預設)。
+| Widget | 預設 | 範圍 | 說明 |
+|---|---|---|---|
+| `video_path` | `input/sample.mp4` | — | Tensor 模式隱藏 |
+| `filename_prefix` | `MediaForge/looped` | — | → `output/<prefix>_NNNNN.mp4` |
+| `target_duration_sec` | `30.0` | 0.1–36000 | 輸出時長（秒） |
+| `loop_mode` | `strict` | — | `strict` / `ping_pong` / `crossfade` |
+| `crossfade_sec` | `1.0` | 0.1–10 | 只在 `crossfade` mode 用 |
+| `speed` | `1.0` | 0.25–4.0 | `setpts` + 自動 chain 的 `atempo` |
+| `reverse` | `False` | — | 先反向再 loop |
+| `keep_audio` | `True` | — | `False` 等於靜音 |
+| `audio_volume` | `1.0` | 0.0–1.0 | 衰減保留的音量；`0.0` 靜音 |
+| `codec` / `crf` / `preset` | smart / `18` / `medium` | — | 跟其他 producer 同一組 |
 
-**輸出**：`filename_prefix`（預設 `MediaForge/looped`）→ `output/MediaForge/looped_<NNNNN>.mp4`（auto-counter）。
+**選用輸入**：`frames` / `tensor_fps` / `audio`（dual-input 三件套）。
 
-**硬限制**：FFmpeg `loop` filter 的 frame 緩衝上限是 `MAX_LOOP_FRAMES = 32767`（INT16），超長素材高 fps 會撞牆 — 改用 `crossfade` mode（xfade chain 無單一 buffer 上限）或降 fps。
+**輸出**：`final_video_path` STRING。
+
+**限制**：FFmpeg `loop` filter 的 frame 緩衝上限是 `MAX_LOOP_FRAMES = 32767`（INT16）。超長素材高 fps 會撞牆 — 改用 `crossfade` mode（xfade chain 無單一 buffer 上限）或降 fps。
+
+**範例**：5 秒短片循環成 60 秒無縫 ambient loop → `loop_mode=crossfade, target_duration_sec=60, crossfade_sec=0.5`。
+
+---
 
 #### 📥 Load Video Frames (`MF_LoadVideoFrames`)
 
-FFmpeg decode 任意容器／codec → `IMAGE` batch `[B,H,W,C] float32 [0,1]` + `AUDIO` dict（`{'waveform': Tensor[B,C,T], 'sample_rate': int}`）+ fps + metadata JSON。**旋轉感知**（直拍手機影片會正確顯示），記憶體有上界。可選 `target_fps` 重採樣、`max_frames` 截斷。
+FFmpeg decode 任意容器／codec → `IMAGE` batch + `AUDIO` dict + metadata。處理 VHS 的 opencv decode 跑不動的格式（AV1 / HEVC 10-bit / ProRes / VP9）。
+
+**適用情境**：要把影片拉進 tensor-based workflow（逐幀變換、AI 推論、image-batch 操作）並同時保留音訊。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `video_path` | `input/sample.mp4` | |
+| `target_fps` | `0.0` (= 沿用原 fps) | `>0` 跑 `fps` filter 重採樣 |
+| `max_frames` | `0` (= 不限) | preview / 記憶體上限 |
+| `load_audio` | `True` | `False` 跳過 audio decode |
+| `audio_sr` | `0` (= 沿用原 sr) | 覆寫 sample rate |
+
+**輸出**（7 個 port）：
+
+| 輸出 | 型別 | Shape / 意義 |
+|---|---|---|
+| `frames` | IMAGE | `[B, H, W, C]` float32 [0, 1] |
+| `audio` | AUDIO | `{'waveform': Tensor[B, C, T], 'sample_rate': int}`；source 沒音軌時是 `None` |
+| `fps` | FLOAT | 實際 fps（過 `target_fps` 重採樣後） |
+| `width` / `height` | INT | Display 尺寸（rotation-aware） |
+| `frame_count` | INT | 解出的 frame 數 |
+| `metadata_json` | STRING | 完整 probe metadata JSON |
+
+**說明**：旋轉感知 — 直拍手機影片會正確顯示。記憶體被 `max_frames` 上界限制。source 沒音軌時輸出 `None`（**不**合成假靜音 — 假靜音會誤導 `MF_SaveVideoFrames` 的 `-shortest` mux）。
+
+---
 
 #### 📤 Save Video Frames (`MF_SaveVideoFrames`)
 
-`IMAGE` batch（+ 可選 `AUDIO` dict）→ 編碼後影片檔。canonical 的 tensor→file producer；跟 `MF_LoadVideoFrames` 形成對稱 roundtrip。
+Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_LoadVideoFrames` 形成對稱 roundtrip（PSNR > 38 dB）。
 
-**編碼模式**（單一 dropdown、互斥）：
-- **`crf`（預設）** — 等質編碼（數字越低品質越高、檔案越大）。`crf` 0=無損、18=視覺無損、23=libx264 標準、28=堪用、51=最差。
-- **`bitrate`** — 指定 `bitrate_kbps`（如 4000 = 4 Mbps）。
-- **`target_size`** — 給 `target_size_mb` 上限、自動算 bitrate（從 duration 估算 two-pass-style）。
+**適用情境**：tensor pipeline 結果寫回硬碟、要 broadcast-grade codec 控制。
 
-**Codecs**（容器副檔名自動修正）：
-- H.264 / HEVC / AV1 / ProRes — 全部 CPU + NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）自動偵測。
-- ProRes → `.mov`（其他 codec → `.mp4`）。`prores_ks` 用 `yuv422p10le` pix_fmt 保留 10-bit 精度。
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `frames` | (必填 IMAGE) | `[B, H, W, C]` float32 [0, 1] |
+| `filename_prefix` | `MediaForge/video` | 副檔名跟 codec 走（.mp4 / .mov 自動選） |
+| `fps` | `30.0` | rawvideo pipe 的來源 fps — roundtrip 從 LoadVideoFrames 接過來時用其 `fps` |
+| `codec` | smart 預設 | H.264 / HEVC / AV1 / ProRes + NVENC variants |
+| `encode_mode` | `crf` | `crf` / `bitrate` / `target_size` |
+| `crf` | `18` (0–51) | `crf` mode 用。0 無損、18 視覺無損、23 標準、28 堪用 |
+| `bitrate_kbps` | `4000` | `bitrate` mode 用（4000 = 4 Mbps） |
+| `target_size_mb` | `8.0` | `target_size` mode 用 — 從 duration 反算 bitrate |
+| `preset` | `medium` | `ultrafast` … `veryslow` |
+| `pix_fmt_override` | `""` | 空 = 用 codec 預設（x264/x265 走 yuv420p、ProRes 走 yuv422p10le） |
 
-**Tensor → fps**：`fps` 控制 raw video pipe 的來源 frame rate。從 `MF_LoadVideoFrames` 接過來時用其輸出的 `meta_fps`。
+**選用**：`audio` AUDIO dict — 接了就 mux 進輸出。
 
-**輸出**：`filename_prefix` → `output/<prefix>_<NNNNN>.<ext>`（ext 自動選）。
+**輸出**：`final_video_path` STRING。
+
+**說明**：ProRes 輸出 `.mov`（`prores_ks` 用 `yuv422p10le` 保留 10-bit 精度）。其他 codec 一律 `.mp4`。NVENC 內部用 `-cq` 而非 `-crf`，但 UI 統一。
+
+---
 
 #### ✂️ Trim by Ranges (`MF_TrimByRanges`) **(dual-input)**
 
-按時間區間裁切影片。主要使用情境是接 `MF_DetectSilence` 自動裁靜默，但也支援手填 JSON 區間做手動編輯。
+按時間區間裁切影片。主要使用情境是接 `MF_DetectSilence` 自動裁靜默，但也接受手填 JSON 做手動編輯。
 
-**Ranges 輸入**（兩種、互斥）：
-- `ranges`（pin）— 從上游（通常是 `MF_DetectSilence`）接的 `SILENCE_RANGES` 列表 `[[start_sec, end_sec], ...]`。
-- `ranges_json`（STRING widget，JSON literal）— 手填覆寫，例如 `[[1.5, 3.0], [10.0, 12.5]]`。
+**適用情境**：移除演講／podcast／直播錄影的死寂時段、從 raw footage 只留指定精華段。
 
-**Modes**：
-- **`keep`** — 保留指定區間、刪掉其他。空 ranges → raise（沒東西可保留、拒絕輸出空檔）。
-- **`remove`** — 刪掉指定區間、保留其他。空 ranges → identity（no-op，回原片）。
+**Ranges 輸入**（兩種、互斥 — pin 優先）：
+- `ranges`（pin、選用）— 從 `MF_DetectSilence` 接過來的 `SILENCE_RANGES`。
+- `ranges_json`（STRING widget、multiline）— 手填 JSON，例如 `[[1.5, 3.0], [10.0, 12.5]]`。
 
-**接縫處理**：
-- `crossfade_sec`（FLOAT，預設 0.0）— 相鄰保留段之間走 `xfade` chain 做淡入淡出。0 = 硬切。
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `video_path` | `input/sample.mp4` | |
+| `filename_prefix` | `MediaForge/trimmed` | |
+| `mode` | `remove` | `remove` = 刪除指定區間、留其他；`keep` = 留指定區間、刪其他 |
+| `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | 沒接 `ranges` pin 時用這個 |
+| `crossfade_sec` | `0.0` (0–2) | 保留段之間走 `xfade`；`0` = 硬切 |
+| `codec` / `crf` / `preset` | smart / `18` / `medium` | |
 
-**編碼**：跟其他 encode 節點同一組 `codec` / `crf` / `preset`；GPU NVENC 預設。
+**模式語意**：
+- `keep` + 空 ranges → **raise**（拒絕輸出空檔）。
+- `remove` + 空 ranges → **identity**（原片不動）。
 
-**輸出**：`filename_prefix`（預設 `MediaForge/trimmed`）→ `output/<prefix>_<NNNNN>.mp4`。
+**音訊同步**：音影 interleaved concat（`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`），跨切點音訊不會跑掉。沒音軌的 source 自動補靜音 pad。
 
-**音訊處理**：音影 interleaved concat（`[v0][a0][v1][a1]...concat=n=N:v=1:a=1`）讓音訊跨切點保持同步。沒音軌的 source 自動處理。
+**範例 chain**：`MF_LoadVideoFrames → MF_DetectSilence (noise_db=-30) → MF_TrimByRanges (mode=remove, crossfade_sec=0.1)` — podcast 預剪、切點微淡入淡出。
+
+---
 
 #### 🔗 Concat Videos (`MF_ConcatVideos`) **(dual-input, prepend 語意)**
 
 多檔路徑級拼接。兩種策略對應不同速度／相容性 trade-off。
 
+**適用情境**：同台相機素材拼接（用 `copy` 秒接 stream-copy）、跨 codec / 跨解析度素材拼接（用 `transcode` 加可選過場）。
+
 **Modes**：
-- **`copy`** — FFmpeg concat demuxer、stream copy 不 re-encode。極快但要求輸入的 codec / 解析度 / fps / pix_fmt 完全一致。最適合同台相機輸出或預先 normalize 過的素材。
-- **`transcode`** — `filter_complex` graph 加可選過場。一定可用、一定 re-encode。當 source 在 codec / 尺寸 / fps 不一致時必須走這個。
+- `copy` — FFmpeg concat demuxer、stream copy 不 re-encode。極快但**要求**所有輸入的 codec / 解析度 / fps / pix_fmt 完全一致。
+- `transcode` — `filter_complex` graph 加可選 `xfade`。一定可用、一定 re-encode。
 
-**過場**（`transcode` mode、`transition_sec > 0` 才用）：
-- `fade`、`wipeleft`、`wiperight`、`slideleft`、`slideright`、`circleopen`、`circleclose`、`dissolve` — FFmpeg `xfade` 內建。
+**必填 widget**：
 
-**輸入**：
-- `video_paths`（STRING widget、多行）— 每行一個絕對路徑。至少 2 段。
-- `frames`（IMAGE pin、optional）— 接線時 tensor 寫成 path[0]（prepend）、`video_paths` 列表 shift 到 path[1..N]。至少要有 1 條 path 才能湊到 2 段。
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `video_paths` | multiline — `input/clip1.mp4\ninput/clip2.mp4` | 一行一個路徑、至少 2 條 |
+| `filename_prefix` | `MediaForge/concat` | |
+| `mode` | `transcode` | `copy`（快） / `transcode`（穩） |
+| `transition_sec` | `0.0` (0–5) | xfade 秒數、只在 transcode mode 生效；`0` = 硬切 |
+| `transition_type` | `fade` | `fade` / `wipeleft` / `wiperight` / `slideleft` / `slideright` / `circleopen` / `circleclose` / `dissolve` |
+| `fps` / `width` / `height` | `30.0` / `1920` / `1080` | Transcode mode 的目標 dims |
+| `crf` / `codec` / `preset` | `18` / smart / `medium` | 只 transcode mode 用 |
 
-**Transcode 設定**：`fps` / `width` / `height` / `crf` / `codec` / `preset`。GPU NVENC 預設。
+**選用輸入**：`frames` / `tensor_fps` / `audio` — 接線時 tensor 寫成 path[0]（prepend）、`video_paths` shift 到 path[1..N]。仍需要 `video_paths` 至少有 1 條才能湊到 2 段。
 
-**輸出**：`filename_prefix`（預設 `MediaForge/concat`）→ `output/<prefix>_<NNNNN>.mp4`。
+**輸出**：`final_video_path` STRING。
 
-**行為註記**：沒音軌的輸入自動補 `anullsrc` 靜音（只 transcode mode）；demuxer mode 在音訊串流不一致時會拒絕。
+**說明**：`transcode` mode 沒音軌的輸入自動補 `anullsrc` 靜音；`copy` mode 在音訊串流不一致時 hard fail — 跨 source 拼接前先用 `MF_SaveVideoFrames` normalize。
+
+---
 
 ### `MediaForge/Analysis`
 
 #### 🔍 Probe Media (`MF_ProbeMedia`) **(dual-input)**
 
-`ffprobe` 包裝，回任意 media 檔的結構化 metadata。純讀、不會跑 FFmpeg encode。
+`ffprobe` 包裝、回結構化 metadata。純讀、不會跑 FFmpeg encode。
+
+**適用情境**：餵尺寸給 Compose / Save chain（也可以留 `target_*=0` 讓 Compose 自己 probe）；檢查陌生檔再決定怎麼處理。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `media_path` | `input/sample.mp4` | Tensor 模式隱藏 |
+| `frames` / `tensor_fps` / `audio` *(選用)* | — | Dual-input 三件套（probe 內部產生的 temp `.mp4`） |
 
 **輸出**（6 個 port）：
-- `duration_sec`（FLOAT）— **影片串流的時長**。跟容器時長可能不一樣（MKV 之類 mux 容易有差異）；MediaForge 用影片時長當權威 timeline。
-- `width` / `height`（INT）— **display dimensions**（rotation-aware）。直拍手機影片帶 rotation metadata 會在這裡 swap，下游 Compose / Save 拿到的方向正確。
-- `fps`（FLOAT）— 從 `r_frame_rate` parse（例如 `30000/1001` → 29.97）。
-- `video_codec`（STRING）— 例如 `"h264"`、`"hevc"`、`"av1"`、無影片時是 `""`。
-- `audio_codec`（STRING）— 例如 `"aac"`、`"opus"`、無音訊時是 `""`。
 
-跟 `MF_LoadVideoFrames`(先 probe 拿尺寸、再 load) 跟 Compose pipeline(餵尺寸給 `MF_ComposeVideo`、或留 `target_*=0` 沿用 source) 天然配對。
+| 輸出 | 型別 | 說明 |
+|---|---|---|
+| `duration_sec` | FLOAT | 容器 `format.duration` — 當權威 timeline 用 |
+| `width` / `height` | INT | **Display** 尺寸（rotation-aware）；直拍手機影片在此 swap |
+| `fps` | FLOAT | 從 `r_frame_rate` parse（`30000/1001` → 29.97） |
+| `video_codec` | STRING | `"h264"` / `"hevc"` / `"av1"`、無影片時 `""` |
+| `audio_codec` | STRING | `"aac"` / `"opus"`、無音訊時 `""` |
+
+**範例**：probe 一個不認識的素材、把 `width` / `height` 餵給 `MF_ComposeVideo`（或就 `target_*=0` 跳過 probe — Compose 內部本來就會做同樣的事）。
+
+---
 
 #### 🤫 Detect Silence (`MF_DetectSilence`)
 
-FFmpeg `silencedetect` 包裝 → `SILENCE_RANGES` list（`[[start_sec, end_sec], ...]`）。`MF_TrimByRanges` 的標準上游、用在演講縮時／podcast 預剪／直播精華 workflow。
+FFmpeg `silencedetect` 包裝 → `SILENCE_RANGES` list。`MF_TrimByRanges` 的標準上游。
 
-**可調**：
-- `noise_db`（FLOAT，預設 -30.0）— dB 在此值以下且持續 ≥ `min_duration_sec` 就算靜音。較不負（-20）= 較積極；較負（-40）= 較嚴格。
-- `min_duration_sec`（FLOAT，預設 1.5）— 最短靜音長度才會被記錄、低於此值視為自然停頓忽略。
+**適用情境**：演講 / podcast / 直播錄影預剪、找出語音段給下游 ASR。
 
-**輸出**：`ranges`（SILENCE_RANGES）。空 list = 沒偵到靜音；下游 `MF_TrimByRanges` 空 list + `mode="remove"` 視為 identity（保留整片）。
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `audio_source` | `input/sample.mp4` | 影片或音訊檔；接了 `audio` pin 就忽略 |
+| `noise_db` | `-30.0` (-90 到 0) | dB 門檻；較不負（-20）= 較積極、較負（-40）= 較嚴格 |
+| `min_duration_sec` | `0.5` (0.05–60) | 最短靜音長度；短於此值視為自然停頓忽略 |
+
+**選用**：`audio` AUDIO dict — 接了就蓋過 `audio_source` path。
+
+**輸出**（3 個 port）：
+
+| 輸出 | 型別 | 說明 |
+|---|---|---|
+| `ranges` | SILENCE_RANGES | `[[start_sec, end_sec], ...]` — wire 給 `MF_TrimByRanges.ranges` |
+| `ranges_json` | STRING | 同資料的 JSON 字串（debug / preview 用） |
+| `count` | INT | 偵測到的靜音段數 |
+
+**調參**：典型 podcast — `noise_db=-30, min_duration_sec=0.5`。演講錄影帶風扇 / hum noise — 試 `noise_db=-25, min_duration_sec=1.0`。音樂帶安靜段落 — 嚴格點：`noise_db=-50, min_duration_sec=2.0`。
 
 ### `MediaForge/Compose` — 單次編碼 pipeline(視訊 overlay + 音訊 chain)
 
@@ -330,37 +487,63 @@ Compose pipeline 讓 overlay / 字幕 / 音訊操作**單次 ffmpeg encode** 完
 
 **最簡工作流** 2 個節點:拖一個 overlay 節點、wire 進 `ComposeVideo`。沒 audio chain 也可、純 transcode 也可。
 
+> **Chain 語意**：每個 overlay / audio op node 都是 *append* 到上游 chain。把前一個 op 的輸出接到這個 node 的 `overlays`（或 `audio_ops`）selectable input；沒接 = 從新 chain 起點。Overlay 列表順序 = z-order；audio 是 filter chain 順序。
+
 #### 🎬 Compose Video (`MF_ComposeVideo`) **(dual-input)**
 
 Compose 工作流的單一終點 — 取代舊的 `ComposeStart` + `ComposeFinalize` 兩節點模式。
 
-**設定**:
-- `video_path`(STRING) + dual-input `frames` / `tensor_fps` / `audio` — source media。
-- `target_fps`(FLOAT,**預設 0.0**) + `target_width`(INT,預設 0) + `target_height`(INT,預設 0) — `0` = **沿用 source**(透過 ffprobe 偵測、含 rotation-aware dims)。多數 workflow 留 0 即可。
-- `codec` / `crf` / `preset` — `codec` smart default 偵測到 NVENC 用 `h264_nvenc`、否則 `libx264`。NVENC variants(`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`) 自動加入 dropdown。CRF 範圍 0–51(預設 18 = 視覺無損)。
-- `keep_audio`(BOOLEAN、預設 True) — 沒接 audio chain 時是否保留 source 自帶音軌。
+**適用情境**：要套用 **2 個以上效果**（overlay + 字幕、浮水印 + BGM、文字 + 音訊淡出…）。單一效果一發的話、用獨立節點（`MF_BurnSubtitle`、`MF_LoopVideo`）通常更簡單。
 
-**Optional chain 輸入**:
-- `overlays`(`MF_COMPOSE_OPS`) — 從任一組合的 `ComposeOverlayText` / `ComposeOverlayImage` / `ComposeWatermark` / `ComposeBurnSubtitle` 串接過來。列表順序 = z-order(後面的疊在前面之上)。
-- `audio_ops`(`MF_COMPOSE_AUDIO_OPS`) — 從 `ComposeVolume` / `ComposeAudioMix` / `ComposeAudioFade` / `ComposeNormalize` 串接。順序 = filter chain 順序。
+**必填 widget**：
 
-**輸出**:`filename_prefix`(預設 `MediaForge/composed`) → `output/<prefix>_<NNNNN>.mp4`(或 ProRes 走 `.mov`)。回傳 path + 編譯後的 `filter_complex_script`(debug 用)。emit `ui.images` metadata 給 API `/history` 暴露。
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `video_path` | `input/sample.mp4` | Tensor 模式隱藏 |
+| `filename_prefix` | `MediaForge/composed` | → `output/<prefix>_NNNNN.mp4`（ProRes 走 `.mov`） |
+| `target_fps` | `0.0` (0–240) | `0` = 沿用 source（probe 取得） |
+| `target_width` | `0` (0–7680) | `0` = 沿用 display width（rotation-aware） |
+| `target_height` | `0` (0–4320) | `0` = 沿用 display height |
+| `codec` / `crf` / `preset` | smart / `18` / `medium` | NVENC variants 自動偵測 |
+| `keep_audio` | `True` | 沒接 `audio_ops` 時是否保留 source 自帶音軌 |
 
-**行為**:編譯後 graph 超過 6000 字元自動切到 `-filter_complex_script <tempfile>`(避免 Windows command-line 長度限制)。
+**選用輸入**：
+
+| 輸入 | 型別 | 說明 |
+|---|---|---|
+| `frames` / `tensor_fps` / `audio` | dual-input | 同其他 dual-input node 的三件套 |
+| `overlays` | `MF_COMPOSE_OPS` | 接 `ComposeOverlayText` / `OverlayImage` / `Watermark` / `BurnSubtitle` chain head |
+| `audio_ops` | `MF_COMPOSE_AUDIO_OPS` | 接 `ComposeVolume` / `AudioMix` / `AudioFade` / `Normalize` chain head |
+
+**輸出**：`(final_video_path: STRING, filter_complex_script: STRING)` — 第二個是編譯後的 filter graph（debug 用）。emit `ui.images` metadata 給 API `/history`。
+
+**行為**：編譯後 graph 超過 6000 字元自動切到 `-filter_complex_script <tempfile>`（避免 Windows command-line 長度限制）。
+
+---
 
 #### ✏️ Compose Overlay Text (`MF_ComposeOverlayText`)
 
 Append 一個 `drawtext` op spec 進 overlay chain。
 
-**Widget**:
+**適用情境**：標題、lower-third、章節標籤、文字動畫進場。要由 SRT 驅動的字幕請用 `MF_ComposeBurnSubtitle`。
 
-- `text`(multiline STRING) — 編譯時透過 `textfile=` 傳給 ffmpeg、安全處理單引號 / % / 換行。
-- `x_expr` / `y_expr` — FFmpeg drawtext **位置表達式**(string、不是數字 — 詳見下方表達式參考表)。
-- `fontsize` / `fontcolor` / `borderw` / `bordercolor` — 標準樣式。
-- `effect` — 動畫 preset(`none` / `slide_in_left|right|top|bottom` / `marquee_horizontal`)。非 `none` 時把 `x_expr` / `y_expr` 當成**最終停靠位置**、節點層 wrap 動畫表達式上去。預設 `none` = 無動畫(對舊 workflow 完全 backward compat)。
-- `effect_duration`(FLOAT、預設 1.5) — `slide_in_*` 表「滑入秒數」;`marquee_horizontal` 表「跑一輪需要的秒數」。`effect=none` 時忽略。
-- `fontfile` — 留空讓 ComposeVideo 退階到 bundled font(Windows 原生 ffmpeg 沒 fontconfig)。
-- `start_sec` / `end_sec` — 時間**可見性**區間。兩者 0 = 全長顯示。(注:`effect_duration` 從 `start_sec` 算 — 文字出現後才開始跑動畫。)
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `text` | `Hello MediaForge` (multiline) | 透過 `textfile=` 傳遞、安全處理單引號 / `%` / 換行 |
+| `x_expr` | `(w-text_w)/2` | FFmpeg drawtext **位置表達式**（string、非數字） |
+| `y_expr` | `h-text_h-40` | 距底邊 40 px — 典型 lower-third 位置 |
+| `font` | 有 `msjh.ttc` 則優先,否則按字母序第一個 | 下拉選 plugin `font/` 的 `.ttf` / `.otf` / `.ttc`。`font/` 為空 → ComposeVideo 自動退階用系統字型（依 OS 取 Arial / Helvetica / DejaVu） |
+| `fontsize` | `36` (8–300) | px |
+| `fontcolor` | `white` | FFmpeg color 名稱 *或* hex（`#RRGGBB`） |
+| `borderw` | `2` (0–20) | 外框粗細（px） |
+| `bordercolor` | `black` | 外框顏色 |
+| `effect` | `none` | `none` / `slide_in_left|right|top|bottom` / `marquee_horizontal` |
+| `effect_duration` | `1.5` (0.1–60) | `slide_in_*`:滑入秒數;`marquee_horizontal`:跑一輪秒數 |
+| `start_sec` / `end_sec` | `0.0` / `0.0` | 可見性區間。兩者 `0` = 全長顯示 |
+
+**選用**：`overlays` — 上游 chain。沒接 = 從新 chain 起點。
+
+**輸出**：`overlays`（`MF_COMPOSE_OPS`）。
 
 ##### `x_expr` / `y_expr` 表達式語言
 
@@ -409,67 +592,149 @@ FFmpeg `drawtext` 接受的是算式 string 而非單純數字,**每幀**在 enc
 
 需要 preset 沒涵蓋的動畫(垂直擺動、easing 曲線、淡入)的話 — 留 `effect=none`、自己手寫 `x_expr` / `y_expr`。
 
+---
+
 #### 🖼️ Compose Overlay Image (`MF_ComposeOverlayImage`)
 
-通用圖片 overlay。
+Append 通用 `overlay` op（絕對位置 + 絕對縮放）。要 preset 化浮水印改用 `MF_ComposeWatermark`。
 
-- `image_path` — PNG / JPG 等。
-- `x_expr` / `y_expr` — 絕對或表達式位置。
-- `scale_w` — 寬度像素(0 = 原圖、高度按 aspect ratio 自動算)。
-- `start_sec` / `end_sec` — 時間區間。
+**適用情境**：在指定位置貼一張圖（logo bug、貼紙、lower-third 姓名牌）。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `image_path` | `input/overlay.png` | PNG / JPG 等 |
+| `x_expr` / `y_expr` | `10` / `10` | 位置表達式 — 支援 `W` / `H` / `w` / `h` / `t` 等 |
+| `scale_w` | `0` (0–7680) | 寬度（px）；`0` = 原圖大小（高度按 aspect ratio 自動算） |
+| `start_sec` / `end_sec` | `0.0` / `0.0` | 可見性區間；兩者 `0` = 全長顯示 |
+
+**選用**：`overlays` — 上游 chain。
+
+**輸出**：`overlays`（`MF_COMPOSE_OPS`）。
+
+---
 
 #### 💧 Compose Watermark (`MF_ComposeWatermark`)
 
-浮水印 preset — 對最常見場景的便利 UI。
+帶 placement / scale / opacity 的浮水印 preset — 是 overlay 對最常見場景的便利包。
 
-- `image_path` — 建議用帶 alpha 的 PNG。
-- `placement` — `top_left` / `top_right` / `bottom_left` / `bottom_right` / `center` / `tile`(用真實 aspect 自動算 row × col)。
-- `relative_scale`(0.05–0.5) — 浮水印寬度 / frame width 比例。compile 時用 `ComposeVideo.target_width` 解析成絕對像素。
-- `opacity`(0–1) — 走 `colorchannelmixer alpha`、保留 PNG 原 alpha。
-- `margin_top` / `right` / `bottom` / `left` — 四邊獨立 margin。
-- `visible_start/end_sec` — 兩者 0 = 全長顯示。
+**適用情境**：影片打 logo。`relative_scale` 讓浮水印在不同 source 解析度都保持比例。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `image_path` | `input/watermark.png` | 建議帶 alpha 的 PNG |
+| `placement` | `bottom_right` | `top_left` / `top_right` / `bottom_left` / `bottom_right` / `center` / `tile`（用真實 aspect 自動算 row × col） |
+| `relative_scale` | `0.15` (0.05–0.5) | 浮水印寬度 / frame width 比例。compile 時對 `ComposeVideo.target_width` 解析 |
+| `opacity` | `0.7` (0–1) | 走 `colorchannelmixer alpha`，保留 PNG 原 alpha |
+| `margin_top` / `right` / `bottom` / `left` | `20` 各邊 (0–1000) | 四邊獨立 margin（px） |
+| `visible_start_sec` / `visible_end_sec` | `0.0` / `0.0` | 可見性區間；兩者 `0` = 全長顯示 |
+
+**選用**：`overlays` — 上游 chain。
+
+**輸出**：`overlays`（`MF_COMPOSE_OPS`）。
+
+**範例**：右下角 12% 寬、60% 不透明的 logo bug → `placement=bottom_right, relative_scale=0.12, opacity=0.6, margin_bottom=20, margin_right=20`。
+
+---
 
 #### 🔥 Compose Burn Subtitle (`MF_ComposeBurnSubtitle`)
 
-v2 的旗艦新功能 — 字幕燒錄**進到 Compose pipeline 內**、 `字幕 + 浮水印 + 音訊 mix` 可一次 encode 完成。
+把 SRT 字幕燒**進到 Compose pipeline 內** — 字幕 + 浮水印 + 音訊 mix 一次 encode 完成。Widget 跟 `MF_BurnSubtitle` 完全一致（font dropdown、完整 ASS 樣式、alignment、margins、顏色），但少了 encoder 控制（那些在 `MF_ComposeVideo`）。
 
-設定 widget 跟 `MF_BurnSubtitle` 一致(font dropdown、完整 ASS 樣式、alignment、margins、顏色)。把 `.ttf` / `.otf` / `.ttc` 丟進 plugin 的 `font/` 目錄、dropdown 自動掃描。`fontTools` 自動偵測 TTF 內部 Family Name 給 libass(lazy-imported,建議 `pip install fontTools`)。
+**適用情境**：跟 `MF_BurnSubtitle` 一樣的場景、加上「同時還在套其他 Compose op」— 整條 chain 一次 encode。
 
-獨立的 `MF_BurnSubtitle`(在 Subtitle 分類) 仍保留,給「只燒字幕不疊其他 overlay」的場景。
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `srt_path` | `input/sample.srt` | UTF-8 SRT |
+| `font` … `back_color_hex` | (見 `MF_BurnSubtitle` 表) | 完全相同的 widget — `font_size` / `bold` / `italic` / `outline_*` / `border_style` / `back_color_hex` |
+| `alignment` / `margin_v` / `margin_l` / `margin_r` | `bottom_center (2)` / `20` / `50` / `50` | 同 `MF_BurnSubtitle` |
+
+**選用**：`overlays` — 上游 chain。
+
+**輸出**：`overlays`（`MF_COMPOSE_OPS`）。
+
+**說明**：獨立的 `MF_BurnSubtitle`（在 Subtitle 分類）仍保留，給「只燒字幕不疊其他 overlay」的場景。
+
+---
 
 #### 🔊 Compose Volume (`MF_ComposeVolume`)
 
 Append `volume=N` 音訊 filter op。
 
-- `scale`(FLOAT 0.0–2.0、預設 1.0) — `0.0` 靜音、`0.5` 半音量、`1.0` 原音、`2.0` 2× boost(注意 clipping)。
+**適用情境**：混 BGM 前先把 source 音壓低、或低音量錄音要 boost。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `scale` | `1.0` (0.0–2.0) | `0.0` 靜音、`0.5` 半音、`1.0` 原音、`2.0` 2× boost（注意 clipping） |
+
+**選用**：`audio_ops` — 上游 chain。
+
+**輸出**：`audio_ops`（`MF_COMPOSE_AUDIO_OPS`）。
+
+---
 
 #### 🎵 Compose Audio Mix (`MF_ComposeAudioMix`) **(dual-input audio)**
 
-把外部 BGM 跟 source audio 混音、或完全用外部音源取代 source。
+把外部 BGM 跟 source 音訊混音、或完全用外部音源取代 source。
 
-- `audio_path`(STRING) — BGM 檔案路徑、或 wire `audio` pin (AUDIO dict)。AUDIO dict 會 materialize 成 temp WAV、encode 完自動清理。
-- `keep_source`(BOOLEAN、預設 True) — `True` 走 `amix` 混 source+BGM;`False` 捨棄 source、純粹用 BGM。
-- `bgm_volume`(FLOAT 0.0–2.0、預設 0.3) — BGM 在 mix 前的音量衰減。預設 0.3 讓 voice 蓋過 BGM、podcast/vlog 慣例。
-- `duration` — `first` (輸出長度 = source audio) / `longest` / `shortest`。
+**適用情境**：podcast / vlog 加 BGM；旁白底下鋪 ambient sound。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `audio_path` | `input/bgm.mp3` | BGM 檔案路徑；接了 `audio` AUDIO pin 就隱藏 |
+| `keep_source` | `True` | `True` = `amix` 混 source + BGM；`False` = 捨棄 source、純粹用 BGM |
+| `bgm_volume` | `0.3` (0.0–2.0) | BGM 在 mix *前*的音量衰減。`0.3` 讓 voice 蓋過 — podcast/vlog 慣例 |
+| `duration` | `first` | `first`（= source 長度）/ `longest` / `shortest` |
+
+**選用輸入**：
+
+| 輸入 | 說明 |
+|---|---|
+| `audio` (AUDIO) | 接其他 node 的輸出 — materialize 成 temp WAV、encode 完自動清理。接了就覆蓋 `audio_path` |
+| `audio_ops` | 上游 chain |
+
+**輸出**：`audio_ops`（`MF_COMPOSE_AUDIO_OPS`）。
+
+---
 
 #### 🌅 Compose Audio Fade (`MF_ComposeAudioFade`)
 
-Append `afade` op (淡入 / 淡出)。
+Append `afade` op（淡入 / 淡出）。
 
-- `direction` — `in`(靜→全) 或 `out`(全→靜)。
-- `start_sec` / `duration_sec` — fade 視窗。`out` 用 `start_sec = video_duration - duration_sec`。
-- `curve` — 10 種 FFmpeg curve:`tri`(線性,預設) / `qsin`(quarter sine,聽起來最自然) / `esin` / `hsin` / `log` / `par` / `qua` / `cub` / `squ` / `cbr`。
+**適用情境**：音訊不要硬接 — intro 淡入、outro 淡出。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `direction` | `in` | `in` = 靜→全；`out` = 全→靜 |
+| `start_sec` | `0.0` | fade 開始時間。`out` 通常設 `video_duration - duration_sec` |
+| `duration_sec` | `2.0` (0.1–60) | fade 長度（秒） |
+| `curve` | `tri` | `tri`（線性）/ `qsin`（quarter sine、最自然）/ `esin` / `hsin` / `log` / `par` / `qua` / `cub` / `squ` / `cbr` |
+
+**選用**：`audio_ops` — 上游 chain。
+
+**輸出**：`audio_ops`（`MF_COMPOSE_AUDIO_OPS`）。
+
+---
 
 #### 📏 Compose Normalize (`MF_ComposeNormalize`)
 
-EBU R128 / streaming 級響度標準化(走 `loudnorm` 單 pass)。
+EBU R128 / streaming 級響度標準化（走 `loudnorm` 單 pass）。
 
-- `target_i`(LUFS、預設 -16) — Apple Podcasts / Spotify spoken-word 目標。YouTube / TikTok 用 -14、廣電 EBU R128 用 -23。
-- `target_tp`(dBTP、預設 -1.0) — true-peak 上限。-1 dBTP 避免在 consumer 端 clip。
-- `target_lra`(LU、預設 11.0) — loudness range、值越大保留越多動態。
-- `linear`(BOOLEAN、預設 True) — `True` 避免 dynamic range compression。設 False 會強制壓平到 target 範圍、犧牲動態。
+**適用情境**：上傳前要符合 streaming 平台的目標 LUFS（Spotify / YouTube / Apple Podcasts）。
 
-> **單 pass** 對 streaming 用途夠用。嚴格 EBU R128 broadcast 認證需要 two-pass(measure → 再套),MediaForge 目前不提供。
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `target_i` | `-16.0` LUFS (-70 到 -5) | 目標 integrated loudness。**-14** YouTube / TikTok / Spotify 音樂 · **-16** Apple Podcasts / Spotify spoken-word · **-23** 廣電 EBU R128 |
+| `target_tp` | `-1.0` dBTP (-9 到 0) | True-peak 上限。`-1` dBTP 避免 consumer 端 clip |
+| `target_lra` | `11.0` LU (1–50) | Loudness range；值越大保留越多動態 |
+| `linear` | `True` | `True` 避免 dynamic range compression。`False` 強制壓平到 target 範圍（嚴格 LUFS、犧牲動態） |
+
+**選用**：`audio_ops` — 上游 chain。
+
+**輸出**：`audio_ops`（`MF_COMPOSE_AUDIO_OPS`）。
+
+> **單 pass** 對 streaming 用途夠用。嚴格 EBU R128 broadcast 認證需要 two-pass（measure → 再套），MediaForge 目前不提供。
+
+---
 
 ### 從 Compose v1 遷移
 
@@ -482,18 +747,73 @@ EBU R128 / streaming 級響度標準化(走 `loudnorm` 單 pass)。
 
 ### `MediaForge/AI` — provider-agnostic
 
-Schema 標記為 **experimental** — `MF_AI_CONFIG` API 在 Phase 5 內可能改，直到 Whisper / Translate 在 4 種 provider 都 e2e 驗證完才會凍結。
+Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改，直到 Whisper / Translate 在所有 provider recipe 都 e2e 驗證完才會凍結。
 
 #### ⚙️ AI Config (`MF_AIConfig`)
-輸出 `AI_CONFIG` dict（`provider` / `base_url` / `api_key` / `model` / `device` / `extra`）。所有 AI 節點吃這個 — 一處切 provider 整批換。
+
+集中管理 provider 設定。輸出 `AI_CONFIG` dict、所有 AI node 吃這個 — 一處切換 provider / model / endpoint，整條 chain 跟著換。
+
+**適用情境**：所有 AI workflow。每個 backend 配一個 `MF_AIConfig`（例如一個給 Groq ASR、一個給 OpenAI translate）、扇出接給各 consumer。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `provider` | `openai_compatible` | `openai_compatible`（任意 `/v1/...` HTTP endpoint）/ `faster_whisper_local`（in-process） |
+| `base_url` | `https://api.openai.com/v1` | 尾端 `/` 會自動 strip |
+| `api_key` | `""` | log 只露前 4 字 + `***` |
+| `model` | `gpt-4o-mini` | 自由字串。Whisper 認出來不像 STT id 時會自動換預設（例如 `gpt-4o-mini` 被同時餵給 translate；Whisper 退回 `whisper-1`） |
+| `device` | `auto` | `cpu` / `cuda` / `auto` — 只 `faster_whisper_local` 用 |
+
+**輸出**：`ai_config`（AI_CONFIG dict）。
+
+**詳見 [AI Provider Recipes](#ai-provider-recipes)** — 有 OpenAI / Groq / Ollama / faster-whisper 可直接複貼的 `provider` / `base_url` / `model` 組合。
+
+---
 
 #### 🗣️ Whisper Transcribe (`MF_WhisperTranscribe`)
-音訊路徑或 `AUDIO` dict → SRT 文字。兩種 backend：
-- `openai_compatible`（任意 `/v1/audio/transcriptions` endpoint — OpenAI、Groq、本地 OpenAI-compat server）
-- `faster_whisper_local`（lazy import `faster-whisper`，本機 CPU/CUDA 跑）
+
+音訊檔或 in-memory `AUDIO` dict → SRT 文字（字串輸出、不是檔案）。Backend 由 `ai_config.provider` 決定。
+
+**適用情境**：從原始錄音生字幕（訪談、演講、podcast）。SRT 可以直接 wire 給 `MF_TranslateSubtitle` 跟 `MF_BurnSubtitle` 做端到端自動字幕。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `ai_config` | (必填 AI_CONFIG) | 接 `MF_AIConfig`。`provider` 決定 backend |
+| `audio_path` | `input/sample.mp4` | 任意有音軌的 media；FFmpeg 內部抽 mono 16 kHz WAV |
+| `language` | `zh` | ISO 639-1 hint（`en` / `ja` / `zh` / `ko` / ...）— 空 = 自動偵測 |
+
+**選用**：`audio`（AUDIO dict）— 接了就蓋過 `audio_path`。Client 端先下採樣到 16 kHz mono 讓各 backend 結果一致。
+
+**輸出**：`srt_text` STRING — 標準 SRT（多段），直接 wire 給 `MF_TranslateSubtitle.srt_text` 或 `MF_BurnSubtitle.srt_path`（要存檔的話先過 `MF_ConvertChinese` 給 `filename_prefix`）。
+
+**Backend 語意**（看 `ai_config.provider`）：
+- `openai_compatible` — POST 到 `<base_url>/audio/transcriptions`。支援 OpenAI、Groq、任意 OpenAI-API 相容 server。需要 `pip install requests`。
+- `faster_whisper_local` — lazy-import `faster-whisper`。吃 `ai_config.device`（`cpu` / `cuda` / `auto`）跟 `ai_config.model`（`tiny` / `base` / `small` / `medium` / `large-v3`）。第一次跑會下載到 HF cache。需要 `pip install faster-whisper`。
+
+**Model 自動替換**：`ai_config.model` 看起來不像 STT model id（例如同一個 `AI_CONFIG` 還要餵 Translate、所以是 `gpt-4o-mini`），Whisper 會自動換成 provider 預設 — OpenAI-compatible 用 `whisper-1`、faster-whisper-local 用 `base`。要明確指定 STT 模型（`whisper-large-v3` / `distil-large-v3` 等）直接填到 `ai_config.model`。
+
+**早期 raise**：source 沒音軌 → 友善錯誤。抽出 WAV < 256 bytes（靜音 / 損毀）→ 在送 backend 前先 raise。
+
+---
 
 #### 🌐 Translate Subtitle (`MF_TranslateSubtitle`)
-SRT + 目標語言 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`，prompt 帶批次行號對齊。
+
+SRT 文字 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`、用編號 batch prompt 保證對齊。
+
+**適用情境**：把 AI 生成的字幕在地化到其他語言。要簡↔繁 normalize 再 pair `MF_ConvertChinese`。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `ai_config` | (必填 AI_CONFIG) | 必須 `provider=openai_compatible`（沒有本地 LLM 模式 — 本機 LLM 把 OpenAI-compatible server URL 填到 base_url 即可） |
+| `srt_text` | `""` (multiline) | Wire 來自 `MF_WhisperTranscribe.srt_text` 或手填 |
+| `target_lang` | `繁體中文` | 自由字串 — `English` / `日本語` / `한국어` / `Español` / ... |
+| `system_prompt` | (預設 prompt、支援 `{target_lang}` 占位字串) | 改 prompt 控制語氣（technical / 口語 / formal） |
+| `batch_size` | `20` (1–200) | 每次 LLM call 行數。較小 = 對齊較穩但慢；較大 = 快但小模型可能漂掉 |
+
+**輸出**：`translated_srt` STRING。
+
+**行為**：每批用 `[1] ...` / `[2] ...` 編號送 prompt、response 用同 pattern parse。LLM 漏行 / 合行造成行數不對時 node **raise**（不會吐錯位的字幕）— 降 `batch_size` 或換更強的 model 重試。
+
+**推薦模型**：`gpt-4o-mini`（快又便宜、batch 30 內 OK）；`gpt-4o` / `llama-3.3-70b-versatile`（長段或專業詞彙更穩、可吃 batch 50+）。
 
 ## AI Provider Recipes
 

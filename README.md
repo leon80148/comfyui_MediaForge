@@ -176,145 +176,302 @@ To override per-node, just pick from the dropdown — existing workflows that ha
 
 ## Nodes (22)
 
-> **Dual-input note**: nodes marked **(dual-input)** below accept *either* a file path (existing `video_path` STRING widget) *or* an in-memory tensor (wire `frames` + `tensor_fps` + `audio` from VHS / AnimateDiff / `MF_LoadVideoFrames` / etc.). When tensor is wired, MediaForge writes a temp .mp4 internally and FFmpeg processes that. Path mode stays the default fast path — no quality loss when chaining MediaForge-to-MediaForge.
+Each node section below follows the same template: **purpose → when to use → required widgets → optional inputs → output → example**. Skim the widget tables to find the knob you need; fall back to the example for typical wiring.
+
+> **Dual-input note**: nodes marked **(dual-input)** accept *either* a file path (the `video_path` STRING widget) *or* an in-memory tensor (wire `frames` + `tensor_fps` + `audio` from VHS / AnimateDiff / `MF_LoadVideoFrames` / etc.). When tensor is wired, MediaForge writes a temp `.mp4` internally and FFmpeg processes that.
 >
-> The frontend extension `web/dual_input_lock.js` connects widget visibility to wiring state: the path widget hides when `frames` is wired (tensor mode), and `tensor_fps` only appears when needed. Path-mode-only widgets like BurnSubtitle's `keep_source_audio` hide in tensor mode.
+> The frontend extension `web/dual_input_lock.js` connects widget visibility to wiring state: the path widget hides when `frames` is wired, and `tensor_fps` only shows up in tensor mode. Path-mode-only widgets like `keep_source_audio` hide in tensor mode.
+>
+> **Output filename pattern**: every file-producing node uses `filename_prefix` + auto-counter (same pattern as ComfyUI core `SaveImage`). Each run writes `output/<prefix>_00001.mp4` → `_00002.mp4` → ... so repeated workflow runs never silently overwrite earlier results. Subdirectories in the prefix are fine (e.g. `MediaForge/subtitled`).
 
 ### `MediaForge/Subtitle`
 
 #### 🀄 Convert Chinese (`MF_ConvertChinese`)
 
-OpenCC simplified ↔ traditional Chinese conversion for any text or SRT. Four profiles (`s2twp` Taiwan-vocab default / `s2t` generic / `tw2sp` reverse / `t2s` reverse generic). Triple input shape: paste into `text` widget, wire upstream STRING, or read from `input_path`. Optional `filename_prefix` writes to `output/<prefix>_NNNNN.srt` (or `.txt`) with the same auto-counter pattern other producers use; extension auto-detected from `-->` presence in the converted text. Lazy-imports `opencc-python-reimplemented` — install with `pip install opencc-python-reimplemented`.
+OpenCC simplified ↔ traditional Chinese conversion for plain text or SRT files. Character-level mapping, so SRT timestamps / indices stay intact.
+
+**When to use**: cleaning up a simplified Chinese subtitle for a Taiwanese audience (`s2twp` does 词→詞 vocab swap on top of simp→trad), preprocessing crowdsourced SRTs, normalizing a mixed-encoding subtitle corpus.
+
+| Widget | Type | Default | Notes |
+|---|---|---|---|
+| `profile` | dropdown | `s2twp (簡→繁台灣詞庫)` | `s2twp` / `s2t` (generic simp→trad) / `tw2sp` (Taiwan→simp) / `t2s` (generic trad→simp) |
+| `text` | STRING (multiline) | `""` | Paste text *or* wire from upstream STRING (e.g. `MF_TranslateSubtitle.translated_srt`) |
+| `input_path` *(optional)* | STRING | `""` | Used only when `text` is empty. Auto-detects encoding (UTF-8 / GBK / BIG5 / UTF-16) via `charset-normalizer` if installed |
+| `filename_prefix` *(optional)* | STRING | `""` | Non-empty → write `output/<prefix>_NNNNN.srt` (or `.txt` if no `-->` present). Empty → in-memory only |
+
+**Output**: `(converted_text: STRING, saved_path: STRING)`. `saved_path` is empty when no `filename_prefix` was given.
+
+**Example chain**: `MF_TranslateSubtitle → MF_ConvertChinese (profile=s2twp) → MF_BurnSubtitle` — translate to simplified, normalize to traditional with Taiwan vocab, then burn.
+
+**Dependencies**: lazy-imports `opencc-python-reimplemented` (`pip install opencc-python-reimplemented`). `charset-normalizer` recommended for non-UTF-8 SRT files.
+
+---
 
 #### 🔥 Burn Subtitle (`MF_BurnSubtitle`) **(dual-input)**
 
-SRT → hard-burned overlay with full ASS style control. Colors are accepted as `#RRGGBB`; internally converted to ASS BGR-with-alpha.
+Hard-burn an SRT subtitle file into a video with full ASS style control. Colors are entered as `#RRGGBB` and converted to ASS BGR-with-alpha internally.
 
-**Output**: `filename_prefix` STRING (default `MediaForge/subtitled`) — ComfyUI `SaveImage`-style counter pattern; each run produces `output/<prefix>_00001.mp4` → `_00002.mp4` → ... so subsequent runs don't silently overwrite earlier results. Subdirectories OK; extension `.mp4` auto-appended.
+**When to use**: shipping a video with permanent (non-toggleable) subtitles — YouTube uploads, social clips, presentation captures. For overlays mixed with watermarks or BGM, prefer `MF_ComposeBurnSubtitle` (single re-encode for the whole chain).
 
-Styling knobs:
-- **Font**: `font` dropdown reads `<plugin>/font/*.ttf|.otf|.ttc`. Drop a TTF in `font/` and pick it from the dropdown — MediaForge lazy-imports `fontTools` to auto-extract the TTF's internal Family Name for libass. Falls back to the filename stem if `fontTools` isn't installed (`pip install fontTools` recommended).
-- **Weight / style**: `bold` + `italic` booleans, `letter_spacing` FLOAT (ASS Spacing in pixels).
-- **Outline / shadow / box**: `outline_color_hex` + `outline_width` + `shadow_depth` + `border_style` (1=outline, 3=box with semi-transparent `back_color_hex`).
-- **Position**: `alignment` dropdown (9 named positions: `bottom_center (2)`, `top_right (9)`, etc.) + `margin_v` + `margin_l` + `margin_r`. Subtitle effective width = play area − `margin_l` − `margin_r` (so asymmetric margins push the text box left / right while controlling its width).
+**Required widgets** (organized top-to-bottom in the node body):
 
-Optional advanced inputs: `video_path` (file path, fallback when no tensor wired), `tensor_fps` (only used when `frames` is wired), `keep_source_audio` (BOOLEAN, default `True` — when both an external `audio` pin and the source video carry audio, `amix` both tracks; set to `False` for the old replace-source-with-external behavior), `target_fps` (output fps override; `0.0` = sync to source — FLOAT to support cinematic rates like 23.976 / 29.97 / 59.94).
+| Group | Widget | Default | Notes |
+|---|---|---|---|
+| Source | `video_path` | `input/sample.mp4` | Hidden in tensor mode |
+| Source | `srt_path` | `input/sample.srt` | UTF-8 SRT file |
+| Output | `filename_prefix` | `MediaForge/subtitled` | Auto-counter → `output/<prefix>_NNNNN.mp4` |
+| Encode | `codec` | smart (NVENC if available, else libx264) | Same catalog as SaveVideoFrames / ComposeVideo |
+| Encode | `crf` | `18` (0–51) | 0 lossless, 18 visually lossless, 23 standard, 28 acceptable |
+| Encode | `preset` | `medium` | `ultrafast` … `veryslow` |
+| Font | `font` | `msjh.ttc` if present, else first in `font/` | Reads `<plugin>/font/*.ttf|.otf|.ttc`; `fontTools` auto-detects the Family Name |
+| Font | `font_size` | `24` (8–150) | px |
+| Font | `font_color_hex` | `#FFFFFF` | Hex RGB |
+| Font | `bold` / `italic` | `True` / `False` | ASS Bold / Italic flags |
+| Font | `letter_spacing` | `0.0` (0–20) | ASS Spacing in px |
+| Outline | `outline_color_hex` | `#000000` | |
+| Outline | `outline_width` | `2` (0–10) | px |
+| Outline | `shadow_depth` | `1` (0–10) | px |
+| Outline | `border_style` | `1` | `1` = outline+shadow, `3` = opaque box with `back_color_hex` |
+| Outline | `back_color_hex` | `#000000` | Only visible when `border_style=3` |
+| Position | `alignment` | `bottom_center (2)` | 9 named positions (numpad layout 1–9) |
+| Position | `margin_v` | `20` (0–500) | Vertical margin from edge in px |
+| Position | `margin_l` / `margin_r` | `50` / `50` (0–1000) | Effective subtitle width = play area − `margin_l` − `margin_r` |
+
+**Optional inputs**:
+
+| Input | Type | Default | When used |
+|---|---|---|---|
+| `frames` | IMAGE | — | Wire from VHS / AnimateDiff / LoadVideoFrames; hides `video_path` |
+| `tensor_fps` | FLOAT | `30.0` | fps of the temp `.mp4` written from `frames` |
+| `audio` | AUDIO | — | External audio pin; merged with source audio by default |
+| `keep_source_audio` | BOOLEAN | `True` | Path mode + `audio` pin + source has audio → `amix` both. `False` = external replaces source |
+| `target_fps` | FLOAT | `0.0` | `0` = inherit source; FLOAT supports 23.976 / 29.97 / 59.94 cinematic rates |
+
+**Output**: `final_video_path` STRING.
+
+**Example**: `MF_SelectVideo → MF_BurnSubtitle (font=msjh.ttc, font_size=28, alignment=bottom_center (2), outline_width=2)` for a typical 1080p YouTube clip.
+
+---
 
 ### `MediaForge/Video`
 
 #### 📂 Select Video (`MF_SelectVideo`)
 
-Dropdown picker for `ComfyUI/input/` video files. Walks subdirectories, lists `.mp4 / .mov / .mkv / .webm / .avi / .m4v / .mpg / .mpeg / .ts`. Outputs `STRING video_path` — wire to any file-consumer node. `IS_CHANGED` hashes file mtime so the cache invalidates when you replace the file with a same-named version.
+Dropdown picker for video files under `ComfyUI/input/`. Walks subdirectories recursively, lists `.mp4 / .mov / .mkv / .webm / .avi / .m4v / .mpg / .mpeg / .ts`.
+
+**When to use**: any time you need to pick an input video without typing the path. Wire its `video_path` output into any file-consumer node.
+
+| Widget | Type | Notes |
+|---|---|---|
+| `video` | dropdown | All matching files under `input/` (rel paths, `/`-normalized). Placeholder shown when empty |
+
+**Output**: `video_path` STRING — absolute path resolved at runtime via `folder_paths.get_input_directory()`.
+
+**Notes**: `IS_CHANGED` uses file mtime, so replacing a file with new content under the same name invalidates downstream caches automatically. Refresh the browser to rescan after adding a new file to `input/`.
+
+---
 
 #### 🔁 Loop Video (`MF_LoopVideo`) **(dual-input)**
 
-Loop a video to a target duration. Three modes for different repetition aesthetics, optional speed change and reversal.
+Loop a video to a target duration with three seam-handling strategies. Optional speed change and reversal.
+
+**When to use**: padding a short clip to a specific length (intro loops, ambient B-roll, social-media squares that need 15 s / 30 s / 60 s versions of the same clip).
 
 **Loop modes**:
-- **`strict`** — hard repeat-and-cut to exact duration (no seam smoothing). Fastest and most predictable.
-- **`ping_pong`** — A→A-reversed→A→A-reversed (smooth back-and-forth, no visible seam).
-- **`crossfade`** — chained `xfade` between repetitions; capped at 50 loops; auto-falls back to `strict` if `crossfade_sec >= effective clip duration` (graceful degradation, not an error).
+- `strict` — hard repeat-and-cut to exact duration. Fastest, deterministic, visible seam at each repeat.
+- `ping_pong` — A → A-reversed → A → A-reversed (seamless back-and-forth, doubles effective length).
+- `crossfade` — chained `xfade` between repetitions (capped at 50 loops). Auto-falls back to `strict` if `crossfade_sec >= clip duration`.
 
-**Core settings**:
-- `target_duration_sec` (FLOAT, default 30.0) — output duration in seconds.
-- `crossfade_sec` (FLOAT, default 1.0) — overlap between repetitions; only used in `crossfade` mode.
-- `speed` (FLOAT 0.25–4.0, default 1.0) — playback speed (uses `setpts` + `atempo` chain; `atempo` is automatically chained for out-of-range values).
-- `reverse` (BOOLEAN) — play the source backwards before looping.
-- `keep_audio` (BOOLEAN, default True) + `audio_volume` (FLOAT 0.0–1.0, default 1.0) — attenuate the muxed audio. `0.0` mutes, `0.5` halves, `1.0` keeps original.
+**Required widgets**:
 
-**Encoding**: `codec` / `crf` (default 18) / `preset` (default `medium`) — `codec` defaults to GPU NVENC when available. See [Smart GPU codec default](#smart-gpu-codec-default).
+| Widget | Default | Range | Notes |
+|---|---|---|---|
+| `video_path` | `input/sample.mp4` | — | Hidden in tensor mode |
+| `filename_prefix` | `MediaForge/looped` | — | → `output/<prefix>_NNNNN.mp4` |
+| `target_duration_sec` | `30.0` | 0.1–36000 | Output length in seconds |
+| `loop_mode` | `strict` | — | `strict` / `ping_pong` / `crossfade` |
+| `crossfade_sec` | `1.0` | 0.1–10 | Used only in `crossfade` mode |
+| `speed` | `1.0` | 0.25–4.0 | Uses `setpts` + auto-chained `atempo` |
+| `reverse` | `False` | — | Pre-reverse the source before looping |
+| `keep_audio` | `True` | — | Mute audio if `False` |
+| `audio_volume` | `1.0` | 0.0–1.0 | Attenuate kept audio; `0.0` mutes |
+| `codec` / `crf` / `preset` | smart / `18` / `medium` | — | Same encoder family as other producers |
 
-**Output**: `filename_prefix` (default `MediaForge/looped`) → `output/MediaForge/looped_<NNNNN>.mp4` (auto-counter).
+**Optional inputs**: `frames` / `tensor_fps` / `audio` (dual-input triplet).
 
-**Hard limits**: FFmpeg `loop` filter buffers up to `MAX_LOOP_FRAMES = 32767` (INT16). Very long sources at high fps will hit this — use `crossfade` mode (xfade chain has no single buffer) or reduce fps.
+**Output**: `final_video_path` STRING.
+
+**Limits**: FFmpeg `loop` filter buffers up to `MAX_LOOP_FRAMES = 32767` (INT16). Long sources at high fps hit this — switch to `crossfade` mode (xfade chain has no single buffer) or lower fps.
+
+**Example**: 5-sec clip → 60-sec ambient loop with seamless transitions → `loop_mode=crossfade, target_duration_sec=60, crossfade_sec=0.5`.
+
+---
 
 #### 📥 Load Video Frames (`MF_LoadVideoFrames`)
 
-FFmpeg-decode any container/codec → `IMAGE` batch `[B,H,W,C] float32 [0,1]` + `AUDIO` dict (`{'waveform': Tensor[B,C,T], 'sample_rate': int}`) + fps + metadata JSON. Rotation-aware (portrait phone videos display correctly), memory-bounded. Optional `target_fps` resample, `max_frames` cap.
+FFmpeg-decode any container/codec → `IMAGE` batch + `AUDIO` dict + metadata. Replaces VHS's opencv decode for hard-to-decode formats (AV1, HEVC 10-bit, ProRes, VP9).
+
+**When to use**: pulling a video into a tensor-based workflow (frame-by-frame transformation, AI inference, image-batch operations) where you need both video frames and audio in canonical ComfyUI shape.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `video_path` | `input/sample.mp4` | |
+| `target_fps` | `0.0` (= keep original) | `>0` runs `fps` filter to resample |
+| `max_frames` | `0` (= unbounded) | Useful for preview / memory cap |
+| `load_audio` | `True` | Set `False` to skip audio decode |
+| `audio_sr` | `0` (= keep original) | Override sample rate if needed |
+
+**Outputs** (7 ports):
+
+| Output | Type | Shape / meaning |
+|---|---|---|
+| `frames` | IMAGE | `[B, H, W, C]` float32 [0, 1] |
+| `audio` | AUDIO | `{'waveform': Tensor[B, C, T], 'sample_rate': int}` or `None` if no audio stream |
+| `fps` | FLOAT | Effective fps (after `target_fps` resample) |
+| `width` / `height` | INT | Display dimensions (rotation-aware) |
+| `frame_count` | INT | Number of decoded frames |
+| `metadata_json` | STRING | Full probe metadata as JSON |
+
+**Notes**: rotation-aware — portrait phone videos render correctly. Memory bounded by `max_frames`. When source has no audio stream, `audio` is `None` (not a fake silent track — that would mislead `MF_SaveVideoFrames`'s `-shortest` mux).
+
+---
 
 #### 📤 Save Video Frames (`MF_SaveVideoFrames`)
 
-`IMAGE` batch (+ optional `AUDIO` dict) → encoded video file. The canonical tensor→file producer; pairs with `MF_LoadVideoFrames` for symmetric roundtrip.
+Tensor → encoded video file. The canonical tensor→file producer; pairs with `MF_LoadVideoFrames` for symmetric roundtrip (PSNR > 38 dB).
 
-**Encode modes** (single dropdown, mutually exclusive):
-- **`crf` (default)** — constant quality (lower number = higher quality / bigger file). `crf` 0=lossless, 18=visually lossless, 23=libx264 standard, 28=acceptable, 51=worst.
-- **`bitrate`** — target a specific `bitrate_kbps` (e.g. 4000 = 4 Mbps).
-- **`target_size`** — auto-compute bitrate to hit a `target_size_mb` ceiling (two-pass-style estimate from duration).
+**When to use**: writing the result of a tensor-based pipeline back to disk with broadcast-grade codec control.
 
-**Codecs** (auto-corrects container extension):
-- H.264 / HEVC / AV1 / ProRes — all CPU + NVENC variants (`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`) auto-detected.
-- ProRes → `.mov` (other codecs → `.mp4`). The `prores_ks` encoder uses `yuv422p10le` pix_fmt for 10-bit precision.
+| Widget | Default | Notes |
+|---|---|---|
+| `frames` | (required IMAGE) | `[B, H, W, C]` float32 [0, 1] |
+| `filename_prefix` | `MediaForge/video` | Extension auto-picked per codec (.mp4 / .mov) |
+| `fps` | `30.0` | Source fps for the rawvideo pipe — use `LoadVideoFrames.fps` for roundtrip |
+| `codec` | smart default | H.264 / HEVC / AV1 / ProRes + NVENC variants |
+| `encode_mode` | `crf` | `crf` / `bitrate` / `target_size` |
+| `crf` | `18` (0–51) | Used in `crf` mode. 0 lossless, 18 visually lossless, 23 standard, 28 acceptable |
+| `bitrate_kbps` | `4000` | Used in `bitrate` mode (e.g. `4000` = 4 Mbps) |
+| `target_size_mb` | `8.0` | Used in `target_size` mode — auto-computes bitrate from duration |
+| `preset` | `medium` | `ultrafast` … `veryslow` |
+| `pix_fmt_override` | `""` | Leave empty for codec default (yuv420p for x264/x265, yuv422p10le for ProRes) |
 
-**Tensor → fps**: `fps` controls the source frame rate of the rawvideo pipe. For roundtrip from `MF_LoadVideoFrames`, use `meta_fps` from its output.
+**Optional**: `audio` AUDIO dict — muxed into the output if provided.
 
-**Output**: `filename_prefix` → `output/<prefix>_<NNNNN>.<ext>` (ext auto-picked).
+**Output**: `final_video_path` STRING.
+
+**Notes**: ProRes outputs `.mov` (`prores_ks` uses `yuv422p10le` for 10-bit precision). All other codecs → `.mp4`. NVENC variants use `-cq` instead of `-crf` internally but the UI is unified.
+
+---
 
 #### ✂️ Trim by Ranges (`MF_TrimByRanges`) **(dual-input)**
 
-Cut a video by time ranges. The primary use case is auto-cutting silence (wire from `MF_DetectSilence`), but accepts raw range JSON too for manual edits.
+Cut a video by time ranges. Primary use case: auto-remove silence (wire from `MF_DetectSilence`). Also accepts manual JSON for hand edits.
 
-**Range input** (either, mutually exclusive):
-- `ranges` (pin) — `SILENCE_RANGES` list `[[start_sec, end_sec], ...]` from upstream (typically `MF_DetectSilence`).
-- `ranges_json` (STRING widget, JSON literal) — manual override, e.g. `[[1.5, 3.0], [10.0, 12.5]]`.
+**When to use**: removing dead air from a lecture / podcast / livestream recording; keeping only highlighted segments from raw footage.
 
-**Modes**:
-- **`keep`** — keep the ranges, drop everything else. Empty ranges → raises (nothing to keep, refuse to produce empty output).
-- **`remove`** — drop the ranges, keep everything else. Empty ranges → identity (no-op, returns full clip).
+**Range input** (mutually exclusive — pin takes priority):
+- `ranges` (pin, optional) — `SILENCE_RANGES` from `MF_DetectSilence`.
+- `ranges_json` (STRING widget, multiline) — manual JSON, e.g. `[[1.5, 3.0], [10.0, 12.5]]`.
 
-**Seam handling**:
-- `crossfade_sec` (FLOAT, default 0.0) — fade between adjacent kept segments via chained `xfade`. Set to 0 for hard cuts.
+| Widget | Default | Notes |
+|---|---|---|
+| `video_path` | `input/sample.mp4` | |
+| `filename_prefix` | `MediaForge/trimmed` | |
+| `mode` | `remove` | `remove` = drop ranges, keep rest. `keep` = keep ranges, drop rest |
+| `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | Used when `ranges` pin not wired |
+| `crossfade_sec` | `0.0` (0–2) | `xfade` between adjacent kept segments; `0` = hard cut |
+| `codec` / `crf` / `preset` | smart / `18` / `medium` | |
 
-**Encoding**: same `codec` / `crf` / `preset` triplet as other encode nodes; GPU NVENC default.
+**Mode semantics**:
+- `keep` + empty ranges → **raises** (refuses to produce an empty output).
+- `remove` + empty ranges → **identity** (returns full clip unchanged).
 
-**Output**: `filename_prefix` (default `MediaForge/trimmed`) → `output/<prefix>_<NNNNN>.mp4`.
+**Audio sync**: video and audio segments are interleaved-concat (`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`), so audio stays aligned across cuts. Sources without audio are auto-handled with silence pads.
 
-**Audio handling**: audio and video are interleaved-concat (`[v0][a0][v1][a1]...concat=n=N:v=1:a=1`) so audio stays in sync across cut boundaries. Sources missing audio are auto-handled.
+**Example chain**: `MF_LoadVideoFrames → MF_DetectSilence (noise_db=-30) → MF_TrimByRanges (mode=remove, crossfade_sec=0.1)` for podcast pre-edit with subtle fade between segments.
+
+---
 
 #### 🔗 Concat Videos (`MF_ConcatVideos`) **(dual-input, prepend semantics)**
 
-Stitch multiple video files end-to-end at the path level. Two strategies for different speed/compatibility tradeoffs.
+Stitch multiple video files end-to-end at the path level. Two strategies for speed vs. compatibility trade-off.
+
+**When to use**: joining clips from the same camera (use `copy` for instant stream-copy), stitching footage with different codecs or resolutions (use `transcode` with optional transition).
 
 **Modes**:
-- **`copy`** — FFmpeg concat demuxer, no re-encode (stream copy). Lightning fast but requires inputs to share codec / resolution / fps / pix_fmt. Best for stitching clips out of the same camera or pre-normalized assets.
-- **`transcode`** — `filter_complex` graph with optional transition. Always works, always re-encodes. Required when sources differ in codec / dimensions / fps.
+- `copy` — FFmpeg concat demuxer, no re-encode. Lightning fast. **Requires** identical codec / resolution / fps / pix_fmt across all inputs.
+- `transcode` — `filter_complex` graph with optional `xfade` transition. Always works; always re-encodes.
 
-**Transitions** (`transcode` mode only, `transition_sec > 0`):
-- `fade`, `wipeleft`, `wiperight`, `slideleft`, `slideright`, `circleopen`, `circleclose`, `dissolve` — FFmpeg's `xfade` built-ins.
+**Required widgets**:
 
-**Inputs**:
-- `video_paths` (STRING widget, multiline) — one absolute path per line. ≥ 2 required.
-- `frames` (IMAGE pin, optional) — when wired, materialised as path[0] (prepended); `video_paths` lines shift to path[1..N]. Needs ≥ 1 path entry to reach the 2-clip minimum.
+| Widget | Default | Notes |
+|---|---|---|
+| `video_paths` | multiline — `input/clip1.mp4\ninput/clip2.mp4` | One path per line; ≥ 2 entries required |
+| `filename_prefix` | `MediaForge/concat` | |
+| `mode` | `transcode` | `copy` (fast) / `transcode` (safe) |
+| `transition_sec` | `0.0` (0–5) | xfade duration, only in transcode mode; `0` = hard cut |
+| `transition_type` | `fade` | `fade` / `wipeleft` / `wiperight` / `slideleft` / `slideright` / `circleopen` / `circleclose` / `dissolve` |
+| `fps` / `width` / `height` | `30.0` / `1920` / `1080` | Target dims for transcode mode |
+| `crf` / `codec` / `preset` | `18` / smart / `medium` | Transcode mode only |
 
-**Transcode settings**: `fps` / `width` / `height` / `crf` / `codec` / `preset`. GPU NVENC default codec.
+**Optional inputs**: `frames` / `tensor_fps` / `audio` — when wired, the tensor becomes path[0] (prepended); `video_paths` lines shift to path[1..N]. You still need ≥ 1 path entry to reach the 2-clip minimum.
 
-**Output**: `filename_prefix` (default `MediaForge/concat`) → `output/<prefix>_<NNNNN>.mp4`.
+**Output**: `final_video_path` STRING.
 
-**Behavior notes**: inputs missing audio are auto-filled with `anullsrc` silence (transcode mode); the demuxer mode refuses on audio-stream mismatch.
+**Notes**: in `transcode` mode, inputs missing audio are auto-padded with `anullsrc` silence. In `copy` mode, audio-stream mismatch causes a hard fail — pre-normalize with `MF_SaveVideoFrames` if mixing sources.
+
+---
 
 ### `MediaForge/Analysis`
 
 #### 🔍 Probe Media (`MF_ProbeMedia`) **(dual-input)**
 
-`ffprobe` wrapper that returns structured metadata for any media file. Pure read, no FFmpeg encode invoked.
+`ffprobe` wrapper returning structured metadata. Pure read, no FFmpeg encode invoked.
+
+**When to use**: feeding source dimensions into a Compose / Save chain (or just letting the downstream node inherit them via `target_*=0`); inspecting an unfamiliar file before deciding how to process it.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `media_path` | `input/sample.mp4` | Hidden in tensor mode |
+| `frames` / `tensor_fps` / `audio` *(optional)* | — | Dual-input triplet (probes the temp `.mp4`) |
 
 **Outputs** (6 ports):
-- `duration_sec` (FLOAT) — **video stream's** duration. Distinct from container duration (they can differ in muxes like MKV); MediaForge uses video duration as the authoritative timeline.
-- `width` / `height` (INT) — **display dimensions** (rotation-aware). For portrait phone videos with rotation metadata, swap happens here so downstream Compose / Save uses the correct orientation.
-- `fps` (FLOAT) — parsed from `r_frame_rate` (e.g. `30000/1001` → 29.97).
-- `video_codec` (STRING) — e.g. `"h264"`, `"hevc"`, `"av1"`, `""` if no video stream.
-- `audio_codec` (STRING) — e.g. `"aac"`, `"opus"`, `""` if no audio stream.
 
-Pairs naturally with `MF_LoadVideoFrames` (probe first for dimensions, then load) and the Compose pipeline (feed dimensions to `MF_ComposeVideo` — or leave its `target_*` at 0 to inherit automatically).
+| Output | Type | Notes |
+|---|---|---|
+| `duration_sec` | FLOAT | Container `format.duration` — use this as the authoritative timeline |
+| `width` / `height` | INT | **Display** dimensions (rotation-aware); portrait phone videos swap here |
+| `fps` | FLOAT | Parsed from `r_frame_rate` (`30000/1001` → 29.97) |
+| `video_codec` | STRING | `"h264"`, `"hevc"`, `"av1"`, `""` if no video stream |
+| `audio_codec` | STRING | `"aac"`, `"opus"`, `""` if no audio stream |
+
+**Example**: probe an unknown clip, then feed `width` / `height` into a `MF_ComposeVideo` workflow (or just leave `target_*=0` and skip the probe — Compose probes internally with the same logic).
+
+---
 
 #### 🤫 Detect Silence (`MF_DetectSilence`)
 
-FFmpeg `silencedetect` wrapper → `SILENCE_RANGES` list (`[[start_sec, end_sec], ...]`). The canonical upstream for `MF_TrimByRanges` in lecture-timelapse / podcast pre-edit / streaming-highlight workflows.
+FFmpeg `silencedetect` wrapper → `SILENCE_RANGES` list. Canonical upstream for `MF_TrimByRanges`.
 
-**Tunables**:
-- `noise_db` (FLOAT, default -30.0) — anything below this dB level for ≥ `min_duration_sec` counts as silence. Less negative (-20) = more aggressive; more negative (-40) = stricter.
-- `min_duration_sec` (FLOAT, default 1.5) — minimum silence length to register a range. Below this is treated as natural pause and ignored.
+**When to use**: pre-edit for lectures / podcasts / livestream recordings to remove dead air; identifying speech segments for downstream ASR.
 
-**Output**: `ranges` (SILENCE_RANGES). Empty list = no silence found; downstream `MF_TrimByRanges` treats empty + `mode="remove"` as identity (full clip preserved).
+| Widget | Default | Notes |
+|---|---|---|
+| `audio_source` | `input/sample.mp4` | Path to video or audio file; ignored if `audio` pin wired |
+| `noise_db` | `-30.0` (-90 to 0) | dB threshold; less negative (-20) = more aggressive, more negative (-40) = stricter |
+| `min_duration_sec` | `0.5` (0.05–60) | Minimum silence length to register a range; shorter gaps treated as natural pauses |
+
+**Optional**: `audio` AUDIO dict — wired-in audio source; takes priority over `audio_source` path.
+
+**Outputs** (3 ports):
+
+| Output | Type | Notes |
+|---|---|---|
+| `ranges` | SILENCE_RANGES | `[[start_sec, end_sec], ...]` — wire to `MF_TrimByRanges.ranges` |
+| `ranges_json` | STRING | Same data as JSON string (for debugging / preview) |
+| `count` | INT | Number of detected silence regions |
+
+**Tuning**: typical podcast — `noise_db=-30, min_duration_sec=0.5`. Lecture recording with hum / fan noise — try `noise_db=-25, min_duration_sec=1.0`. Music with quiet passages — go stricter: `noise_db=-50, min_duration_sec=2.0`.
 
 ### `MediaForge/Compose` — single-encode pipeline (video overlays + audio chain)
 
@@ -330,37 +487,63 @@ The Compose pipeline gives you **one ffmpeg encode** for any combination of over
 
 The **minimal workflow** is 2 nodes: drop a single overlay node, wire it into `ComposeVideo`. Skip the audio chain entirely for video-only work, or vice versa.
 
+> **Chain semantics**: each overlay / audio op node *appends* to the upstream chain. Wire the previous op's output into this node's `overlays` (or `audio_ops`) optional input; if you leave it unwired, you start a fresh chain. List order = z-order for overlays; for audio it's the filter order.
+
 #### 🎬 Compose Video (`MF_ComposeVideo`) **(dual-input)**
 
 The endpoint of every Compose workflow — replaces the older `ComposeStart` + `ComposeFinalize` two-node pattern with one node.
 
-**Settings**:
-- `video_path` (STRING) + dual-input `frames` / `tensor_fps` / `audio` — source media.
-- `target_fps` (FLOAT, **default 0.0**) + `target_width` (INT, default 0) + `target_height` (INT, default 0) — `0` = **inherit from source** (probed via ffprobe + rotation-aware dims). Most workflows leave these at 0.
-- `codec` / `crf` / `preset` — `codec` smart-defaults to `h264_nvenc` when NVENC is available, else `libx264`. NVENC variants (`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`) auto-detected. CRF range 0–51 (default 18 = visually lossless).
-- `keep_audio` (BOOLEAN, default True) — when no audio chain is wired, preserve the source's audio track.
+**When to use**: whenever you have **2+ effects** to apply (overlay + subtitle, watermark + BGM mix, text + audio fade…). For a one-shot single effect, the standalone nodes (`MF_BurnSubtitle`, `MF_LoopVideo`) are usually simpler.
 
-**Optional chain inputs**:
-- `overlays` (`MF_COMPOSE_OPS`) — chain output from any combination of `ComposeOverlayText` / `ComposeOverlayImage` / `ComposeWatermark` / `ComposeBurnSubtitle`. List order = z-order (later = on top).
-- `audio_ops` (`MF_COMPOSE_AUDIO_OPS`) — chain output from `ComposeVolume` / `ComposeAudioMix` / `ComposeAudioFade` / `ComposeNormalize`. Order = filter chain order.
+**Required widgets**:
 
-**Output**: `filename_prefix` (default `MediaForge/composed`) → `output/<prefix>_<NNNNN>.mp4` (or `.mov` for ProRes). Returns the path + the compiled `filter_complex_script` (debug aid). Emits `ui.images` metadata for API `/history` exposure.
+| Widget | Default | Notes |
+|---|---|---|
+| `video_path` | `input/sample.mp4` | Hidden in tensor mode |
+| `filename_prefix` | `MediaForge/composed` | → `output/<prefix>_NNNNN.mp4` (or `.mov` for ProRes) |
+| `target_fps` | `0.0` (0–240) | `0` = inherit from source (probed) |
+| `target_width` | `0` (0–7680) | `0` = inherit display width (rotation-aware) |
+| `target_height` | `0` (0–4320) | `0` = inherit display height |
+| `codec` / `crf` / `preset` | smart / `18` / `medium` | NVENC variants auto-detected |
+| `keep_audio` | `True` | When no `audio_ops` chain wired, preserve source audio |
+
+**Optional inputs**:
+
+| Input | Type | Notes |
+|---|---|---|
+| `frames` / `tensor_fps` / `audio` | dual-input | Same triplet as other dual-input nodes |
+| `overlays` | `MF_COMPOSE_OPS` | Wire from `ComposeOverlayText` / `OverlayImage` / `Watermark` / `BurnSubtitle` chain head |
+| `audio_ops` | `MF_COMPOSE_AUDIO_OPS` | Wire from `ComposeVolume` / `AudioMix` / `AudioFade` / `Normalize` chain head |
+
+**Outputs**: `(final_video_path: STRING, filter_complex_script: STRING)` — the second is the compiled filter graph (useful for debugging). Emits `ui.images` for API `/history` exposure.
 
 **Behavior**: auto-switches to `-filter_complex_script <tempfile>` when the compiled graph exceeds 6000 chars (avoids Windows command-line length limits).
+
+---
 
 #### ✏️ Compose Overlay Text (`MF_ComposeOverlayText`)
 
 Append a `drawtext` op spec into the overlay chain.
 
-**Widgets**:
+**When to use**: titles, lower-thirds, episode markers, animated text reveals. For SRT-driven subtitles, use `MF_ComposeBurnSubtitle` instead.
 
-- `text` (multiline STRING) — passed via `textfile=` at compile time to safely escape apostrophes, percents, newlines.
-- `x_expr` / `y_expr` — FFmpeg drawtext **position expressions**. Strings, not numbers — see the expression reference below.
-- `font` — dropdown of `.ttf` / `.otf` / `.ttc` files in plugin's `font/` directory (same source as `MF_BurnSubtitle`). Defaults to `msjh.ttc` (Microsoft JhengHei) when present, otherwise the first font alphabetically. When `font/` is empty, ComposeVideo falls back to a system font (Arial / Helvetica / DejaVu depending on OS). To add a custom font, drop the file into `font/` and refresh the browser.
-- `fontsize` / `fontcolor` / `borderw` / `bordercolor` — standard styling.
-- `effect` — animation preset (`none` / `slide_in_left|right|top|bottom` / `marquee_horizontal`). When not `none`, treats `x_expr` / `y_expr` as the **final anchor position** and wraps a motion expression around it. Default `none` = no animation (backward compatible).
-- `effect_duration` (FLOAT, default 1.5) — `slide_in_*`: seconds to animate in; `marquee_horizontal`: seconds per full scroll cycle. Ignored when `effect=none`.
-- `start_sec` / `end_sec` — temporal **visibility** window. Both 0 = always visible. (Note: `effect_duration` is measured from `start_sec` — animation begins when the text appears.)
+| Widget | Default | Notes |
+|---|---|---|
+| `text` | `Hello MediaForge` (multiline) | Passed via `textfile=` so apostrophes / `%` / newlines are safe |
+| `x_expr` | `(w-text_w)/2` | FFmpeg drawtext **position expression** (string, not number) |
+| `y_expr` | `h-text_h-40` | 40 px above bottom edge — typical lower-third |
+| `font` | `msjh.ttc` if present, else first alphabetically | Dropdown of `.ttf` / `.otf` / `.ttc` in plugin `font/`. Empty `font/` → ComposeVideo falls back to a system font (Arial / Helvetica / DejaVu by OS) |
+| `fontsize` | `36` (8–300) | px |
+| `fontcolor` | `white` | FFmpeg color name *or* hex (`#RRGGBB`) |
+| `borderw` | `2` (0–20) | Outline thickness in px |
+| `bordercolor` | `black` | Outline color |
+| `effect` | `none` | `none` / `slide_in_left|right|top|bottom` / `marquee_horizontal` |
+| `effect_duration` | `1.5` (0.1–60) | `slide_in_*`: secs to animate; `marquee_horizontal`: secs per full cycle |
+| `start_sec` / `end_sec` | `0.0` / `0.0` | Visibility window. Both `0` = always visible |
+
+**Optional**: `overlays` — upstream chain. Leave unwired to start a fresh chain.
+
+**Output**: `overlays` (`MF_COMPOSE_OPS`) — append to this output's downstream node.
 
 ##### `x_expr` / `y_expr` expression language
 
@@ -409,67 +592,149 @@ The animation timeline is relative to `start_sec`: a `slide_in_left` with `start
 
 For motion not covered by the presets (vertical bob, easing curves, fade), drop back to writing `x_expr` / `y_expr` by hand with `effect=none`.
 
+---
+
 #### 🖼️ Compose Overlay Image (`MF_ComposeOverlayImage`)
 
-Append a generic `overlay` op for arbitrary image placement.
+Append a generic `overlay` op for arbitrary image placement (absolute position + absolute scale). For preset-based watermarking, prefer `MF_ComposeWatermark`.
 
-- `image_path` — PNG / JPG / etc.
-- `x_expr` / `y_expr` — absolute or expression-based position.
-- `scale_w` — width in pixels (0 = original size, height auto-scaled by aspect ratio).
-- `start_sec` / `end_sec` — temporal window.
+**When to use**: a single graphic at a specific position (e.g. logo bug, sticker, lower-third nameplate).
+
+| Widget | Default | Notes |
+|---|---|---|
+| `image_path` | `input/overlay.png` | PNG / JPG / etc. |
+| `x_expr` / `y_expr` | `10` / `10` | Position expression — supports `W`, `H`, `w`, `h`, `t`, etc. |
+| `scale_w` | `0` (0–7680) | Width in px; `0` = original size (height auto-scales by aspect ratio) |
+| `start_sec` / `end_sec` | `0.0` / `0.0` | Visibility window; both `0` = always visible |
+
+**Optional**: `overlays` — upstream chain.
+
+**Output**: `overlays` (`MF_COMPOSE_OPS`).
+
+---
 
 #### 💧 Compose Watermark (`MF_ComposeWatermark`)
 
-Watermark preset on top of overlay — more convenient UI for the most common case.
+Watermark preset with placement / scale / opacity — convenience wrapper around overlay for the most common case.
 
-- `image_path` — PNG with alpha recommended.
-- `placement` — `top_left` / `top_right` / `bottom_left` / `bottom_right` / `center` / `tile` (auto-computes rows/cols from image aspect).
-- `relative_scale` (0.05–0.5) — watermark width as fraction of frame width. Resolved at compile time using `ComposeVideo.target_width`.
-- `opacity` (0–1) — via `colorchannelmixer alpha`, preserves PNG's own alpha.
-- `margin_top` / `right` / `bottom` / `left` — per-side margins.
-- `visible_start/end_sec` — both 0 = always visible.
+**When to use**: branding a video with a logo. `relative_scale` keeps the watermark proportional across different source resolutions.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `image_path` | `input/watermark.png` | PNG with alpha recommended |
+| `placement` | `bottom_right` | `top_left` / `top_right` / `bottom_left` / `bottom_right` / `center` / `tile` (auto rows×cols from image aspect) |
+| `relative_scale` | `0.15` (0.05–0.5) | Watermark width as fraction of frame width. Resolved against `ComposeVideo.target_width` |
+| `opacity` | `0.7` (0–1) | Applied via `colorchannelmixer alpha` — preserves PNG's own alpha channel |
+| `margin_top` / `right` / `bottom` / `left` | `20` each (0–1000) | Per-side margin in px |
+| `visible_start_sec` / `visible_end_sec` | `0.0` / `0.0` | Visibility window; both `0` = always visible |
+
+**Optional**: `overlays` — upstream chain.
+
+**Output**: `overlays` (`MF_COMPOSE_OPS`).
+
+**Example**: bottom-right logo bug at 12% width with 60% opacity → `placement=bottom_right, relative_scale=0.12, opacity=0.6, margin_bottom=20, margin_right=20`.
+
+---
 
 #### 🔥 Compose Burn Subtitle (`MF_ComposeBurnSubtitle`)
 
-The headline addition in v2 — subtitles burn **inside the Compose pipeline**, so you can stack `subtitle + watermark + audio mix` and pay only one encode.
+Burn SRT subtitles **inside the Compose pipeline** — stack `subtitle + watermark + audio mix` and pay only one encode. Same widget set as `MF_BurnSubtitle` (font dropdown, full ASS styling, alignment, margins, colors), minus the encoder controls (those live on `MF_ComposeVideo`).
 
-Same widget set as `MF_BurnSubtitle` (font dropdown, full ASS styling, alignment, margins, colors). Drop a `.ttf` / `.otf` / `.ttc` into the plugin's `font/` directory; the dropdown auto-populates. `fontTools` is used to auto-detect the TTF's internal Family Name for libass (lazy-imported — `pip install fontTools` recommended).
+**When to use**: any time you'd reach for `MF_BurnSubtitle` *and* you're already applying another Compose op. Single-encode for the whole chain.
 
-The standalone `MF_BurnSubtitle` (in the Subtitle category) stays for one-shot subtitle burning when you don't need other overlays.
+| Widget | Default | Notes |
+|---|---|---|
+| `srt_path` | `input/sample.srt` | UTF-8 SRT file |
+| `font` … `back_color_hex` | (see `MF_BurnSubtitle` table) | Identical widgets — `font_size`, `bold`, `italic`, `outline_*`, `border_style`, `back_color_hex` |
+| `alignment` / `margin_v` / `margin_l` / `margin_r` | `bottom_center (2)` / `20` / `50` / `50` | Same as `MF_BurnSubtitle` |
+
+**Optional**: `overlays` — upstream chain.
+
+**Output**: `overlays` (`MF_COMPOSE_OPS`).
+
+**Notes**: `MF_BurnSubtitle` (in the Subtitle category) stays for one-shot subtitle burning when you don't need other overlays.
+
+---
 
 #### 🔊 Compose Volume (`MF_ComposeVolume`)
 
 Append a `volume=N` audio filter op.
 
-- `scale` (FLOAT 0.0–2.0, default 1.0) — `0.0` mutes, `0.5` halves, `1.0` original, `2.0` doubles (watch for clipping).
+**When to use**: dimming source audio before mixing in BGM, or boosting a quiet recording.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `scale` | `1.0` (0.0–2.0) | `0.0` mutes, `0.5` halves, `1.0` passthrough, `2.0` doubles (watch for clipping) |
+
+**Optional**: `audio_ops` — upstream chain.
+
+**Output**: `audio_ops` (`MF_COMPOSE_AUDIO_OPS`).
+
+---
 
 #### 🎵 Compose Audio Mix (`MF_ComposeAudioMix`) **(dual-input audio)**
 
-Mix an external BGM track with the source audio — or replace the source audio entirely.
+Mix an external BGM track with source audio — or replace source entirely.
 
-- `audio_path` (STRING) — BGM file path, or wire `audio` pin (AUDIO dict from another node) for tensor-based input. AUDIO dict materializes to a temp WAV, cleaned up after encode.
-- `keep_source` (BOOLEAN, default True) — `True` mixes source + BGM via `amix`; `False` discards source audio and uses only the BGM.
-- `bgm_volume` (FLOAT 0.0–2.0, default 0.3) — BGM-side volume scaling applied before mix. The default 0.3 keeps voice dominant in podcast/vlog use.
-- `duration` — `first` (output length = source audio) / `longest` / `shortest`.
+**When to use**: adding podcast / vlog background music; layering ambient sound under narration.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `audio_path` | `input/bgm.mp3` | BGM file path; hidden when `audio` AUDIO pin wired |
+| `keep_source` | `True` | `True` = `amix` source + BGM; `False` = discard source, use BGM only |
+| `bgm_volume` | `0.3` (0.0–2.0) | BGM-side volume *before* mix. `0.3` keeps voice dominant — podcast/vlog default |
+| `duration` | `first` | `first` (= source length) / `longest` / `shortest` |
+
+**Optional inputs**:
+
+| Input | Notes |
+|---|---|
+| `audio` (AUDIO) | Wire from another node — materializes to temp WAV, cleaned up after encode. Overrides `audio_path` when wired |
+| `audio_ops` | Upstream chain |
+
+**Output**: `audio_ops` (`MF_COMPOSE_AUDIO_OPS`).
+
+---
 
 #### 🌅 Compose Audio Fade (`MF_ComposeAudioFade`)
 
-Append an `afade` op (in / out).
+Append an `afade` op (fade in / fade out).
 
-- `direction` — `in` (silent → full) or `out` (full → silent).
-- `start_sec` / `duration_sec` — fade window. For `out`, set `start_sec = video_duration - duration_sec`.
-- `curve` — 10 FFmpeg curve names: `tri` (linear, default) / `qsin` (quarter sine, smoothest perceptually) / `esin` / `hsin` / `log` / `par` / `qua` / `cub` / `squ` / `cbr`.
+**When to use**: smooth audio start/stop instead of hard cut — intro fade-in, outro fade-out.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `direction` | `in` | `in` = silent → full; `out` = full → silent |
+| `start_sec` | `0.0` | Fade start time. For `out`, set to `video_duration - duration_sec` |
+| `duration_sec` | `2.0` (0.1–60) | Fade length in seconds |
+| `curve` | `tri` | `tri` (linear) / `qsin` (quarter sine — perceptually smoothest) / `esin` / `hsin` / `log` / `par` / `qua` / `cub` / `squ` / `cbr` |
+
+**Optional**: `audio_ops` — upstream chain.
+
+**Output**: `audio_ops` (`MF_COMPOSE_AUDIO_OPS`).
+
+---
 
 #### 📏 Compose Normalize (`MF_ComposeNormalize`)
 
 EBU R128 / streaming-grade loudness normalization via `loudnorm` (single pass).
 
-- `target_i` (LUFS, default -16) — Apple Podcasts / Spotify spoken-word target. YouTube / TikTok use -14; broadcast EBU R128 uses -23.
-- `target_tp` (dBTP, default -1.0) — true-peak ceiling. -1 dBTP avoids clipping on consumer playback chains.
-- `target_lra` (LU, default 11.0) — loudness range; larger = more dynamics preserved.
-- `linear` (BOOLEAN, default True) — `True` avoids dynamic-range compression. Set False to forcefully flatten to the target window (sacrifices dynamics for strict LUFS compliance).
+**When to use**: hitting a target loudness for a streaming platform (Spotify, YouTube, Apple Podcasts) before upload.
 
-> **Single pass** is enough for streaming use. Strict EBU R128 broadcast certification needs two-pass (measure → re-apply), which MediaForge doesn't currently provide.
+| Widget | Default | Notes |
+|---|---|---|
+| `target_i` | `-16.0` LUFS (-70 to -5) | Target integrated loudness. **-14** YouTube / TikTok / Spotify music · **-16** Apple Podcasts / Spotify spoken-word · **-23** EBU R128 broadcast |
+| `target_tp` | `-1.0` dBTP (-9 to 0) | True-peak ceiling. `-1` dBTP avoids clipping on consumer playback chains |
+| `target_lra` | `11.0` LU (1–50) | Loudness range; larger = more dynamics preserved |
+| `linear` | `True` | `True` avoids dynamic-range compression. `False` forcefully flattens to target (strict LUFS compliance, sacrifices dynamics) |
+
+**Optional**: `audio_ops` — upstream chain.
+
+**Output**: `audio_ops` (`MF_COMPOSE_AUDIO_OPS`).
+
+> **Single pass** is fine for streaming. Strict EBU R128 broadcast certification needs two-pass (measure → re-apply), which MediaForge doesn't currently provide.
+
+---
 
 ### Migrating from Compose v1
 
@@ -482,18 +747,73 @@ If you have workflow JSONs containing `MF_ComposeStart` / `MF_ComposeFinalize`, 
 
 ### `MediaForge/AI` — provider-agnostic
 
-Schema marked **experimental** — `MF_AI_CONFIG` API may change inside Phase 5 until Whisper / Translate are validated end-to-end across all provider recipes.
+Schema marked **experimental** — `AI_CONFIG` API may change inside Phase 5 until Whisper / Translate are validated end-to-end across all provider recipes.
 
 #### ⚙️ AI Config (`MF_AIConfig`)
-Outputs `AI_CONFIG` dict (`provider` / `base_url` / `api_key` / `model` / `device` / `extra`). All AI nodes consume this — swap provider in one place.
+
+Centralized provider configuration. Outputs an `AI_CONFIG` dict that all AI nodes consume — swap provider / model / endpoint in one place and the whole chain follows.
+
+**When to use**: any AI workflow. Drop one `MF_AIConfig` per backend (e.g. one for ASR via Groq, one for translation via OpenAI) and fan out into the consumers.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `provider` | `openai_compatible` | `openai_compatible` (any `/v1/...` HTTP endpoint) / `faster_whisper_local` (in-process) |
+| `base_url` | `https://api.openai.com/v1` | Trailing slash stripped automatically |
+| `api_key` | `""` | Logged with first 4 chars + `***` mask |
+| `model` | `gpt-4o-mini` | Free-form string. Whisper auto-substitutes if not an STT id (e.g. `gpt-4o-mini` reused for translate; Whisper falls back to `whisper-1`) |
+| `device` | `auto` | `cpu` / `cuda` / `auto` — only used by `faster_whisper_local` |
+
+**Output**: `ai_config` (AI_CONFIG dict).
+
+**See [AI Provider Recipes](#ai-provider-recipes)** for copy-paste-ready `provider` / `base_url` / `model` combos for OpenAI / Groq / Ollama / faster-whisper.
+
+---
 
 #### 🗣️ Whisper Transcribe (`MF_WhisperTranscribe`)
-Audio path or `AUDIO` dict → SRT text. Two backends:
-- `openai_compatible` (any `/v1/audio/transcriptions` endpoint — OpenAI, Groq, local OpenAI-compat servers)
-- `faster_whisper_local` (lazy-import `faster-whisper`, runs locally on CPU/CUDA)
+
+Audio file or in-memory `AUDIO` dict → SRT text (string output, not file). Backend is determined by `ai_config.provider`.
+
+**When to use**: generating subtitles from raw recordings (interviews, lectures, podcasts). The SRT can be wired directly into `MF_TranslateSubtitle` and `MF_BurnSubtitle` for end-to-end auto-subtitling.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `ai_config` | (required AI_CONFIG) | Wire from `MF_AIConfig`. `provider` selects backend |
+| `audio_path` | `input/sample.mp4` | Any media file with an audio stream. FFmpeg extracts mono 16 kHz WAV internally |
+| `language` | `zh` | ISO 639-1 hint (`en`, `ja`, `zh`, `ko`, ...) — empty = auto-detect |
+
+**Optional**: `audio` (AUDIO dict) — overrides `audio_path` when wired. Downsampled to 16 kHz mono on the client side for consistent results across backends.
+
+**Output**: `srt_text` STRING — well-formed SRT (multi-block) ready to wire into `MF_TranslateSubtitle.srt_text` or `MF_BurnSubtitle.srt_path` (via `MF_ConvertChinese` to materialize to a file first, if needed).
+
+**Backend semantics** (from `ai_config.provider`):
+- `openai_compatible` — POSTs to `<base_url>/audio/transcriptions`. Works with OpenAI, Groq, any OpenAI-API-compatible server. Requires `pip install requests`.
+- `faster_whisper_local` — lazy-imports `faster-whisper`. Honors `ai_config.device` (`cpu` / `cuda` / `auto`) and `ai_config.model` (`tiny` / `base` / `small` / `medium` / `large-v3`). First run downloads model to HF cache. Requires `pip install faster-whisper`.
+
+**Model auto-substitution**: if `ai_config.model` doesn't look like an STT model id (e.g. it's `gpt-4o-mini` because the same `AI_CONFIG` feeds Translate), Whisper substitutes the provider's default — `whisper-1` for OpenAI-compatible, `base` for faster-whisper-local. Set an explicit STT model id (`whisper-large-v3`, `distil-large-v3`, …) to override.
+
+**Errors raised early**: source missing audio stream → friendly error. WAV extraction yields < 256 bytes (silent / corrupt) → raise before sending to backend.
+
+---
 
 #### 🌐 Translate Subtitle (`MF_TranslateSubtitle`)
-SRT + target language → translated SRT (timestamps preserved). Uses `/v1/chat/completions` with batched line numbering for alignment.
+
+SRT text → translated SRT (timestamps preserved). Uses `/v1/chat/completions` with batched numbered prompts to keep line-count alignment.
+
+**When to use**: localizing AI-generated subtitles into another language. Pair with `MF_ConvertChinese` if you need simplified↔traditional normalization after translation.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `ai_config` | (required AI_CONFIG) | Must be `provider=openai_compatible` (no local LLM mode — wire your local OpenAI-compatible server's URL instead) |
+| `srt_text` | `""` (multiline) | Wire from `MF_WhisperTranscribe.srt_text` *or* paste manually |
+| `target_lang` | `繁體中文` | Free-form — `English` / `日本語` / `한국어` / `Español` / ... |
+| `system_prompt` | (preset, supports `{target_lang}` placeholder) | Edit to constrain tone (technical / colloquial / formal) |
+| `batch_size` | `20` (1–200) | Lines per LLM call. Smaller = more reliable alignment but slower; larger = faster but small models may drift |
+
+**Output**: `translated_srt` STRING.
+
+**Behavior**: each batch is sent as numbered lines (`[1] ...`, `[2] ...`); the response is parsed by the same numbering pattern. If the count drifts (LLM merged / skipped a line) the node **raises** rather than producing misaligned subtitles — retry with smaller `batch_size` or stronger model.
+
+**Recommended models**: `gpt-4o-mini` (fast + cheap, fine up to batch 30); `gpt-4o` / `llama-3.3-70b-versatile` (more reliable for long-form / specialized vocabulary, can handle batch 50+).
 
 ## AI Provider Recipes
 
