@@ -352,11 +352,62 @@ Compose 工作流的單一終點 — 取代舊的 `ComposeStart` + `ComposeFinal
 
 Append 一個 `drawtext` op spec 進 overlay chain。
 
+**Widget**:
+
 - `text`(multiline STRING) — 編譯時透過 `textfile=` 傳給 ffmpeg、安全處理單引號 / % / 換行。
-- `x_expr` / `y_expr` — FFmpeg drawtext 表達式(可用變數 `w` / `h` / `text_w` / `text_h` / `t`)。預設置中下。
+- `x_expr` / `y_expr` — FFmpeg drawtext **位置表達式**(string、不是數字 — 詳見下方表達式參考表)。
 - `fontsize` / `fontcolor` / `borderw` / `bordercolor` — 標準樣式。
+- `effect` — 動畫 preset(`none` / `slide_in_left|right|top|bottom` / `marquee_horizontal`)。非 `none` 時把 `x_expr` / `y_expr` 當成**最終停靠位置**、節點層 wrap 動畫表達式上去。預設 `none` = 無動畫(對舊 workflow 完全 backward compat)。
+- `effect_duration`(FLOAT、預設 1.5) — `slide_in_*` 表「滑入秒數」;`marquee_horizontal` 表「跑一輪需要的秒數」。`effect=none` 時忽略。
 - `fontfile` — 留空讓 ComposeVideo 退階到 bundled font(Windows 原生 ffmpeg 沒 fontconfig)。
-- `start_sec` / `end_sec` — 時間區間。兩者 0 = 全長顯示。
+- `start_sec` / `end_sec` — 時間**可見性**區間。兩者 0 = 全長顯示。(注:`effect_duration` 從 `start_sec` 算 — 文字出現後才開始跑動畫。)
+
+##### `x_expr` / `y_expr` 表達式語言
+
+FFmpeg `drawtext` 接受的是算式 string 而非單純數字,**每幀**在 encode 時求值 — 所以可以做動態定位。可用變數:
+
+| 變數 | 意義 |
+|---|---|
+| `w`, `h` | 影片畫面寬 / 高(px) |
+| `text_w`, `text_h` | 文字 render 出來的 bounding box 寬 / 高(px) — 會自動隨 `fontsize` 改變 |
+| `t` | 當前幀時間戳(秒、浮點) |
+| `n` | 當前幀號(int) |
+| `line_h`(別名 `lh`) | 單行文字高度 |
+
+支援算符:`+ - * /` 加內建函式(`if(cond,a,b)`、`lt(a,b)`、`mod(x,y)`、`sin(x)`、`between(x,lo,hi)` 等)。完整列表見 [FFmpeg drawtext 文檔](https://ffmpeg.org/ffmpeg-filters.html#drawtext)。
+
+**預設 `(w-text_w)/2` / `h-text_h-40`** = 水平置中、距畫面底邊 40 px(典型的 lower-third 字幕位置)。`text_w` 會自動跟著字級走、即使改 `fontsize` 也能保持置中。
+
+**常用範例**:
+
+| 想做 | `x_expr` | `y_expr` |
+|---|---|---|
+| 螢幕正中 | `(w-text_w)/2` | `(h-text_h)/2` |
+| 左上角、padding 30 px | `30` | `30` |
+| 右下角、padding 30 px | `w-text_w-30` | `h-text_h-30` |
+| 水平置中、垂直上三分之一 | `(w-text_w)/2` | `h/3` |
+| 跑馬燈(右→左、~100 px/s) | `w-mod(t*100,w+text_w)` | `h-text_h-20` |
+| 上下擺動(正弦、±10 px) | `(w-text_w)/2` | `h-text_h-40+10*sin(2*t)` |
+| 2 秒從左飛入、停在中央 | `if(lt(t,2),-text_w+(w-text_w)/2*t/2,(w-text_w)/2)` | `(h-text_h)/2` |
+
+最後兩個範例說明了為什麼 `x_expr` / `y_expr` 設計成 string 而非 INT widget — 表達式語言能寫出時間相依動畫。但常見的(`slide_in_*` / `marquee_horizontal`)直接用下方的 `effect` dropdown 就好、不必手寫。
+
+##### `effect` preset 對照
+
+當 `effect != none`、`x_expr` / `y_expr` 被視為**最終停靠位置(anchor)**、preset 在外面包一層動畫表達式。下表 effect 行為皆假設 anchor = 預設值 `(w-text_w)/2` / `h-text_h-40`、`effect_duration=1.5`:
+
+| Preset | 行為 | `effect_duration` 語意 |
+|---|---|---|
+| `none` | 原樣使用 `x_expr` / `y_expr` | —(忽略) |
+| `slide_in_left` | 文字從畫面外左方滑入、在 `start_sec + effect_duration` 抵達 anchor | 滑入秒數 |
+| `slide_in_right` | 從畫面外右方滑入 | 滑入秒數 |
+| `slide_in_top` | 從畫面外上方滑入 | 滑入秒數 |
+| `slide_in_bottom` | 從畫面外下方滑入 | 滑入秒數 |
+| `marquee_horizontal` | 持續右→左跑馬燈(忽略 `x_expr`、用 `y_expr` 決定垂直位置) | 每跑完一輪所需秒數 |
+
+動畫時間軸從 `start_sec` 算起:`slide_in_left` 配 `start_sec=3` + `effect_duration=2` 表示第 3 秒文字出現開始滑、第 5 秒抵達 anchor。`start_sec` / `end_sec` 控可見性、不影響動畫表達式。
+
+需要 preset 沒涵蓋的動畫(垂直擺動、easing 曲線、淡入)的話 — 留 `effect=none`、自己手寫 `x_expr` / `y_expr`。
 
 #### 🖼️ Compose Overlay Image (`MF_ComposeOverlayImage`)
 

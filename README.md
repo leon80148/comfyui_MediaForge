@@ -352,11 +352,62 @@ The endpoint of every Compose workflow — replaces the older `ComposeStart` + `
 
 Append a `drawtext` op spec into the overlay chain.
 
+**Widgets**:
+
 - `text` (multiline STRING) — passed via `textfile=` at compile time to safely escape apostrophes, percents, newlines.
-- `x_expr` / `y_expr` — FFmpeg drawtext expressions (variables `w` / `h` / `text_w` / `text_h` / `t` available). Default centers near bottom.
+- `x_expr` / `y_expr` — FFmpeg drawtext **position expressions**. Strings, not numbers — see the expression reference below.
 - `fontsize` / `fontcolor` / `borderw` / `bordercolor` — standard styling.
+- `effect` — animation preset (`none` / `slide_in_left|right|top|bottom` / `marquee_horizontal`). When not `none`, treats `x_expr` / `y_expr` as the **final anchor position** and wraps a motion expression around it. Default `none` = no animation (backward compatible).
+- `effect_duration` (FLOAT, default 1.5) — `slide_in_*`: seconds to animate in; `marquee_horizontal`: seconds per full scroll cycle. Ignored when `effect=none`.
 - `fontfile` — leave empty for ComposeVideo to fallback to a bundled font (Windows native ffmpeg has no fontconfig).
-- `start_sec` / `end_sec` — temporal window. Both 0 = always visible.
+- `start_sec` / `end_sec` — temporal **visibility** window. Both 0 = always visible. (Note: `effect_duration` is measured from `start_sec` — animation begins when the text appears.)
+
+##### `x_expr` / `y_expr` expression language
+
+FFmpeg `drawtext` accepts arithmetic strings, not just numbers — evaluated **per frame** at encode time, so you can position dynamically. Available variables:
+
+| Variable | Meaning |
+|---|---|
+| `w`, `h` | Video frame width / height (px) |
+| `text_w`, `text_h` | Rendered text bounding-box width / height (px) — automatically updates with `fontsize` |
+| `t` | Current frame timestamp (seconds, float) |
+| `n` | Current frame number (int) |
+| `line_h` (alias `lh`) | Single-line text height |
+
+Supported operators: `+ - * /` and built-in functions (`if(cond,a,b)`, `lt(a,b)`, `mod(x,y)`, `sin(x)`, `between(x,lo,hi)`, ...). Full list in the [FFmpeg drawtext docs](https://ffmpeg.org/ffmpeg-filters.html#drawtext).
+
+**Default `(w-text_w)/2` / `h-text_h-40`** = horizontally centered, 40 px above the bottom edge (typical lower-third placement). `text_w` self-updates with font size, so centering stays correct when you change `fontsize`.
+
+**Common recipes**:
+
+| Goal | `x_expr` | `y_expr` |
+|---|---|---|
+| Centered on screen | `(w-text_w)/2` | `(h-text_h)/2` |
+| Top-left, 30 px padding | `30` | `30` |
+| Bottom-right, 30 px padding | `w-text_w-30` | `h-text_h-30` |
+| Centered horizontally, top third | `(w-text_w)/2` | `h/3` |
+| Marquee (scroll right→left, ~100 px/s) | `w-mod(t*100,w+text_w)` | `h-text_h-20` |
+| Vertical bob (sine wave, ±10 px) | `(w-text_w)/2` | `h-text_h-40+10*sin(2*t)` |
+| Fly-in from left over 2 s, settle to center | `if(lt(t,2),-text_w+(w-text_w)/2*t/2,(w-text_w)/2)` | `(h-text_h)/2` |
+
+The last two recipes show why `x_expr` / `y_expr` are strings rather than numbers — they let you express time-dependent motion. For the common cases (`slide_in_*`, `marquee_horizontal`), prefer the `effect` dropdown over hand-writing these expressions.
+
+##### `effect` preset reference
+
+When `effect != none`, your `x_expr` / `y_expr` become the **anchor** (final resting position) and the preset wraps a motion expression around them. Examples below assume default anchor `(w-text_w)/2` / `h-text_h-40` and `effect_duration=1.5`:
+
+| Preset | Behavior | `effect_duration` semantics |
+|---|---|---|
+| `none` | Use `x_expr` / `y_expr` verbatim | — (ignored) |
+| `slide_in_left` | Text slides in from off-screen-left, settles at anchor at `start_sec + effect_duration` | Slide-in time (sec) |
+| `slide_in_right` | Slides in from off-screen-right | Slide-in time |
+| `slide_in_top` | Slides in from above the frame | Slide-in time |
+| `slide_in_bottom` | Slides in from below the frame | Slide-in time |
+| `marquee_horizontal` | Continuous right→left scroll (ignores `x_expr`, uses `y_expr` for vertical position) | Seconds per full traverse |
+
+The animation timeline is relative to `start_sec`: a `slide_in_left` with `start_sec=3` and `effect_duration=2` means the text appears at second 3, slides for 2 seconds, settles at second 5. `start_sec` / `end_sec` clip visibility independently — they don't affect the motion expression.
+
+For motion not covered by the presets (vertical bob, easing curves, fade), drop back to writing `x_expr` / `y_expr` by hand with `effect=none`.
 
 #### 🖼️ Compose Overlay Image (`MF_ComposeOverlayImage`)
 
