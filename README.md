@@ -656,6 +656,19 @@ Burn SRT subtitles **inside the Compose pipeline** — stack `subtitle + waterma
 
 ---
 
+#### Audio Ops Chain — why four small nodes instead of one bundled node?
+
+Each audio operation is its own append-only node so the chain stays **composable** — the same design as the visual `MF_COMPOSE_OPS` chain (`OverlayText` / `Watermark` / `BurnSubtitle`). One op = one node.
+
+- **Order matters.** `Volume → AudioMix → Fade` and `AudioMix → Volume → Fade` produce different output. Chain order = wiring order = ffmpeg filter order.
+- **Same op, multiple times.** Apply `Fade` twice for an intro fade-in *and* an outro fade-out, or step `Volume` down in two stages. A single bundled node would need duplicate widget sets to express the same thing.
+- **Clean schema per node.** `Volume` exposes one `scale` slider; `AudioMix` exposes a BGM path + `keep_source` + dual-input `AUDIO` pin. Folded into one node, every "just lower the volume" workflow would stare at unused BGM widgets.
+- **Extensible.** Adding EQ / reverb / pitch-shift / ducking later = drop in a new node, zero schema change to the existing four.
+
+Trade-off: a workflow that uses three audio ops needs three audio nodes wired in series. For the simplest "just tweak the volume" case this is one node — the cost only shows up when stacking multiple ops, and the chain order then becomes a feature, not friction.
+
+---
+
 #### 🔊 Compose Volume (`MF_ComposeVolume`)
 
 Append a `volume=N` audio filter op.

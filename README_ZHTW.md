@@ -656,6 +656,19 @@ Append 通用 `overlay` op（絕對位置 + 絕對縮放）。要 preset 化浮�
 
 ---
 
+#### Audio Ops Chain — 為什麼分成四個小節點而不是合成一個？
+
+每個音訊操作各自一個 append-only 節點、保留 chain 的**可組合性** — 跟視訊 `MF_COMPOSE_OPS` chain（`OverlayText` / `Watermark` / `BurnSubtitle`）一樣的設計：一個 op = 一個節點。
+
+- **順序有差。** `Volume → AudioMix → Fade` 跟 `AudioMix → Volume → Fade` 出來的成品不同。Chain 順序 = wiring 順序 = ffmpeg filter 順序。
+- **同一個 op 可以多次。** `Fade` 用兩次做 intro 淡入 *加* outro 淡出、或 `Volume` 分兩段階梯衰減。合成單一節點的話、要表達這些就得在 schema 上開重複的 widget 組。
+- **每個節點 schema 清爽。** `Volume` 只露一個 `scale` slider、`AudioMix` 才有 BGM path + `keep_source` + dual-input `AUDIO` pin。混在一起的話、只想「把音量壓低」的人也得盯著用不到的 BGM widget。
+- **易擴充。** 之後要加 EQ / reverb / pitch-shift / ducking = 再開一個節點、現有四個 schema 完全不動。
+
+Trade-off：用三個音訊 op 的 workflow 要拉三個音訊節點 series 接起來。最簡單「只調音量」的 case 仍然只一個節點 — 成本只在多 op 疊加時才出現，而且那時候 chain 順序變成 feature、不是 friction。
+
+---
+
 #### 🔊 Compose Volume (`MF_ComposeVolume`)
 
 Append `volume=N` 音訊 filter op。
