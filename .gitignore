@@ -49,6 +49,9 @@ tmp/
 *.tmp
 *.bak
 
+# Internal test suite (developer-only — not for public repo)
+tests/
+
 # Test media files in repo root (avoid accidentally committing large binaries)
 /*.mp4
 /*.mov
