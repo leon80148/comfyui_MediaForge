@@ -196,7 +196,10 @@ def run_ffmpeg(command, tag="FFmpeg"):
 #
 # Key 用 (abspath, mtime_ns, size) 而非單純 path：同路徑覆寫內容要視為 cache miss，
 # 語意對齊 W1-13 IS_CHANGED 用的 mtime fingerprint（utils/cache_key.py）。stat 失敗
-# （檔案不存在等）不快取，讓 subprocess 照舊走、給原生錯誤路徑。
+# （檔案不存在等）不快取，讓 subprocess 照舊走、給原生錯誤路徑。C8 fix：ffprobe 執行
+# 本身失敗（CalledProcessError / JSONDecodeError，info=None）也不快取——這類失敗常是
+# 暫時性狀況（檔案正被其他程序鎖住、寫入中途），快取 None 會讓同一路徑在整個程序
+# 生命週期內永遠回傳失敗，即使檔案幾秒後已經可以正常讀取。
 PROBE_CACHE_MAXSIZE = 64
 _PROBE_CACHE = collections.OrderedDict()
 
@@ -243,7 +246,10 @@ def probe(path):
         print(f"[ffprobe] 失敗: {e}")
         info = None
 
-    if cache_key is not None:
+    # C8 fix：只在成功時才寫入快取。失敗（CalledProcessError / JSONDecodeError）
+    # 多半是暫時性狀況（檔案正被其他程序鎖住、寫入中途 truncate）——快取 None 會
+    # 讓同一路徑在整個程序生命週期內永遠回傳失敗，即使檔案幾秒後已經可以正常讀取。
+    if cache_key is not None and info is not None:
         _PROBE_CACHE[cache_key] = info
         _PROBE_CACHE.move_to_end(cache_key)
         if len(_PROBE_CACHE) > PROBE_CACHE_MAXSIZE:
@@ -274,6 +280,32 @@ def probe_has_audio_stream(path):
     if not info:
         return False
     return any(s.get("codec_type") == "audio" for s in info.get("streams", []))
+
+
+def unmapped_stream_descriptions(info):
+    """列出這份 probe info 裡,`-map 0:V -map 0:a? -map 0:s?` 合約會略過的 stream。
+
+    C3+C6 fix：concat_videos.py 的 copy 模式與 trim_by_ranges.py 的 lossless 模式
+    都從舊版的 `-map 0`（全部 stream）收斂成「主影音 + 字幕」精確合約 —— data/
+    timecode stream（GoPro/DJI 的 tmcd/gpmd）塞進 concat demuxer + `-c copy` 會直接
+    exit 失敗（demuxer 給不了這類 stream 該有的 codec 參數），attached_pic（yt-dlp
+    --embed-thumbnail 的封面圖）也不該被當成「主 video」比對。兩種 caller 在送
+    ffmpeg 前都要把「被略過的 stream」明確列出來 print 警告（取代舊版的 silent
+    drop），這裡集中判斷邏輯避免兩邊各寫一份。
+
+    回傳 list[str]，每個元素形如 `"data(gpmd)"` / `"attached_pic(mjpeg)"`，
+    給 caller 組警告訊息用；沒有被略過的 stream 回傳空 list。
+    """
+    skipped = []
+    for s in info.get("streams", []):
+        codec_type = s.get("codec_type")
+        codec_name = s.get("codec_name", "?")
+        disposition = s.get("disposition") or {}
+        if codec_type == "video" and disposition.get("attached_pic") == 1:
+            skipped.append(f"attached_pic({codec_name})")
+        elif codec_type in ("data", "attachment"):
+            skipped.append(f"{codec_type}({codec_name})")
+    return skipped
 
 
 def get_video_display_dims(stream):

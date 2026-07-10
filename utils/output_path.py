@@ -28,16 +28,20 @@ def resolve_output_path(filename_prefix, ext):
     Args:
         filename_prefix: 使用者填的 prefix，可含子目錄如 "MediaForge/looped"。
                          誤填副檔名（如 "looped.mp4"）會被剝掉，避免雙副檔名。
-                         `/` 或 `\\` 皆可分子目錄（兩平台語意一致）；不允許用 `..`
-                         跳出 output_dir。
-        ext: 副檔名（含 leading dot），例 ".mp4" / ".srt" / ".mov"。
+                         `/` 或 `\\` 皆可分子目錄（兩平台語意一致）。可以用 `..`
+                         或絕對路徑跳出 output_dir——會印警告但照常寫入（見下方
+                         C9 說明），不會 raise。
 
     Returns:
         絕對路徑：`<output_dir>/<subfolder>/<filename>_<counter:05d><ext>`。
         Counter = 該資料夾內既有同 prefix+ext 檔的 max 序號 + 1（從 1 起跳）。
 
-    Raises:
-        ValueError: filename_prefix 解析後的資料夾落在 output_dir 之外（路徑穿越）。
+    C9 fix：`..` / 絕對路徑跳出 output_dir 曾經在這裡 raise ValueError（W1-7），但
+    這破壞了升級前就存在的合法用法——`filename_prefix="../input/cleaned"` 把輸出
+    鏈回 input/ 是常見手法、絕對路徑（如 `D:/exports/clip`）也是使用者的明確意圖，
+    兩者升級後直接壞掉不成比例。auto-counter 的 `_NNNNN` 命名本來就保證不會覆蓋
+    既有檔案，路徑穿越在這裡沒有「覆寫他人資料」的風險，只有「寫到預期外位置」的
+    可見性問題——改成印警告後照常寫入，保留可見性但不犧牲相容性。
     """
     import folder_paths
 
@@ -56,9 +60,12 @@ def resolve_output_path(filename_prefix, ext):
     subfolder, filename = os.path.split(filename_prefix)
     full_output_folder = os.path.join(output_dir, subfolder) if subfolder else output_dir
 
-    # 防路徑穿越：`..` 或絕對路徑 subfolder 可能讓 full_output_folder 落在 output_dir
-    # 之外；用 realpath 解掉 `..` / symlink 後跟 output_dir 比對 commonpath。
-    # ComfyUI core 的 get_save_image_path 有做這層防護，我們自製版原本沒有（W1-7）。
+    # 偵測路徑穿越：`..` 或絕對路徑 subfolder 可能讓 full_output_folder 落在
+    # output_dir 之外；用 realpath 解掉 `..` / symlink 後跟 output_dir 比對
+    # commonpath。C9 fix：只警告、不 raise（見上方 docstring）——舊版允許
+    # `filename_prefix="../input/cleaned"` 這種把輸出鏈回 input/ 的常見用法與
+    # 絕對路徑，W1-7 當初直接 raise 會讓這些既有 workflow 升級後全部壞掉；
+    # auto-counter 命名已經保證不覆蓋既有檔案，照舊邏輯 makedirs + 寫入即可。
     real_output_dir = os.path.realpath(output_dir)
     real_full_output_folder = os.path.realpath(full_output_folder)
     try:
@@ -68,10 +75,10 @@ def resolve_output_path(filename_prefix, ext):
     except ValueError:
         inside_output_dir = False  # 不同磁碟機代號（Windows）→ 一定不在 output_dir 內
     if not inside_output_dir:
-        raise ValueError(
-            f"[resolve_output_path] filename_prefix={filename_prefix!r} 解析後的路徑"
-            f"（{real_full_output_folder}）落在 output 目錄之外。允許使用子目錄，"
-            "但不允許用 `..` 或絕對路徑跳出 output/ —— 請改用不含 `..` 的相對子目錄路徑。"
+        print(
+            f"[MediaForge] 注意：filename_prefix={filename_prefix!r} 解析到 ComfyUI "
+            f"output 目錄之外（{real_full_output_folder}）。已依舊版相容行為照常"
+            "寫入；auto-counter 檔名保證不會覆蓋既有檔案。"
         )
 
     os.makedirs(full_output_folder, exist_ok=True)

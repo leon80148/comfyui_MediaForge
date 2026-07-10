@@ -221,11 +221,11 @@ class MF_BurnSubtitle:
 
     @classmethod
     def IS_CHANGED(s, **kwargs):
-        # video_path 只在 path mode 才會被讀(frames 接了就整段忽略、tensor 本身已
-        # 參與 ComfyUI 原生 input hash)；srt_path 兩種 mode 都會讀,永遠納入
-        # fingerprint(W1-13)。
-        if kwargs.get("frames") is not None:
-            return path_fingerprint(kwargs.get("srt_path", ""))
+        # C1 fix：ComfyUI IS_CHANGED 收到的 linked 輸入（frames/audio）永遠是
+        # None，用 `kwargs.get("frames") is not None` 判斷現在是不是 tensor 模式
+        # 是 dead code（那個條件恆假）。無條件 fingerprint video_path + srt_path：
+        # tensor 模式下 video_path 事實上沒被讀，fingerprint 它只是無害的多餘敏感
+        # 度；srt_path 兩種 mode 都會讀，本來就該無條件納入。
         return path_fingerprint(kwargs.get("video_path", ""), kwargs.get("srt_path", ""))
 
 

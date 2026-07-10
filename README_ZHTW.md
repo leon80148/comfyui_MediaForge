@@ -380,7 +380,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 
 **Precision 模式**：
 - `precise (re-encode)` — `trim` + `setpts` re-encode（原本的行為，逐幀精確）。預設值；這個 widget 加入前存的 workflow JSON 載入後行為不變。
-- `lossless (stream copy)` — keyframe-seek 分段 stream copy（`-c copy`）+ concat demuxer 合併。長素材上幾乎瞬間完成、零畫質損失。每個 keep 段的起點一律**向後**對齊到來源下一顆 keyframe（絕不往前對齊——往前對齊會把已經被判定要移除的內容重新包回輸出，見 Codex R6-1）。若 keep 段內完全沒有 keyframe（區間比來源 GOP 還窄、剛好卡在兩顆 keyframe 中間），lossless 模式無法表示該段，節點會 **raise**——請改用 `precision=precise (re-encode)`，或放寬該段範圍。`crossfade_sec` 在這個模式無法生效（stream copy 無法混合像素）— widget 會被隱藏，殘留自 `precise` 模式的非 0 值會被**忽略**（印警告），不會 raise。每段抽取與最終合併都會 `-map 0` 保留全部 stream，多音軌來源（例如英文＋評論雙音軌）不會漏軌。
+- `lossless (stream copy)` — keyframe-seek 分段 stream copy（`-c copy`）+ concat demuxer 合併。無需重編碼，比 `precise` 快得多——但不是真的瞬間完成：執行前會先掃描來源的 keyframe index（`ffprobe -skip_frame nokey`，只解 keyframe），超長素材這一步仍需要時間。每個 keep 段的起點一律**向後**對齊到來源下一顆 keyframe（絕不往前對齊——往前對齊會把已經被判定要移除的內容重新包回輸出，見 Codex R6-1）。若 keep 段內完全沒有 keyframe（區間比來源 GOP 還窄、剛好卡在兩顆 keyframe 中間），lossless 模式無法表示該段，節點會 **raise**——請改用 `precision=precise (re-encode)`，或放寬該段範圍。`crossfade_sec` 在這個模式無法生效（stream copy 無法混合像素）— widget 會被隱藏，殘留自 `precise` 模式的非 0 值會被**忽略**（印警告），不會 raise。每段抽取與最終合併都會 map 主 video、全部 audio、全部字幕軌（`-map 0:V -map 0:a? -map 0:s?`），多音軌來源（例如英文＋評論雙音軌）不會漏軌——data/timecode 軌與封面圖（attached picture）則會被略過（印警告點名），因為 concat demuxer 給不了這類 data stream 該有的 codec 參數。
 
 **Ranges 輸入**（兩種、互斥 — pin 優先）：
 - `ranges`（pin、選用）— 從 `MF_DetectSilence`（或 `MF_DetectScenes`）接過來的 `SILENCE_RANGES`。
@@ -394,7 +394,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 | `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | 沒接 `ranges` pin 時用這個 |
 | `crossfade_sec` | `0.0` (0–2) | 保留段之間走 `xfade`；`0` = 硬切。`precision=lossless` 時隱藏且被忽略（stream copy 無法混合像素） |
 | `codec` / `crf` / `preset` | smart / `18` / `medium` | `precision=lossless` 時忽略（輸出容器改沿用來源） |
-| `precision` | `precise (re-encode)` | `lossless (stream copy)` 會隱藏 `codec` / `crf` / `preset` / `crossfade_sec`（前端強制）— 這幾個在該模式下都不會傳給 ffmpeg。刻意宣告在 schema **最後一個位置**（不是排在 `mode` 旁邊）：ComfyUI 存檔的 widget 值是按位置對齊的，後加的 widget 必須 append 到尾端，舊 workflow JSON 才能繼續正確載入 |
+| `precision` | `precise (re-encode)` | `lossless (stream copy)` 會隱藏 `codec` / `crf` / `preset` / `crossfade_sec`（前端強制）— 這幾個在該模式下都不會傳給 ffmpeg。刻意宣告在 `optional` 的**最後一個位置**（在 `tensor_fps` 之後），不是放 `required`：ComfyUI 存檔的 widget 值是按「整個 required+optional widget 列表」的位置對齊，`tensor_fps` 已經佔了一個位置——若改放 `required` 尾端會把它擠後一位、錯位舊 workflow JSON |
 
 **模式語意**：
 - `keep` + 空 ranges → **raise**（拒絕輸出空檔）。
@@ -402,7 +402,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 
 **音訊同步**：音影 interleaved concat（`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`），跨切點音訊不會跑掉。沒音軌的 source 輸出也無音軌（`-an`）— 不會補靜音 pad（那是 `MF_ConcatVideos` 的行為，不是這個節點）。（`precision=lossless` 改成逐段 stream copy 再 concat demuxer 合併 — 不經過 filter graph。）
 
-**輸出容器**（僅 `precision=lossless`）：沿用來源檔案副檔名（`.mp4` / `.mov` / `.mkv` / `.webm` / `.avi` / `.m4v`；不認得的副檔名退回 `.mp4`）。`precision=precise` 一律照 `codec` 選擇走（ProRes 走 `.mov`，其他 `.mp4`）。
+**輸出容器**（僅 `precision=lossless`）：沿用來源的副檔名——path 模式沿用 `video_path` 本身的副檔名（`.mp4` / `.mov` / `.mkv` / `.webm` / `.avi` / `.m4v`；不認得的副檔名退回 `.mp4`），tensor 模式固定 `.mp4`（frames 一律先寫成 `.mp4` 暫存檔，跟下游容器無關）。例外：`video_path` 是 `.webm` 且同時外接了 `audio` AUDIO dict 時，dual-input 的預合成步驟會把音軌轉成 AAC（WebM 不支援 AAC）——輸出改退回 `.mkv` 容器，並印出警告。`precision=precise` 一律照 `codec` 選擇走（ProRes 走 `.mov`，其他 `.mp4`）。
 
 **範例 chain**：`MF_LoadVideoFrames → MF_DetectSilence (noise_db=-30) → MF_TrimByRanges (mode=remove, crossfade_sec=0.1)` — podcast 預剪、切點微淡入淡出。長素材要零畫質損失的硬切，改接 `MF_TrimByRanges (mode=remove, precision=lossless (stream copy))`。
 
@@ -415,7 +415,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 **適用情境**：同台相機素材拼接（用 `copy` 秒接 stream-copy）、跨 codec / 跨解析度素材拼接（用 `transcode` 加可選過場）。
 
 **Modes**：
-- `copy` — FFmpeg concat demuxer、stream copy 不 re-encode。極快，但**要求**所有輸入通過 preflight probe 比對：完整 stream 佈局（依 probe 順序比對 `codec_type` 序列，含字幕軌）、video `codec_name`/`width`/`height`/`pix_fmt`/`profile`/`sample_aspect_ratio`、audio `codec_name`/`sample_rate`/`channels`/`channel_layout`、以及 subtitle/data/attachment 類 stream 的 `codec_type`/`codec_name` 皆須一致。不一致會在跑 ffmpeg 前直接 raise，而不是 silently 產出壞檔（concat demuxer + `-c copy` 常常 exit code 0 但輸出從第二段開始 glitch、或字幕軌缺漏）。刻意**不比對** `time_base` / `level` / `r_frame_rate`——concat demuxer 本來就會 rescale timestamps、播放器對 level 差異普遍容忍，比了反而會誤殺原本可以安全 concat 的輸入組合。合併時會 map 所有已驗證的 stream（`-map 0`），額外音軌（例如評論音軌或字幕軌）不會被 ffmpeg 預設的單軌選取邏輯 silently 丟掉。
+- `copy` — FFmpeg concat demuxer、stream copy 不 re-encode。極快，只保留主 video、全部 audio、全部字幕軌（`-map 0:V -map 0:a? -map 0:s?`）——data/timecode 軌（例如 GoPro/DJI 的 `tmcd`/`gpmd`）與封面圖（例如 `yt-dlp --embed-thumbnail` 內嵌的 attached picture）會被略過，並印警告點名檔案與 stream 種類，因為 concat demuxer 給不了這類 data stream 該有的 codec 參數。**要求**所有輸入通過 preflight probe 比對，比對範圍收斂成「實際會被 map 的 stream」：main video（`codec_type=video`、排除封面圖）逐 stream 比對 `codec_name`/`width`/`height`/`pix_fmt`/`profile`/`sample_aspect_ratio`、audio 逐 stream 比對 `codec_name`/`sample_rate`/`channels`/`channel_layout`、subtitle 逐 stream 比對 `codec_type`/`codec_name`——皆依 stream 數量與逐 stream 欄位比對。不一致會在跑 ffmpeg 前直接 raise，而不是 silently 產出壞檔（concat demuxer + `-c copy` 常常 exit code 0 但輸出從第二段開始 glitch、或字幕軌缺漏）。被略過的 stream 種類（data/attachment/封面圖）**不參與**比對，因為它們本來就不影響輸出。刻意**不比對** `time_base` / `level` / `r_frame_rate`——concat demuxer 本來就會 rescale timestamps、播放器對 level 差異普遍容忍，比了反而會誤殺原本可以安全 concat 的輸入組合。
 - `transcode` — `filter_complex` graph 加可選 `xfade`。一定可用、一定 re-encode。
 
 **必填 widget**：
@@ -774,7 +774,7 @@ Append `volume=N` 音訊 filter op。
 
 | 輸入 | 說明 |
 |---|---|
-| `audio` (AUDIO) | 接其他 node 的輸出 — materialize 成 temp WAV、encode 完自動清理。接了就覆蓋 `audio_path` |
+| `audio` (AUDIO) | 接其他 node 的輸出 — materialize 成 plugin 內 `.mf_tmp/` 目錄下的 WAV。encode 完**不會**立刻清掉（這個 path 是本節點 cached 輸出值的一部分，下游 `MF_ComposeVideo` cache-hit 重跑時可能還會用到）；超過約 24h 才會被自動掃除。接了就覆蓋 `audio_path` |
 | `audio_ops` | 上游 chain |
 
 **輸出**：`audio_ops`（`MF_COMPOSE_AUDIO_OPS`）。

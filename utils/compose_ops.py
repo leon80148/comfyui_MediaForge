@@ -148,8 +148,8 @@ def apply_audio_ops_to_ir(ir, audio_ops):
     - keep_source=True:source audio + external BGM 混音
     - keep_source=False:純粹用外部音源 (chain 起點)、source audio 不用
 
-    `_is_temp=True` 的 audio_path 會被加進 ir.tmp_paths_to_cleanup (e.g., AUDIO dict
-    materialize 出來的 WAV)。
+    `_is_temp=True` 的 audio_path (e.g., AUDIO dict materialize 出來的 WAV)
+    **故意不**加進 ir.tmp_paths_to_cleanup — 見下方 amix 分支說明 (C5)。
     """
     for op_spec in audio_ops:
         kind = op_spec.get("type")
@@ -162,8 +162,18 @@ def apply_audio_ops_to_ir(ir, audio_ops):
             audio_path = op_spec.get("audio_path")
             if not audio_path:
                 raise ValueError("[Compose Audio] amix op 缺 audio_path")
-            if op_spec.get("_is_temp"):
-                ir.tmp_paths_to_cleanup.append(audio_path)
+            # C5 [嚴重] fix：`_is_temp` 的 audio_path 故意不加進
+            # ir.tmp_paths_to_cleanup。這個 path 是 MF_ComposeAudioMix 節點
+            # 「輸出值」的一部分（op spec dict），會被 ComfyUI 按 upstream 節點的
+            # input hash cache 住；只改 ComposeVideo 下游 widget（例如 crf）重跑
+            # 時，AudioMix 沒有任何輸入變化、cache-hit 直接回傳舊的 op spec，仍
+            # 指著同一個 WAV path。若這裡把它排進 cleanup、ComposeVideo finally
+            # 執行完就把該檔刪掉，下次 cache-hit 重跑會對著已刪除的檔案送
+            # ffmpeg、每次必炸，直到使用者手動強制 AudioMix 重新執行。改成寫進
+            # plugin tmp（nodes/compose_audio_mix.py 用
+            # utils.plugin_tmp.mkstemp_in_plugin_tmp）、由
+            # utils/plugin_tmp.py 的 sweep_stale_plugin_tmp()（plugin 載入時
+            # 呼叫，見 __init__.py）按時效（預設 >24h）回收即可。
             ext_label = ir.add_audio_input(audio_path)
 
             if params.get("keep_source", True):

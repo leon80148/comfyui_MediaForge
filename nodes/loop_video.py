@@ -39,6 +39,23 @@ def _atempo_chain(speed):
     return parts
 
 
+def _loop_repeat_count(mode, eff_dur, target):
+    # C4 fix：strict / ping_pong 的 loop filter 重複次數 n，跟 `_build_filter`
+    # 用同一個算式（呼叫端與 filter 組裝端不能各算一次、算法漂移會讓 guard 跟實際
+    # filter graph 對不上）。n=1 代表「來源本身已達到/超過 target，不需要真的
+    # loop」——loop=n-1=0 時 loop filter 是 pure pass-through、不會把整段素材
+    # buffer 進 `size` frames 上限；只有 n>1（filter 真的要 loop）才需要檢查
+    # MAX_LOOP_FRAMES guard。
+    if mode == "strict":
+        return max(1, math.ceil(target / eff_dur))
+    if mode == "ping_pong":
+        return max(1, math.ceil(target / (eff_dur * 2)))
+    raise ValueError(
+        f"[Loop Video] _loop_repeat_count 收到未支援的 mode={mode!r}"
+        "（內部錯誤，理論上呼叫端已檢查過 loop_mode，請回報此 bug）"
+    )
+
+
 class MF_LoopVideo:
     @classmethod
     def INPUT_TYPES(s):
@@ -136,30 +153,37 @@ class MF_LoopVideo:
                 loop_mode = "strict"
 
             if loop_mode in ("strict", "ping_pong"):
-                # loop filter 的 size 是「單一 unit」緩衝上限（INT16_MAX），不是總輸出
-                # 長度；超過就只會 buffer 前 32767 frames、其餘 silently 消失 — 必須在
-                # 送進 ffmpeg 前擋下（CLAUDE.md gotcha #3）。crossfade 走 xfade、不受此限制。
-                #
-                # F2 fix：`setpts` 只改時間戳、不改幀數 —— 進 loop filter 的幀數是「來源
-                # 實際幀數」，與 speed 無關（舊公式用 effective_dur(=source_dur/speed) ×
-                # fps 估算：speed=4 時低估 4 倍、guard 誤放行；speed=0.25 時高估、誤擋
-                # 合法輸入）。reverse 同理不影響幀數。優先用 ffprobe 原生 nb_frames
-                # （精確值），沒有才退階用 fps × 來源 duration 估算。
-                source_frames = probe_video_frame_count(source_path)
-                if source_frames is None:
-                    src_fps = probe_video_fps(source_path)
-                    source_frames = source_dur * src_fps if src_fps else None
-                if source_frames is not None:
-                    # ping_pong 是 concat(正+反) 後再 loop，單位幀數 = 來源幀數 ×2
-                    unit_frames = source_frames * 2 if loop_mode == "ping_pong" else source_frames
-                    if unit_frames > MAX_LOOP_FRAMES:
-                        raise ValueError(
-                            f"[Loop Video] loop_mode={loop_mode} 需要緩衝約 {unit_frames:.0f} frames"
-                            f"（來源 {source_frames:.0f} frames"
-                            f"{' ×2(ping_pong 正反合併)' if loop_mode == 'ping_pong' else ''}），"
-                            f"超過 FFmpeg loop filter 上限 {MAX_LOOP_FRAMES}，只會 loop 到前段內容、"
-                            "輸出會是錯誤結果。請改用 loop_mode=crossfade，或先降低來源 fps / 縮短素材長度。"
-                        )
+                # C4 fix：n=1（來源本身已達到/超過 target）時 loop=n-1=0，loop
+                # filter 是 pure pass-through、不 buffer 整段素材，不受 `size`
+                # 上限影響——20 分鐘來源 + target 30s 這種案例在舊碼本來就能正常
+                # 輸出，guard 只該在「真的需要 loop」（n>1）時把關。n 的算法跟
+                # `_build_filter` 共用 `_loop_repeat_count()`，避免兩處算式漂移。
+                n = _loop_repeat_count(loop_mode, effective_dur, target_duration_sec)
+                if n > 1:
+                    # loop filter 的 size 是「單一 unit」緩衝上限（INT16_MAX），不是總輸出
+                    # 長度；超過就只會 buffer 前 32767 frames、其餘 silently 消失 — 必須在
+                    # 送進 ffmpeg 前擋下（CLAUDE.md gotcha #3）。crossfade 走 xfade、不受此限制。
+                    #
+                    # F2 fix：`setpts` 只改時間戳、不改幀數 —— 進 loop filter 的幀數是「來源
+                    # 實際幀數」，與 speed 無關（舊公式用 effective_dur(=source_dur/speed) ×
+                    # fps 估算：speed=4 時低估 4 倍、guard 誤放行；speed=0.25 時高估、誤擋
+                    # 合法輸入）。reverse 同理不影響幀數。優先用 ffprobe 原生 nb_frames
+                    # （精確值），沒有才退階用 fps × 來源 duration 估算。
+                    source_frames = probe_video_frame_count(source_path)
+                    if source_frames is None:
+                        src_fps = probe_video_fps(source_path)
+                        source_frames = source_dur * src_fps if src_fps else None
+                    if source_frames is not None:
+                        # ping_pong 是 concat(正+反) 後再 loop，單位幀數 = 來源幀數 ×2
+                        unit_frames = source_frames * 2 if loop_mode == "ping_pong" else source_frames
+                        if unit_frames > MAX_LOOP_FRAMES:
+                            raise ValueError(
+                                f"[Loop Video] loop_mode={loop_mode} 需要緩衝約 {unit_frames:.0f} frames"
+                                f"（來源 {source_frames:.0f} frames"
+                                f"{' ×2(ping_pong 正反合併)' if loop_mode == 'ping_pong' else ''}），"
+                                f"超過 FFmpeg loop filter 上限 {MAX_LOOP_FRAMES}，只會 loop 到前段內容、"
+                                "輸出會是錯誤結果。請改用 loop_mode=crossfade，或先降低來源 fps / 縮短素材長度。"
+                            )
 
             filter_parts, v_out, a_out = self._build_filter(
                 loop_mode, effective_dur, target_duration_sec, crossfade_sec,
@@ -227,14 +251,13 @@ class MF_LoopVideo:
 
         # Step 2: 依 loop_mode 組接
         if mode == "strict":
-            n = max(1, math.ceil(target / eff_dur))
+            n = _loop_repeat_count(mode, eff_dur, target)
             parts.append(f"[base_v]loop=loop={n - 1}:size={MAX_LOOP_FRAMES}:start=0[looped_v]")
             if has_audio:
                 parts.append(f"[base_a]aloop=loop={n - 1}:size={MAX_LOOP_SAMPLES}:start=0[looped_a]")
 
         elif mode == "ping_pong":
-            unit_dur = eff_dur * 2
-            n = max(1, math.ceil(target / unit_dur))
+            n = _loop_repeat_count(mode, eff_dur, target)
             parts.append("[base_v]split=2[bv1][bv2]")
             parts.append("[bv2]reverse[bv2r]")
             parts.append("[bv1][bv2r]concat=n=2:v=1:a=0[pp_v]")
@@ -283,10 +306,9 @@ class MF_LoopVideo:
 
     @classmethod
     def IS_CHANGED(s, **kwargs):
-        # frames 接了 -> video_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
-        # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
-        if kwargs.get("frames") is not None:
-            return ""
+        # C1 fix：ComfyUI IS_CHANGED 收到的 linked 輸入（frames/audio）永遠是
+        # None，用它判斷 tensor 模式是 dead code。無條件 fingerprint video_path
+        # ——tensor 模式下沒被讀，fingerprint 它只是無害的多餘敏感度。
         return path_fingerprint(kwargs.get("video_path", ""))
 
 

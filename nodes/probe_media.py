@@ -85,10 +85,9 @@ class MF_ProbeMedia:
 
     @classmethod
     def IS_CHANGED(s, **kwargs):
-        # frames 接了 -> media_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
-        # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
-        if kwargs.get("frames") is not None:
-            return ""
+        # C1 fix：ComfyUI IS_CHANGED 收到的 linked 輸入（frames/audio）永遠是
+        # None，用它判斷 tensor 模式是 dead code。無條件 fingerprint media_path
+        # ——tensor 模式下沒被讀，fingerprint 它只是無害的多餘敏感度。
         return path_fingerprint(kwargs.get("media_path", ""))
 
 

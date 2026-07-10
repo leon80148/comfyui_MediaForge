@@ -334,7 +334,7 @@ def encode_tensor_to_gif(tensor, output_path, fps):
     return output_path
 
 
-def write_audio_dict_to_wav(audio_dict):
+def write_audio_dict_to_wav(audio_dict, mkstemp=None):
     """Validate AUDIO dict and write a temp 16-bit PCM .wav; returns the temp path.
 
     Caller decides how to feed the file to ffmpeg (e.g. `-i tmp.wav` for muxing)
@@ -342,10 +342,20 @@ def write_audio_dict_to_wav(audio_dict):
 
     為什麼用 tmpfile 不用 second pipe — FFmpeg subprocess.Popen 只能餵一個 stdin；
     要同時 inject 兩路 raw stream 得用 named pipe (Unix only) 或 tmp wav。tmp wav 跨平台、簡單可靠。
+
+    `mkstemp`（C5 fix）：預設走 `tempfile.mkstemp`；MF_ComposeAudioMix 的 AUDIO
+    dict materialize 需要傳 `utils.plugin_tmp.mkstemp_in_plugin_tmp`——該 WAV 的
+    path 會被寫進節點 cache 住的 op-spec 輸出、需要跨 ComfyUI 執行存活（見
+    utils/plugin_tmp.py sweep_stale_plugin_tmp() docstring），plain 系統 temp
+    沒有這個保證。其餘一次性用途的呼叫方（_audio_dict_to_pipe_args /
+    mux_path_with_audio_dict）不用傳，維持原本系統 temp 行為。
     """
     import os
     import tempfile
     import wave
+
+    if mkstemp is None:
+        mkstemp = tempfile.mkstemp
 
     waveform = audio_dict.get("waveform")
     sr = int(audio_dict.get("sample_rate") or 0)
@@ -363,7 +373,7 @@ def write_audio_dict_to_wav(audio_dict):
     wav = waveform[0].detach().cpu().clamp(-1.0, 1.0).numpy()  # [C, T]
     pcm16 = (wav.T * 32767.0).round().astype(np.int16)  # [T, C]
 
-    fd, tmp_path = tempfile.mkstemp(suffix=".wav", prefix="mf_audio_")
+    fd, tmp_path = mkstemp(suffix=".wav", prefix="mf_audio_")
     os.close(fd)
     with wave.open(tmp_path, "wb") as w:
         w.setnchannels(pcm16.shape[1])

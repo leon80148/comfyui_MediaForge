@@ -162,15 +162,24 @@ class MF_ConcatVideos:
         # 音訊壞。改成逐 stream（依 probe 順序）比對完整 signature 列表，不一致時指名
         # 哪個檔案、哪條 stream index、哪個欄位不同。
         #
-        # R5-2 [P2]：preflight 之前只驗 video/audio,但 `_concat_demuxer` 送出的
-        # `-map 0` 會 copy 全部 stream(含 subtitle/data/attachment)。若兩個輸入
-        # video/audio 完全一致、但只有一支帶字幕軌(或字幕 codec 不同),preflight
-        # 過關、`-map 0` copy 時晚爆或輸出字幕不完整 —— preflight 合約沒對齊 `-map 0`
-        # 的實際行為。改成先比對「完整 stream 佈局」(依 probe 順序列出每條 stream 的
-        # codec_type,序列長度與內容需逐一致),再對 subtitle/data/attachment 類
-        # stream 額外比對 codec_type + codec_name(同屬 subtitle 但字幕 codec 不同,
-        # 例如 srt vs ass,單看佈局序列看不出來)。
+        # C3+C6 [嚴重]：R5-2 當時比對過「完整 stream 佈局序列」(含
+        # subtitle/data/attachment)，理由是 `_concat_demuxer` 送出的 `-map 0` 會
+        # copy 全部 stream。但 `-map 0` 帶出兩個新問題：(1) data/timecode stream
+        # （GoPro/DJI 的 tmcd/gpmd——copy 模式的招牌使用場景）被硬塞進 concat
+        # demuxer + `-c copy`，demuxer 給不了這類 stream 該有的 codec 參數、直接
+        # exit 失敗；(2) attached_pic（yt-dlp --embed-thumbnail 的封面圖）讓完整
+        # 佈局序列比對把「一支有封面圖、一支沒有」的合法輸入組合誤判成不相容。
+        # 修法：`_concat_demuxer` 的 mapping 合約收斂成「主影音 + 字幕」
+        # （`-map 0:V -map 0:a? -map 0:s?`），data/attachment/attached_pic 一律
+        # 不 map；preflight 比對範圍同步收斂成只比「會被 map 的 stream」：main
+        # video（`codec_type=video` 且非 attached_pic）逐 stream 欄位、全部 audio
+        # 逐 stream 欄位、全部 subtitle 逐 stream 欄位（codec_type+codec_name），
+        # 數量比對也分別比 main-video 數 / audio 數 / subtitle 數。
+        # data/attachment/attached_pic 完全不比對（反正不會被 map），但若任一輸入
+        # 含這類 stream 會另外印警告告知使用者「已略過」，把舊版「靜默丟棄非預設
+        # stream」升級成「明確略過 + 提示」。
         from ..utils.ffmpeg import probe as _probe
+        from ..utils.ffmpeg import unmapped_stream_descriptions
 
         infos = []
         for p in paths:
@@ -182,16 +191,27 @@ class MF_ConcatVideos:
                 )
             infos.append(info)
 
+        # C3+C6：不被 map 的 stream（data/attachment/attached_pic）明確警告，
+        # 取代舊版的 silent drop。
+        skip_lines = []
+        for p, info in zip(paths, infos):
+            skipped = unmapped_stream_descriptions(info)
+            if skipped:
+                skip_lines.append(f"{p}：{', '.join(skipped)}")
+        if skip_lines:
+            print(
+                "[Concat Videos] 注意：copy 模式僅保留主影音與字幕軌，"
+                "已略過以下 stream：" + "；".join(skip_lines)
+            )
+
         # R4-3 [P2]：video signature 補 sample_aspect_ratio —— codec/解析度/pix_fmt/
         # profile 全同但 SAR 不同（例：16:15 vs 64:45）copy 合併後顯示比例會被擠壓，
         # 原本沒比對這欄位讓 preflight 誤判通過。
         video_fields = ("codec_name", "width", "height", "pix_fmt", "profile", "sample_aspect_ratio")
         audio_fields = ("codec_name", "sample_rate", "channels", "channel_layout")
-        # R5-2：layout = 全部 stream(不分 kind)依序的 codec_type,抓「哪個位置多/少/
-        # 換了一種 stream」；other = subtitle/data/attachment 類 stream 額外比 codec_name。
-        layout_fields = ("codec_type",)
-        other_kinds = ("subtitle", "data", "attachment")
-        other_fields = ("codec_type", "codec_name")
+        # C3+C6：只比 subtitle 本身（codec_type+codec_name）——data/attachment 不
+        # 參與比對（見上方 C3+C6 說明，兩者本來就不會被 map）。
+        subtitle_fields = ("codec_type", "codec_name")
 
         def _normalize_sar(value):
             # 未標 SAR 的檔實務上都是方形像素（1:1）顯示；把 ffprobe 各種「沒填」的
@@ -200,19 +220,13 @@ class MF_ConcatVideos:
             return "1:1" if value in (None, "", "0:1") else value
 
         def _sigs(info, kind, fields):
-            # kind=None → 不篩選(取全部 stream，給 layout 用);字串 → 精確比對
-            # （沿用既有 "video"/"audio" 呼叫方式）;容器（tuple/set）→ 屬於其中之一
-            # （給 other_kinds 分組用）。
-            def _matches(codec_type):
-                if kind is None:
-                    return True
-                if isinstance(kind, str):
-                    return codec_type == kind
-                return codec_type in kind
-
+            # C3+C6：video kind 額外排除 attached_pic（封面圖軌不算「主 video」，
+            # `-map 0:V` 本來就不會選到它，比了反而誤殺合法輸入）。
             sigs = []
             for s in info.get("streams", []):
-                if not _matches(s.get("codec_type")):
+                if s.get("codec_type") != kind:
+                    continue
+                if kind == "video" and (s.get("disposition") or {}).get("attached_pic") == 1:
                     continue
                 sigs.append(tuple(
                     _normalize_sar(s.get(f)) if f == "sample_aspect_ratio" else s.get(f)
@@ -235,36 +249,34 @@ class MF_ConcatVideos:
                 out.append(f"{kind}[{idx}]: {field_diffs}")
             return out
 
-        layout_sig_lists = [_sigs(info, None, layout_fields) for info in infos]
         video_sig_lists = [_sigs(info, "video", video_fields) for info in infos]
         audio_sig_lists = [_sigs(info, "audio", audio_fields) for info in infos]
-        other_sig_lists = [_sigs(info, other_kinds, other_fields) for info in infos]
-        baseline_layout = layout_sig_lists[0]
+        subtitle_sig_lists = [_sigs(info, "subtitle", subtitle_fields) for info in infos]
         baseline_v, baseline_a = video_sig_lists[0], audio_sig_lists[0]
-        baseline_other = other_sig_lists[0]
+        baseline_sub = subtitle_sig_lists[0]
 
         mismatched_lines = []
-        for p, layout_sigs, v_sigs, a_sigs, other_sigs in zip(
-            paths, layout_sig_lists, video_sig_lists, audio_sig_lists, other_sig_lists,
+        for p, v_sigs, a_sigs, sub_sigs in zip(
+            paths, video_sig_lists, audio_sig_lists, subtitle_sig_lists,
         ):
             diffs = (
-                _diff("layout", layout_fields, baseline_layout, layout_sigs)
-                + _diff("video", video_fields, baseline_v, v_sigs)
+                _diff("video", video_fields, baseline_v, v_sigs)
                 + _diff("audio", audio_fields, baseline_a, a_sigs)
-                + _diff("other", other_fields, baseline_other, other_sigs)
+                + _diff("subtitle", subtitle_fields, baseline_sub, sub_sigs)
             )
             if diffs:
                 mismatched_lines.append(f"  {p}: " + "; ".join(diffs))
 
         if mismatched_lines:
             raise ValueError(
-                "[Concat Videos] mode=copy 要求所有輸入的 stream 佈局一致"
-                "（依 probe 順序列出每條 stream 的 codec_type，序列長度與內容需逐一致，"
-                "含字幕/data/attachment 軌），且每一條 video/audio stream"
-                "（依 probe 順序逐條比對）codec/解析度/pix_fmt/profile（video）或"
-                "codec/取樣率/聲道數/聲道佈局（audio）完全一致、subtitle/data/attachment"
-                "類 stream 的 codec_type/codec_name 也需一致，否則 concat demuxer 常"
-                "exit code 0 但輸出壞檔（第一段後 glitch、音訊軌聲道錯亂，或字幕軌缺漏/錯亂）。"
+                "[Concat Videos] mode=copy 要求所有輸入的「主影音 + 字幕」stream 一致"
+                "（`-map 0:V -map 0:a? -map 0:s?` 合約 —— data/timecode/封面圖軌不"
+                "參與比對，因為本來就不會被 map）：main video（依 probe 順序逐條比對，"
+                "不含 attached_pic）codec/解析度/pix_fmt/profile/SAR 需完全一致，"
+                "audio（依 probe 順序逐條比對）codec/取樣率/聲道數/聲道佈局需完全"
+                "一致，subtitle（依 probe 順序逐條比對）codec_type/codec_name 需"
+                "完全一致，否則 concat demuxer 常 exit code 0 但輸出壞檔（第一段後"
+                "glitch、音訊軌聲道錯亂，或字幕軌缺漏/錯亂）。"
                 "偵測到差異（以第一個輸入為基準）：\n" + "\n".join(mismatched_lines) +
                 "\n請改用 mode=transcode。"
             )
@@ -288,7 +300,13 @@ class MF_ConcatVideos:
                 # R4-1 fix：concat demuxer 預設 stream selection 只挑一條 audio，
                 # 沒有 -map 0 會 silently 丟掉非預設軌（例如評論音軌）——preflight
                 # 已逐 stream 驗證全部輸入相容，這裡要保留全部 stream 才符合合約。
-                "-map", "0",
+                # C3+C6 fix：`-map 0`（全部 stream）改收斂成「主影音 + 字幕」——
+                # data/timecode stream（GoPro/DJI 的 tmcd/gpmd）塞進 concat demuxer
+                # + `-c copy` 會直接 exit 失敗（demuxer 給不了這類 stream 該有的
+                # codec 參數），是 copy 模式的招牌使用場景卻反而讓工作流硬爆。
+                # `0:V`（大寫）排除 attached_pic（封面圖）；`0:a?` / `0:s?` 的 `?`
+                # 讓「沒有音軌/字幕軌」時不會因為 map 不到而報錯。
+                "-map", "0:V", "-map", "0:a?", "-map", "0:s?",
                 "-c", "copy",
                 output_path,
             ]

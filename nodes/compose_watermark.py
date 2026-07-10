@@ -10,6 +10,7 @@ Watermark 是「placement preset + 相對 scale + 透明度 + 時間窗」便利
 """
 import os
 
+from ..utils.cache_key import path_fingerprint
 from ..utils.compose_ops import PLACEMENT_PRESETS
 
 
@@ -71,6 +72,16 @@ class MF_ComposeWatermark:
             "params": params,
         })
         return (ops,)
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # C1：ComfyUI IS_CHANGED 收到的 linked 輸入（例如上游 overlays chain）一律
+        # 是 None（execution_list=None，見 execution.py IsChangedCache.get），檔案
+        # 變更偵測必須由持有 path widget 的節點自己負責——下游 MF_ComposeVideo
+        # 收不到這個節點吐出的 op spec 內容，沒辦法幫忙 fingerprint。image_path 是
+        # 這個節點自己的 widget，IS_CHANGED 看得到，換掉同名 PNG（mtime 變）要讓
+        # 整條 chain 判定「變了」。
+        return path_fingerprint(kwargs.get("image_path", ""))
 
 
 NODE_CLASS_MAPPINGS = {"MF_ComposeWatermark": MF_ComposeWatermark}

@@ -23,14 +23,17 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from dataclasses import dataclass, field
+
+# C5：_mkstemp_in_plugin_tmp / _PLUGIN_TMP_DIR 的實作已搬到 utils/plugin_tmp.py
+# （nodes/compose_audio_mix.py 也需要用同一份邏輯寫 AUDIO dict 的 BGM WAV），這裡
+# re-export 維持既有 import path 相容（tests/test_compose_ir_plugin_tmp.py 等）。
+from .plugin_tmp import PLUGIN_TMP_DIR as _PLUGIN_TMP_DIR  # noqa: F401 -- re-export
+from .plugin_tmp import mkstemp_in_plugin_tmp as _mkstemp_in_plugin_tmp
 
 # Plugin root = utils/.. — used to locate the font/ subdirectory shared with burn_subtitle.
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FONT_DIR = os.path.join(_PLUGIN_DIR, "font")
-# drawtext textfile / 超長 filter script 的暫存目錄 — 見 _mkstemp_in_plugin_tmp (W1-9)。
-_PLUGIN_TMP_DIR = os.path.join(_PLUGIN_DIR, ".mf_tmp")
 
 # Common system fonts as fallback when plugin's font/ is empty.
 # drawtext on Windows native ffmpeg has no fontconfig — without an explicit fontfile=
@@ -257,23 +260,6 @@ class ComposeIR:
 
 # 超過此長度自動切到 -filter_complex_script tempfile
 FILTER_SCRIPT_THRESHOLD = 6000
-
-
-def _mkstemp_in_plugin_tmp(suffix="", prefix="mf_"):
-    """跟 tempfile.mkstemp 同介面 (fd, path)，優先寫進 plugin 內 `.mf_tmp/`。
-
-    為什麼不用系統 temp：Windows 中文使用者名稱（例如
-    `C:\\Users\\游永亮\\AppData\\Local\\Temp\\`）的路徑含非 ASCII 字元，
-    libavfilter 開 textfile= / -filter_complex_script 讀檔偶爾失敗（P0-9）。
-    Plugin 內路徑固定、ASCII，由我們自己管控。
-    目錄建立或寫入失敗（唯讀安裝 / 權限問題）時退回 tempfile.mkstemp 原行為 ——
-    caller 的 cleanup（unlink 回傳的 path）語意兩種來源一致，不受影響。
-    """
-    try:
-        os.makedirs(_PLUGIN_TMP_DIR, exist_ok=True)
-        return tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=_PLUGIN_TMP_DIR)
-    except OSError:
-        return tempfile.mkstemp(suffix=suffix, prefix=prefix)
 
 
 def _count_extra_input_consumers(ir: ComposeIR) -> dict[str, int]:

@@ -275,37 +275,22 @@ class MF_ComposeVideo:
 
     @classmethod
     def IS_CHANGED(s, **kwargs):
-        # frames 接了 -> video_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
-        # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
+        # C1 fix：ComfyUI IsChangedCache.get() 呼叫
+        # get_input_data(node["inputs"], class_def, node_id, None) —— 第 4 參數
+        # execution_list 固定傳 None，官方註解寫明 "We only want constants in
+        # IS_CHANGED"。後果：overlays / audio_ops（跟 frames / audio 一樣）是
+        # linked 輸入，IS_CHANGED 執行時收到的值永遠是 None。舊版在這裡遍歷
+        # kwargs.get("overlays") / kwargs.get("audio_ops") 找 image_path /
+        # srt_path / audio_path 完全是 dead code —— 迴圈永遠跑 0 次，換掉
+        # watermark PNG 這類上游檔案不會 invalidate cache。
         #
-        # F5 [P2]：video_path 不是唯一會被讀的檔案路徑 —— overlays / audio_ops chain
-        # 內每個 op spec 也帶路徑（image_path / params.srt_path / params.fontfile /
-        # audio_path），且這些路徑不管 path mode 或 tensor mode 都會被讀（frames 只
-        # 取代 video_path 本身，不取代 overlay 檔案），所以要跟 video_path 分開處理：
-        # video_path 只在 path mode 納入，overlay/audio op 路徑兩種 mode 都要納入。
-        # op spec 結構見 utils/compose_ops.py docstring。
-        paths = []
-        if kwargs.get("frames") is None:
-            paths.append(kwargs.get("video_path", ""))
-
-        for op_spec in kwargs.get("overlays") or []:
-            if op_spec.get("image_path"):
-                paths.append(op_spec["image_path"])
-            params = op_spec.get("params") or {}
-            if params.get("srt_path"):
-                paths.append(params["srt_path"])
-            if params.get("fontfile"):
-                paths.append(params["fontfile"])
-
-        for op_spec in kwargs.get("audio_ops") or []:
-            if op_spec.get("_is_temp"):
-                # 每次執行都是新 temp 檔（AUDIO dict materialize 出來的 WAV）；
-                # fingerprint 它會讓節點永遠判定「變了」，cache 形同虛設 — 跳過。
-                continue
-            if op_spec.get("audio_path"):
-                paths.append(op_spec["audio_path"])
-
-        return path_fingerprint(*paths)
+        # 真正的檔案變更偵測責任在「持有該 path widget」的節點自己：
+        # MF_ComposeWatermark / MF_ComposeOverlayImage / MF_ComposeBurnSubtitle /
+        # MF_ComposeAudioMix 各自的 IS_CHANGED 已補上對應 fingerprint（它們的
+        # image_path / srt_path / audio_path 是自己的 widget，IS_CHANGED 看得到）。
+        # 這裡只留 video_path —— 它是 ComposeVideo 自己的 widget。tensor 模式下
+        # video_path 沒被讀，fingerprint 它只是無害的多餘敏感度。
+        return path_fingerprint(kwargs.get("video_path", ""))
 
 
 NODE_CLASS_MAPPINGS = {"MF_ComposeVideo": MF_ComposeVideo}

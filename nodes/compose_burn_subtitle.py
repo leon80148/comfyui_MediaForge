@@ -17,6 +17,7 @@ from ..utils.ass_style import (
     list_fonts,
     resolve_font,
 )
+from ..utils.cache_key import path_fingerprint
 
 
 class MF_ComposeBurnSubtitle:
@@ -94,6 +95,13 @@ class MF_ComposeBurnSubtitle:
         ops = list(overlays) if overlays else []
         ops.append({"type": "subtitle", "params": params})
         return (ops,)
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # C1：ComfyUI IS_CHANGED 收到的 linked 輸入（上游 overlays chain）一律是
+        # None，檔案變更偵測必須由持有 path widget 的節點自己負責——srt_path 是
+        # 這個節點自己的 widget，IS_CHANGED 看得到。
+        return path_fingerprint(kwargs.get("srt_path", ""))
 
 
 NODE_CLASS_MAPPINGS = {"MF_ComposeBurnSubtitle": MF_ComposeBurnSubtitle}

@@ -14,10 +14,12 @@ from ..utils.encoder import build_encoder_args, get_available_codecs, pick_defau
 from ..utils.ffmpeg import (
     ensure_ffmpeg,
     escape_filter_path,
+    probe,
     probe_has_audio_stream,
     probe_keyframe_times,
     probe_video_duration,
     run_ffmpeg,
+    unmapped_stream_descriptions,
 )
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path, source_container_ext
 from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
@@ -47,17 +49,6 @@ class MF_TrimByRanges:
                      "medium", "slow", "slower", "veryslow"],
                     {"default": "medium"},
                 ),
-                # F1 fix：ComfyUI 存檔的 widgets_values 用「位置」對齊 required 宣告順序；
-                # precision 曾被插在 mode 之後（中段），導致舊 8-widget workflow JSON 載入
-                # 時 ranges_json 以降全部錯位對到下一個 widget。新 widget 一律 append-only
-                # 加到 required 尾端，才能維持舊存檔的 widgets_values 前綴不變、新 widget
-                # 自己落到 default（此欄位固定放最後一個位置，不要再往前搬）。
-                # W3-1：precise = 現行 trim+setpts re-encode；lossless = stream copy 切段
-                # + concat demuxer 合併，無 re-encode 但切點只能對齊來源前一個 keyframe。
-                "precision": (
-                    ["precise (re-encode)", "lossless (stream copy)"],
-                    {"default": "precise (re-encode)"},
-                ),
             },
             "optional": {
                 "ranges": ("SILENCE_RANGES",),
@@ -65,6 +56,27 @@ class MF_TrimByRanges:
                 "frames": ("IMAGE",),
                 "tensor_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "audio": ("AUDIO",),
+                # C2 fix：ComfyUI 存檔的 widgets_values 是「完整 widget 順序」的
+                # positional array——required 全部 widget（依宣告順序）+ optional
+                # 中「實際有 widget」的項目（依宣告順序；ranges/frames/audio 是純
+                # link 型別，不佔位置）。這個節點的 optional 裡 tensor_fps 是
+                # FLOAT widget，加 precision 前的完整順序是 8 個 required +
+                # tensor_fps = 9 個值。precision 若放 required 尾端（F1 舊解法），
+                # 會插在 tensor_fps 前面、把它擠到第 10 位——舊存檔 widgets_values[8]
+                # （tensor_fps=30.0）被錯位餵給 precision（COMBO），直接觸發
+                # "Value not in list"，每個舊 TrimByRanges workflow 一載入就壞
+                # （這是實際發生過的 regression，見 git history）。改放 optional
+                # 尾端（在 audio 之後宣告）才能維持舊 9 值前綴不變、precision 自己
+                # 落到 default。日後新 widget 一律 append 到「完整 widget 順序」最
+                # 尾端——這個 node 的 optional 已經有 widget，新 widget 要放
+                # optional 尾端而非 required 尾端。
+                # W3-1：precise = 現行 trim+setpts re-encode；lossless = stream
+                # copy 切段 + concat demuxer 合併，無 re-encode 但切點只能對齊來源
+                # keyframe。
+                "precision": (
+                    ["precise (re-encode)", "lossless (stream copy)"],
+                    {"default": "precise (re-encode)"},
+                ),
             },
         }
 
@@ -115,8 +127,29 @@ class MF_TrimByRanges:
             # W3-1：lossless 模式不轉容器，副檔名沿用來源（stream copy 語意上就是「跟來源
             # 一致」），codec/crf/preset widget 在這個分支被忽略。F3：共用 helper 抽到
             # utils/output_path.py，concat_videos.py 的 copy 模式也用同一份。
+            # C7 fix：path 模式 + AUDIO dict 時 source_path 其實是
+            # mux_path_with_audio_dict() 產出的 .mkv transit 檔（temp 容器固定
+            # .mkv，見 utils/video_io.py R3-1 說明），跟使用者填的 video_path 副檔名
+            # 無關。沿用 source_path 的副檔名會讓「.mp4 來源」的 lossless 輸出悄悄
+            # 變成 .mkv，違反 README 承諾的「沿用來源副檔名」、也弄壞下游 mp4-only
+            # pipeline。改成沿用「使用者實際輸入」的副檔名：tensor 模式沒有
+            # video_path 可言，沿用 source_path 本身（encode_tensor_to_tempfile
+            # 固定產出 .mp4，沒有這個問題）；path 模式一律沿用 video_path。唯一
+            # 例外：video_path 是 .webm 且外接了 AUDIO dict —— transit 檔內的音軌是
+            # AAC（mux_path_with_audio_dict 寫死 `-c:a aac`），WebM 容器不支援
+            # AAC，只能退回 transit 檔本身的 .mkv 並印出說明。
             if is_lossless:
-                ext = source_container_ext(source_path)
+                if frames is not None:
+                    ext = source_container_ext(source_path)
+                else:
+                    ext = source_container_ext(video_path)
+                    if ext == ".webm" and audio is not None:
+                        ext = ".mkv"
+                        print(
+                            "[Trim By Ranges] 注意：來源是 .webm 但外接了 AUDIO dict，"
+                            "混音後音軌是 AAC（WebM 容器不支援），lossless 輸出改用 "
+                            ".mkv 容器。"
+                        )
             else:
                 codec_map = get_available_codecs()
                 codec_id, _pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
@@ -278,12 +311,27 @@ class MF_TrimByRanges:
 
     @staticmethod
     def _trim_lossless(source_path, output_path, keep_ranges):
+        # C3+C6：mapping 合約收斂成「主影音 + 字幕」（見下方 -map 0:V ...），
+        # data/timecode/封面圖軌會被略過——先警告，取代舊版的 silent drop。
+        info = probe(source_path)
+        if info:
+            skipped = unmapped_stream_descriptions(info)
+            if skipped:
+                print(
+                    "[Trim By Ranges] 注意：lossless 模式僅保留主影音與字幕軌，"
+                    f"已略過以下 stream：{source_path}：{', '.join(skipped)}"
+                )
+
         # R6-1 [P1] fix：stream copy 只能在 keyframe 上切。原本 `-ss {s} -to {e}` 都是
         # input-side seek——FFmpeg 會把 `-ss` 往前退到 s 之前最近的 keyframe，但 `-to`
         # 是絕對終點不變，GOP 稀疏時等於把 mode=remove 判定要移除的內容重新包進輸出
         # （甚至整段重複）。改成「前向」對齊：每個 keep range 的起點只准往後挪到下一顆
         # keyframe，絕不往前擴進已移除區間；range 內完全沒有可用 keyframe 就 raise
         # （往前擴或悄悄跳過都會產生錯誤內容，不是可接受的 graceful degradation）。
+        #
+        # C10：keyframe 掃描要 decode 整段（只解 keyframe但仍需通讀整個 stream），
+        # 長素材上不是瞬間完成——先告知使用者，避免以為卡住。
+        print(f"[Trim By Ranges] 正在掃描來源 keyframe（長素材可能需要一段時間）：{source_path}")
         keyframes = probe_keyframe_times(source_path)
         if not keyframes:
             raise RuntimeError(
@@ -328,9 +376,14 @@ class MF_TrimByRanges:
                     "-ss", f"{s_adj + 0.0005:.6f}",
                     "-i", source_path,
                     "-t", f"{e - s_adj:.6f}",
-                    # R4-2 fix：不加 -map 0 只會抽到預設音軌，雙音軌來源（如英文 +
+                    # R4-2 fix：不加 -map 只會抽到預設音軌，雙音軌來源（如英文 +
                     # 評論軌 mkv）在切段當下就已經丟軌——「lossless」掉軌非常違反直覺。
-                    "-map", "0",
+                    # C3+C6 fix：`-map 0`（全部 stream）改收斂成「主影音 + 字幕」——
+                    # data/timecode stream（GoPro/DJI 的 tmcd/gpmd）塞進 `-c copy`
+                    # 會直接 exit 失敗，demuxer/muxer 給不了這類 stream 該有的 codec
+                    # 參數。`0:V` 排除 attached_pic（封面圖）；`?` 讓沒有音軌/字幕軌
+                    # 時不會因為 map 不到而報錯。
+                    "-map", "0:V", "-map", "0:a?", "-map", "0:s?",
                     "-c", "copy", "-avoid_negative_ts", "make_zero",
                     seg_path,
                 ]
@@ -350,9 +403,12 @@ class MF_TrimByRanges:
 
             concat_cmd = [
                 "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                # R4-2 fix：段檔本身可能保留了多軌（上面 per-segment 已加 -map 0），
-                # 合併時同樣要 -map 0 才不會在這一步二次丟軌。
-                "-i", list_path, "-map", "0", "-c", "copy", output_path,
+                # R4-2 fix：段檔本身可能保留了多軌（上面 per-segment 已加 -map），
+                # 合併時同樣要 map 才不會在這一步二次丟軌。C3+C6 fix：與分段 cmd
+                # 一致收斂成「主影音 + 字幕」——段檔本來就不含 data/attached_pic
+                # （上一步已經略過），這裡維持同款合約單純是介面一致、無額外副作用。
+                "-i", list_path, "-map", "0:V", "-map", "0:a?", "-map", "0:s?",
+                "-c", "copy", output_path,
             ]
             if not run_ffmpeg(concat_cmd, tag="Trim By Ranges"):
                 raise RuntimeError("[Trim By Ranges] lossless 合併片段失敗，請查看上方 stderr 輸出。")
@@ -361,10 +417,9 @@ class MF_TrimByRanges:
 
     @classmethod
     def IS_CHANGED(s, **kwargs):
-        # frames 接了 -> video_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
-        # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
-        if kwargs.get("frames") is not None:
-            return ""
+        # C1 fix：ComfyUI IS_CHANGED 收到的 linked 輸入（frames/audio）永遠是
+        # None，用它判斷 tensor 模式是 dead code。無條件 fingerprint video_path
+        # ——tensor 模式下沒被讀，fingerprint 它只是無害的多餘敏感度。
         return path_fingerprint(kwargs.get("video_path", ""))
 
 
