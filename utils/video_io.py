@@ -422,8 +422,10 @@ def encode_tensor_to_tempfile(frames, fps, audio=None):
     processes that, caller unlinks in finally. Mirrors the temp-WAV pattern in
     detect_silence.py / whisper_transcribe.py but for video.
 
-    Quality is fixed h264/yuv420p/crf=18 — downstream re-encodes anyway, so
-    chasing higher quality here only wastes time.
+    Quality is fixed h264/yuv420p/crf=18/preset=veryfast — downstream re-encodes
+    anyway (W2-2), so a slower preset here only burns time without improving the
+    final output; veryfast at crf=18 is visually indistinguishable as an
+    intermediate but encodes several times faster than medium.
 
     Caller is responsible for `os.unlink()` (use try/finally).
     """
@@ -433,7 +435,7 @@ def encode_tensor_to_tempfile(frames, fps, audio=None):
     os.close(fd)
     encode_tensor_to_video(
         frames, tmp, fps=fps, audio=audio,
-        codec="libx264", pix_fmt="yuv420p", crf=18, preset="medium",
+        codec="libx264", pix_fmt="yuv420p", crf=18, preset="veryfast",
     )
     return tmp
 

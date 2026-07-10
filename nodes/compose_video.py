@@ -23,7 +23,6 @@ from ..utils.ffmpeg import (
     ensure_ffmpeg,
     get_video_display_dims,
     probe,
-    probe_has_audio_stream,
     run_ffmpeg,
 )
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
@@ -117,7 +116,10 @@ class MF_ComposeVideo:
                     f"[Compose Video] source 沒有 video stream:{source_path}。"
                     "請改傳影片檔（不能用純音訊檔當 ComposeVideo 的 source）"
                 )
-            has_audio = probe_has_audio_stream(source_path)
+            # W2-3：直接用手上已經 probe 過的 info 判斷，不再多打一次
+            # probe_has_audio_stream(source_path)（該函式內部也是呼叫 probe()，
+            # 對同一個 source_path 重複 probe 純屬多餘的 ffprobe spawn）。
+            has_audio = any(s.get("codec_type") == "audio" for s in info.get("streams", []))
 
             # 0-sentinel resolve target dimensions
             if target_width == 0 or target_height == 0:

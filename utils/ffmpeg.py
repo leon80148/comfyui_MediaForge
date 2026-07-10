@@ -1,3 +1,4 @@
+import collections
 import json
 import os
 import shutil
@@ -186,7 +187,42 @@ def run_ffmpeg(command, tag="FFmpeg"):
         return False
 
 
+# ─── probe() 進程內快取（W2-1）───
+#
+# 為什麼：probe_duration / probe_video_duration / probe_has_audio_stream / probe_video_fps
+# 都各自呼叫 probe()，單一節點執行常對同一檔案重複 probe 2-4 次（ConcatVideos transcode
+# 對 N 檔 2N 次、ComposeVideo 2 次、LoopVideo 3-4 次）。ffprobe spawn 在 WSL/UNC 路徑上
+# 有可感知延遲，快取掉重複呼叫直接省下對應次數的 subprocess spawn。
+#
+# Key 用 (abspath, mtime_ns, size) 而非單純 path：同路徑覆寫內容要視為 cache miss，
+# 語意對齊 W1-13 IS_CHANGED 用的 mtime fingerprint（utils/cache_key.py）。stat 失敗
+# （檔案不存在等）不快取，讓 subprocess 照舊走、給原生錯誤路徑。
+PROBE_CACHE_MAXSIZE = 64
+_PROBE_CACHE = collections.OrderedDict()
+
+
+def clear_probe_cache():
+    """清空 probe() 的進程內快取。
+
+    Runtime 不需要呼叫——cache key 已含 mtime/size，同路徑換內容會自動 miss。
+    測試用：tests/conftest.py 的 autouse fixture 每個 test 開始前呼叫，避免固定
+    tmp 檔名重用（同 path/mtime/size 剛好重合）造成的跨 test 汙染。
+    """
+    _PROBE_CACHE.clear()
+
+
 def probe(path):
+    cache_key = None
+    try:
+        st = os.stat(path)
+        cache_key = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        pass  # 檔案不存在等 stat 失敗情況——不快取
+
+    if cache_key is not None and cache_key in _PROBE_CACHE:
+        _PROBE_CACHE.move_to_end(cache_key)
+        return _PROBE_CACHE[cache_key]
+
     cmd = resolve_ffmpeg_cmd([
         "ffprobe", "-v", "error",
         "-print_format", "json",
@@ -202,10 +238,18 @@ def probe(path):
             encoding='utf-8',
             errors='replace',
         )
-        return json.loads(result.stdout)
+        info = json.loads(result.stdout)
     except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
         print(f"[ffprobe] 失敗: {e}")
-        return None
+        info = None
+
+    if cache_key is not None:
+        _PROBE_CACHE[cache_key] = info
+        _PROBE_CACHE.move_to_end(cache_key)
+        if len(_PROBE_CACHE) > PROBE_CACHE_MAXSIZE:
+            _PROBE_CACHE.popitem(last=False)
+
+    return info
 
 
 def probe_duration(path):
