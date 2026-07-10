@@ -380,7 +380,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 
 **Precision 模式**：
 - `precise (re-encode)` — `trim` + `setpts` re-encode（原本的行為，逐幀精確）。預設值；這個 widget 加入前存的 workflow JSON 載入後行為不變。
-- `lossless (stream copy)` — keyframe-seek 分段 stream copy（`-c copy`）+ concat demuxer 合併。長素材上幾乎瞬間完成、零畫質損失，但切點會對齊來源前一個 keyframe（有 GOP 級的時間誤差），且 `crossfade_sec` 必須是 `0` — 兩者同時設會 **raise**。
+- `lossless (stream copy)` — keyframe-seek 分段 stream copy（`-c copy`）+ concat demuxer 合併。長素材上幾乎瞬間完成、零畫質損失，但切點會對齊來源前一個 keyframe（有 GOP 級的時間誤差）。`crossfade_sec` 在這個模式無法生效（stream copy 無法混合像素）— widget 會被隱藏，殘留自 `precise` 模式的非 0 值會被**忽略**（印警告），不會 raise。
 
 **Ranges 輸入**（兩種、互斥 — pin 優先）：
 - `ranges`（pin、選用）— 從 `MF_DetectSilence`（或 `MF_DetectScenes`）接過來的 `SILENCE_RANGES`。
@@ -392,7 +392,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 | `filename_prefix` | `MediaForge/trimmed` | |
 | `mode` | `remove` | `remove` = 刪除指定區間、留其他；`keep` = 留指定區間、刪其他 |
 | `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | 沒接 `ranges` pin 時用這個 |
-| `crossfade_sec` | `0.0` (0–2) | 保留段之間走 `xfade`；`0` = 硬切。`precision=lossless` 時不可用 |
+| `crossfade_sec` | `0.0` (0–2) | 保留段之間走 `xfade`；`0` = 硬切。`precision=lossless` 時隱藏且被忽略（stream copy 無法混合像素） |
 | `codec` / `crf` / `preset` | smart / `18` / `medium` | `precision=lossless` 時忽略（輸出容器改沿用來源） |
 | `precision` | `precise (re-encode)` | `lossless (stream copy)` 會隱藏 `codec` / `crf` / `preset` / `crossfade_sec`（前端強制）— 這幾個在該模式下都不會傳給 ffmpeg。刻意宣告在 schema **最後一個位置**（不是排在 `mode` 旁邊）：ComfyUI 存檔的 widget 值是按位置對齊的，後加的 widget 必須 append 到尾端，舊 workflow JSON 才能繼續正確載入 |
 
@@ -400,7 +400,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 - `keep` + 空 ranges → **raise**（拒絕輸出空檔）。
 - `remove` + 空 ranges → **identity**（原片不動）。
 
-**音訊同步**：音影 interleaved concat（`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`），跨切點音訊不會跑掉。沒音軌的 source 自動補靜音 pad。（`precision=lossless` 改成逐段 stream copy 再 concat demuxer 合併 — 不經過 filter graph。）
+**音訊同步**：音影 interleaved concat（`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`），跨切點音訊不會跑掉。沒音軌的 source 輸出也無音軌（`-an`）— 不會補靜音 pad（那是 `MF_ConcatVideos` 的行為，不是這個節點）。（`precision=lossless` 改成逐段 stream copy 再 concat demuxer 合併 — 不經過 filter graph。）
 
 **輸出容器**（僅 `precision=lossless`）：沿用來源檔案副檔名（`.mp4` / `.mov` / `.mkv` / `.webm` / `.avi` / `.m4v`；不認得的副檔名退回 `.mp4`）。`precision=precise` 一律照 `codec` 選擇走（ProRes 走 `.mov`，其他 `.mp4`）。
 

@@ -79,14 +79,18 @@ class MF_TrimByRanges:
         if not ensure_ffmpeg():
             raise RuntimeError("[Trim By Ranges] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
-        # W3-1：lossless（stream copy）在數學上做不到淡接混合像素——這不是「使用者預期
-        # 可接受」的退階（會產生使用者沒要求的硬切結果），所以及早 raise 而非 clamp/忽略。
+        # R2-2 fix：crossfade_sec 在 precision=lossless 時被前端隱藏
+        # (web/dual_input_lock.js WIDGET_VALUE_LOCKS)，使用者切到 lossless 後看不到這個
+        # widget，殘留的非 0 值（例如先在 precise 模式設過再切模式）若讓它 raise，
+        # 使用者會看不到造成錯誤的值 —— 是 dead-UI 陷阱。lossless 的可見意圖就是
+        # 「不 re-encode」，忽略 crossfade_sec、印警告後照常硬切輸出，符合 CLAUDE.md
+        # graceful degradation 判準（輸出是使用者依 UI 表現可預期接受的東西）。
         is_lossless = precision == "lossless (stream copy)"
         if is_lossless and crossfade_sec > 0:
-            raise ValueError(
-                "[Trim By Ranges] precision=lossless (stream copy) 無法做 crossfade 淡接"
-                "（stream copy 無法混合像素）。請改用 precision=precise (re-encode)，"
-                "或將 crossfade_sec 設為 0。"
+            print(
+                f"[Trim By Ranges] 注意：precision=lossless (stream copy) 無法做 crossfade "
+                f"淡接（stream copy 無法混合像素），已忽略 crossfade_sec={crossfade_sec}。"
+                "要淡接請切回 precision=precise (re-encode)。"
             )
 
         cleanup_tmp = None

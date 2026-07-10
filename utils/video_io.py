@@ -375,11 +375,11 @@ def write_audio_dict_to_wav(audio_dict):
 
 
 def mux_path_with_audio_dict(video_path, audio_dict, *, keep_original=False):
-    """Pre-mux 既有 video 檔案 + AUDIO dict → 一個 temp .mp4。
+    """Pre-mux 既有 video 檔案 + AUDIO dict → 一個 temp 檔（容器沿用來源副檔名）。
 
     用途：dual-input file-consumer node 在 path mode 同時收到 `video_path` (檔案) 跟
     `audio` (AUDIO dict) 時，原本 path-mode 分支完全忽略 audio dict → silent drop。
-    這個 helper 把兩者合成 temp.mp4，下游 filter graph 仍只需讀 `[0:v]` + `[0:a]`，
+    這個 helper 把兩者合成 temp 檔，下游 filter graph 仍只需讀 `[0:v]` + `[0:a]`，
     幾乎不用改動 — 跟 tensor mode 走 encode_tensor_to_tempfile 後的 source_path 對稱。
 
     `keep_original` (keyword-only)：
@@ -399,12 +399,16 @@ def mux_path_with_audio_dict(video_path, audio_dict, *, keep_original=False):
     import tempfile
 
     from .ffmpeg import probe_has_audio_stream, resolve_ffmpeg_cmd
+    from .output_path import source_container_ext
 
     # source 有沒有 audio 軌決定 keep_original=True 走 amix 還是退化 replace
     source_has_audio = keep_original and probe_has_audio_stream(video_path)
 
     wav_path = write_audio_dict_to_wav(audio_dict)
-    fd, tmp_mp4 = tempfile.mkstemp(suffix=".mp4", prefix="mf_path_audio_mux_")
+    # R2-1 fix：temp 容器沿用來源副檔名，不硬編 .mp4 —— 來源是 ProRes .mov 時
+    # `-c:v copy` 寫進 mp4 muxer 會直接 mux fail（mp4 沒有 prores tag）。
+    tmp_ext = source_container_ext(video_path)
+    fd, tmp_media = tempfile.mkstemp(suffix=tmp_ext, prefix="mf_path_audio_mux_")
     os.close(fd)
     try:
         base = [
@@ -429,13 +433,13 @@ def mux_path_with_audio_dict(video_path, audio_dict, *, keep_original=False):
         base.extend([
             "-c:v", "copy",      # 零 transcode 開銷
             "-c:a", "aac", "-b:a", "192k",
-            tmp_mp4,
+            tmp_media,
         ])
         cmd = resolve_ffmpeg_cmd(base)
         r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
         if r.returncode != 0:
             try:
-                os.unlink(tmp_mp4)
+                os.unlink(tmp_media)
             except OSError:
                 pass
             tail = "\n".join((r.stderr or "").strip().splitlines()[-30:])
@@ -447,7 +451,7 @@ def mux_path_with_audio_dict(video_path, audio_dict, *, keep_original=False):
             os.unlink(wav_path)
         except OSError:
             pass
-    return tmp_mp4
+    return tmp_media
 
 
 def _audio_dict_to_pipe_args(audio_dict, cmd):

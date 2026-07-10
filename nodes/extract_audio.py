@@ -87,14 +87,18 @@ class MF_ExtractAudio:
                 "請確認來源是含音軌的影片或音訊檔。"
             )
 
+        # R2-3 fix：ext 是由 _first_audio_stream() 取的「第一條」audio stream 決定；
+        # 多音軌來源（例：0:a:0 AAC + 0:a:1 FLAC 5.1）若不明確 -map，ffmpeg 預設的
+        # stream selection 會挑 channel 數最高的一條，跟 ext 判斷對不上 → mux fail
+        # 或抽錯軌。明確 -map 0:a:0 鎖定同一條 probe 過的 stream。
         if format == "copy":
             ext = self._copy_ext_for_codec(audio_stream.get("codec_name", ""))
             output_path = resolve_output_path(filename_prefix, ext)
-            cmd = ["ffmpeg", "-y", "-i", audio_source, "-vn", "-c:a", "copy", output_path]
+            cmd = ["ffmpeg", "-y", "-i", audio_source, "-vn", "-map", "0:a:0", "-c:a", "copy", output_path]
         else:
             codec, ext = _TRANSCODE_MAP[format]
             output_path = resolve_output_path(filename_prefix, ext)
-            cmd = ["ffmpeg", "-y", "-i", audio_source, "-vn", "-c:a", codec, output_path]
+            cmd = ["ffmpeg", "-y", "-i", audio_source, "-vn", "-map", "0:a:0", "-c:a", codec, output_path]
 
         if not run_ffmpeg(cmd, tag="Extract Audio"):
             raise RuntimeError("[Extract Audio] FFmpeg 抽取音訊失敗，請查看上方 stderr 輸出。")

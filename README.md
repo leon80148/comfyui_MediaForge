@@ -380,7 +380,7 @@ Cut a video by time ranges. Primary use case: auto-remove silence (wire from `MF
 
 **Precision modes**:
 - `precise (re-encode)` — `trim` + `setpts` re-encode (original behavior, frame-accurate cuts). Default; workflow JSON saved before this widget existed loads unchanged.
-- `lossless (stream copy)` — keyframe-seek segment copy (`-c copy`) + concat-demuxer merge. Near-instant even on long sources with no quality loss, but cuts snap to the source's previous keyframe (GOP-level timing error) and `crossfade_sec` must be `0` — the node **raises** if you set both.
+- `lossless (stream copy)` — keyframe-seek segment copy (`-c copy`) + concat-demuxer merge. Near-instant even on long sources with no quality loss, but cuts snap to the source's previous keyframe (GOP-level timing error). `crossfade_sec` can't apply (stream copy can't blend pixels) — the widget is hidden in this mode, and any stale non-zero value left over from `precise` mode is **ignored** (with a console warning), not an error.
 
 **Range input** (mutually exclusive — pin takes priority):
 - `ranges` (pin, optional) — `SILENCE_RANGES` from `MF_DetectSilence` (or `MF_DetectScenes`).
@@ -392,7 +392,7 @@ Cut a video by time ranges. Primary use case: auto-remove silence (wire from `MF
 | `filename_prefix` | `MediaForge/trimmed` | |
 | `mode` | `remove` | `remove` = drop ranges, keep rest. `keep` = keep ranges, drop rest |
 | `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | Used when `ranges` pin not wired |
-| `crossfade_sec` | `0.0` (0–2) | `xfade` between adjacent kept segments; `0` = hard cut. Unavailable in `precision=lossless` |
+| `crossfade_sec` | `0.0` (0–2) | `xfade` between adjacent kept segments; `0` = hard cut. Hidden and ignored in `precision=lossless` (stream copy can't blend pixels) |
 | `codec` / `crf` / `preset` | smart / `18` / `medium` | Ignored in `precision=lossless` (output container follows the source instead) |
 | `precision` | `precise (re-encode)` | `lossless (stream copy)` hides `codec` / `crf` / `preset` / `crossfade_sec` (frontend-enforced) — none of them reach ffmpeg in that mode. Declared **last** in the node's schema (not grouped next to `mode`) on purpose: ComfyUI aligns a saved workflow's widget values positionally, so a widget added later must be appended at the end to keep old workflow JSON loading correctly |
 
@@ -400,7 +400,7 @@ Cut a video by time ranges. Primary use case: auto-remove silence (wire from `MF
 - `keep` + empty ranges → **raises** (refuses to produce an empty output).
 - `remove` + empty ranges → **identity** (returns full clip unchanged).
 
-**Audio sync**: video and audio segments are interleaved-concat (`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`), so audio stays aligned across cuts. Sources without audio are auto-handled with silence pads. (`precision=lossless` instead stream-copies each segment and concat-demuxes them — no filter graph involved.)
+**Audio sync**: video and audio segments are interleaved-concat (`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`), so audio stays aligned across cuts. Sources without audio produce audio-less output (`-an`) — no silence padding (that's `MF_ConcatVideos`'s behavior, not this node's). (`precision=lossless` instead stream-copies each segment and concat-demuxes them — no filter graph involved.)
 
 **Output container** (`precision=lossless` only): follows the source file's extension (`.mp4` / `.mov` / `.mkv` / `.webm` / `.avi` / `.m4v`; unrecognized extensions fall back to `.mp4`). `precision=precise` always follows the `codec` choice instead (`.mov` for ProRes, `.mp4` otherwise).
 
