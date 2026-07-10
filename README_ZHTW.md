@@ -10,7 +10,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## 亮點
 
-- 🎞️ **22 個節點** 分散在 5 個分類 — Subtitle / Video / Analysis / Compose（含 audio chain）/ AI（standalone Audio / Net / Image 規劃中）
+- 🎞️ **24 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）
 - 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + tensor_fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
 - 🚀 **智慧 GPU codec 預設** — 偵測到 NVENC 自動用 `h264_nvenc`，沒 GPU 的機器自動 fallback `libx264`。不必手動切、不會在沒卡的環境壞掉
 - 📡 **API-ready 輸出** — 每個產出檔案的節點都同時 emit ComfyUI `ui.images` metadata，`/history/<prompt_id>` 直接看到輸出檔名，`/view?filename=X&subfolder=Y&type=output` 可下載（見 [Using via API](#using-via-api)）
@@ -27,7 +27,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 2. [Using via API（API 工作流）](#using-via-api)
 3. [智慧 GPU codec 預設](#智慧-gpu-codec-預設)
 4. [為什麼選這個 plugin（vs VideoHelperSuite）](#為什麼選這個-pluginvs-videohelpersuite)
-5. [節點清單（22）](#節點清單22)
+5. [節點清單（24）](#節點清單24)
 6. [AI Provider Recipes](#ai-provider-recipes)
 7. [Hidden Contracts（內部型別契約）](#hidden-contracts內部型別契約)
 8. [Architecture](#architecture)
@@ -100,7 +100,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## Using via API
 
-所有產出檔案的節點(BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo / ConvertChinese) 都同時 emit ComfyUI `ui.images` metadata 跟 STRING path 兩種輸出。API 客戶端不必自己 parse 路徑就能拿到產出檔。
+所有產出檔案的節點(BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo / ExtractAudio / ConvertChinese) 都同時 emit ComfyUI `ui.images` metadata 跟 STRING path 兩種輸出。API 客戶端不必自己 parse 路徑就能拿到產出檔。
 
 ### 1. 送 workflow 上去
 
@@ -154,6 +154,8 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 
 Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec()`），檢查 `ffmpeg -encoders` 有沒有 `h264_nvenc`。NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）只在可用時加進 dropdown；`av1_nvenc` 需要 Ada Lovelace（RTX 4000+）。
 
+**CRF-equivalent 畫質（`cq`）**：當 `crf` 對到 NVENC encoder 時，`utils/encoder.py:build_encoder_args()` 會吐 `-rc vbr -cq <n> -b:v 0`。這個 `-b:v 0` 很關鍵 — 沒加的話 NVENC 仍會疊加預設 ~2 Mbps 的 bitrate target 在 `-cq` 之上，不管 `crf` 設多低畫質都被蓋住。`-cq` 跟 `-crf` 共用同一組 0–51 數值範圍與大致相同的畫質語意（18 ≈ 視覺無損、23 ≈ 標準），所以同一顆節點在 CPU codec 跟 NVENC 之間切換時，既有 `crf` 值可以直接沿用。
+
 要 per-node 覆寫直接在 dropdown 選就好 — 既有 workflow 已存了 codec 值（如 `"h264 (libx264)"`）載入時不受影響，新 default 只影響**新拖出來的節點**。
 
 ## 為什麼選這個 plugin（vs VideoHelperSuite）
@@ -162,10 +164,13 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 |---|---|---|---|
 | 影片載入 → IMAGE batch | ✅ opencv | ✅ FFmpeg | MediaForge 可處理 AV1 / HEVC 10-bit / ProRes / VP9 / 任意 colorspace |
 | IMAGE batch → 影片儲存 | ✅ 只 H.264 | ✅ H.264 / HEVC / AV1 / ProRes | 加上 CRF / bitrate / target-size 模式 |
+| GIF 匯出 | ❌ | ✅ | `MF_SaveVideoFrames` `codec=gif (palette)` — 雙 pass palette + Bayer dither |
 | 音訊 in/out（canonical dict） | ⚠️ 有限 | ✅ 雙向 | `{'waveform': Tensor[B,C,T], 'sample_rate': int}` |
 | 按 ranges 裁切 | ✅ image-batch | ✅ 影片 + image-batch | MediaForge 直接吃 `MF_DetectSilence` 輸出 |
+| 無損裁切（不 re-encode） | ❌ | ✅ | `MF_TrimByRanges` `precision=lossless (stream copy)` |
 | **路徑級影片拼接（跨 codec、含音軌）** | **❌** | **✅** | MediaForge 獨有 — VHS Combine 只能拼 IMAGE batch |
 | 靜音偵測 | ❌ | ✅ | |
+| 場景切換偵測 | ❌ | ✅ | `MF_DetectScenes` — 直接接 `MF_TrimByRanges` |
 | 字幕燒入 | ❌ | ✅ | |
 | 多層 overlay Compose pipeline（單次 re-encode） | ❌ | ✅ | filter_complex graph 編譯器 |
 | 浮水印預設（透明度／邊距／時間窗／擺位） | ❌ | ✅ | |
@@ -174,13 +179,15 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 
 **結論**：兩個都裝。VHS 用於快速 IMAGE batch workflow；MediaForge 用於廣播級編碼、檔案級操作、Compose pipeline、AI 字幕。
 
-## 節點清單（22）
+## 節點清單（24）
 
 每個節點區段都遵循同一個模板：**用途 → 適用情境 → 必填欄位 → 選用輸入 → 輸出 → 範例**。Widget 表掃過去就能找到要調的旋鈕，範例則給典型接線方式。
 
 > **Dual-input 註記**：下列標 **(dual-input)** 的 node 同時接受兩種 input：(a) 既有的 `video_path` STRING 欄位，(b) `frames` + `tensor_fps` + `audio` 三件套 optional 輸入。連 tensor 時 MediaForge 內部會寫一個 temp `.mp4` 給 FFmpeg 吃。
 >
 > 前端 extension `web/dual_input_lock.js` 把 widget 可見性跟 wiring 狀態連動：接 `frames` 時 path widget 自動收起（tensor 模式）、`tensor_fps` 只在 tensor 模式才顯示。Path-mode-only 的 widget（如 `keep_source_audio`）在 tensor 模式自動隱藏。
+>
+> 有些 dual-input node 是靠 **AUDIO** pin 觸發、不是 `frames` — `MF_ComposeAudioMix` / `MF_DetectSilence` / `MF_ExtractAudio` 在 `audio` pin 接上時會隱藏各自的 `audio_path` / `audio_source` STRING widget。機制相同（`web/dual_input_lock.js` 的 `DUAL_INPUT_NODES`），只是觸發的 socket 不同。
 >
 > **輸出檔名 pattern**：所有產出檔的 node 都用 `filename_prefix` + auto-counter（跟 ComfyUI 核心 `SaveImage` 同 pattern）。每次跑 workflow 寫 `output/<prefix>_00001.mp4` → `_00002.mp4` → ...，重跑不會 silently 覆蓋舊輸出。`filename_prefix` 可含子目錄（例 `MediaForge/subtitled`）。
 
@@ -345,9 +352,9 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 | Widget | 預設 | 說明 |
 |---|---|---|
 | `frames` | (必填 IMAGE) | `[B, H, W, C]` float32 [0, 1] |
-| `filename_prefix` | `MediaForge/video` | 副檔名跟 codec 走（.mp4 / .mov 自動選） |
+| `filename_prefix` | `MediaForge/video` | 副檔名跟 codec 走（.mp4 / .mov / .gif 自動選） |
 | `fps` | `30.0` | rawvideo pipe 的來源 fps — roundtrip 從 LoadVideoFrames 接過來時用其 `fps` |
-| `codec` | smart 預設 | H.264 / HEVC / AV1 / ProRes + NVENC variants |
+| `codec` | smart 預設 | H.264 / HEVC / AV1 / ProRes / `gif (palette)` + NVENC variants |
 | `encode_mode` | `crf` | `crf` / `bitrate` / `target_size` |
 | `crf` | `18` (0–51) | `crf` mode 用。0 無損、18 視覺無損、23 標準、28 堪用 |
 | `bitrate_kbps` | `4000` | `bitrate` mode 用（4000 = 4 Mbps） |
@@ -355,11 +362,13 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 | `preset` | `medium` | `ultrafast` … `veryslow` |
 | `pix_fmt_override` | `""` | 空 = 用 codec 預設（x264/x265 走 yuv420p、ProRes 走 yuv422p10le） |
 
-**選用**：`audio` AUDIO dict — 接了就 mux 進輸出。
+**Widget 可見性**（前端強制，`web/dual_input_lock.js`）：`encode_mode` 是三選一互斥 radio — 選其一會隱藏另外兩個 rate-control widget（例：`encode_mode=crf` 隱藏 `bitrate_kbps` + `target_size_mb`）。`codec=gif (palette)` 會隱藏整組 rate-control widget（`encode_mode` / `crf` / `bitrate_kbps` / `target_size_mb` / `preset` / `pix_fmt_override`）— GIF 沒有 CRF/bitrate/preset/pix_fmt 這些概念。`codec=prores (prores_ks)` 隱藏同一組、但 `pix_fmt_override` 除外（ProRes 仍吃 pixel format override）。
+
+**選用**：`audio` AUDIO dict — 接了就 mux 進輸出。`codec=gif (palette)` 時會被忽略（印警告）— GIF 沒有音軌。
 
 **輸出**：`final_video_path` STRING。
 
-**說明**：ProRes 輸出 `.mov`（`prores_ks` 用 `yuv422p10le` 保留 10-bit 精度）。其他 codec 一律 `.mp4`。NVENC 內部用 `-cq` 而非 `-crf`，但 UI 統一。
+**說明**：ProRes 輸出 `.mov`（`prores_ks` 用 `yuv422p10le` 保留 10-bit 精度）。`gif (palette)` 輸出 `.gif`，走雙 pass `palettegen`/`paletteuse` filter（diff-stats palette + Bayer dither），畫質比 FFmpeg 預設 GIF encoder 好很多。其他 codec 一律 `.mp4`。NVENC 內部用 `-cq` 而非 `-crf`，但 UI 統一（見[智慧 GPU codec 預設](#智慧-gpu-codec-預設)）。
 
 ---
 
@@ -369,8 +378,12 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 
 **適用情境**：移除演講／podcast／直播錄影的死寂時段、從 raw footage 只留指定精華段。
 
+**Precision 模式**：
+- `precise (re-encode)` — `trim` + `setpts` re-encode（原本的行為，逐幀精確）。預設值；這個 widget 加入前存的 workflow JSON 載入後行為不變。
+- `lossless (stream copy)` — keyframe-seek 分段 stream copy（`-c copy`）+ concat demuxer 合併。長素材上幾乎瞬間完成、零畫質損失，但切點會對齊來源前一個 keyframe（有 GOP 級的時間誤差），且 `crossfade_sec` 必須是 `0` — 兩者同時設會 **raise**。
+
 **Ranges 輸入**（兩種、互斥 — pin 優先）：
-- `ranges`（pin、選用）— 從 `MF_DetectSilence` 接過來的 `SILENCE_RANGES`。
+- `ranges`（pin、選用）— 從 `MF_DetectSilence`（或 `MF_DetectScenes`）接過來的 `SILENCE_RANGES`。
 - `ranges_json`（STRING widget、multiline）— 手填 JSON，例如 `[[1.5, 3.0], [10.0, 12.5]]`。
 
 | Widget | 預設 | 說明 |
@@ -378,17 +391,20 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 | `video_path` | `input/sample.mp4` | |
 | `filename_prefix` | `MediaForge/trimmed` | |
 | `mode` | `remove` | `remove` = 刪除指定區間、留其他；`keep` = 留指定區間、刪其他 |
+| `precision` | `precise (re-encode)` | `lossless (stream copy)` 會隱藏 `codec` / `crf` / `preset` / `crossfade_sec`（前端強制）— 這幾個在該模式下都不會傳給 ffmpeg |
 | `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | 沒接 `ranges` pin 時用這個 |
-| `crossfade_sec` | `0.0` (0–2) | 保留段之間走 `xfade`；`0` = 硬切 |
-| `codec` / `crf` / `preset` | smart / `18` / `medium` | |
+| `crossfade_sec` | `0.0` (0–2) | 保留段之間走 `xfade`；`0` = 硬切。`precision=lossless` 時不可用 |
+| `codec` / `crf` / `preset` | smart / `18` / `medium` | `precision=lossless` 時忽略（輸出容器改沿用來源） |
 
 **模式語意**：
 - `keep` + 空 ranges → **raise**（拒絕輸出空檔）。
 - `remove` + 空 ranges → **identity**（原片不動）。
 
-**音訊同步**：音影 interleaved concat（`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`），跨切點音訊不會跑掉。沒音軌的 source 自動補靜音 pad。
+**音訊同步**：音影 interleaved concat（`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`），跨切點音訊不會跑掉。沒音軌的 source 自動補靜音 pad。（`precision=lossless` 改成逐段 stream copy 再 concat demuxer 合併 — 不經過 filter graph。）
 
-**範例 chain**：`MF_LoadVideoFrames → MF_DetectSilence (noise_db=-30) → MF_TrimByRanges (mode=remove, crossfade_sec=0.1)` — podcast 預剪、切點微淡入淡出。
+**輸出容器**（僅 `precision=lossless`）：沿用來源檔案副檔名（`.mp4` / `.mov` / `.mkv` / `.webm` / `.avi` / `.m4v`；不認得的副檔名退回 `.mp4`）。`precision=precise` 一律照 `codec` 選擇走（ProRes 走 `.mov`，其他 `.mp4`）。
+
+**範例 chain**：`MF_LoadVideoFrames → MF_DetectSilence (noise_db=-30) → MF_TrimByRanges (mode=remove, crossfade_sec=0.1)` — podcast 預剪、切點微淡入淡出。長素材要零畫質損失的硬切，改接 `MF_TrimByRanges (mode=remove, precision=lossless (stream copy))`。
 
 ---
 
@@ -472,6 +488,62 @@ FFmpeg `silencedetect` 包裝 → `SILENCE_RANGES` list。`MF_TrimByRanges` 的�
 | `count` | INT | 偵測到的靜音段數 |
 
 **調參**：典型 podcast — `noise_db=-30, min_duration_sec=0.5`。演講錄影帶風扇 / hum noise — 試 `noise_db=-25, min_duration_sec=1.0`。音樂帶安靜段落 — 嚴格點：`noise_db=-50, min_duration_sec=2.0`。
+
+---
+
+#### 🎞️ Detect Scenes (`MF_DetectScenes`)
+
+FFmpeg 場景切換偵測（`select='gt(scene,threshold)'` + `showinfo`）→ 場景邊界 ranges。輸出跟 `MF_DetectSilence` 同一個 `SILENCE_RANGES` 連線型別，不需要任何轉接就能直接接 `MF_TrimByRanges`。
+
+**適用情境**：把 raw footage 切成一鏡一鏡做精華集、把場景邊界餵給剪輯 pipeline、在沒有結構的素材裡找切點。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `video_path` | `input/sample.mp4` | |
+| `threshold` | `0.4` (0.05–1.0) | FFmpeg `scene` filter 分數門檻。越低越敏感（更小的畫面變化也判定為切點） |
+| `min_scene_sec` | `1.0` (0–60) | 短於此秒數的場景併入前一段，避免雜訊切點把輸出切得太碎 |
+
+**輸出**（3 個 port）：
+
+| 輸出 | 型別 | 說明 |
+|---|---|---|
+| `scene_ranges` | SILENCE_RANGES | `[[start_sec, end_sec], ...]`，涵蓋整段影片（無間隙）— wire 給 `MF_TrimByRanges.ranges` |
+| `ranges_json` | STRING | 同資料的 JSON 字串（debug / preview 用） |
+| `count` | INT | `min_scene_sec` 合併後的場景數 |
+
+**說明**：`SILENCE_RANGES` 這個型別名是歷史包袱 — 本質上是跟 `MF_DetectSilence` 共用的通用 `list[[start, end]]` 契約，不是靜音專屬。跟只回傳偵測到的靜音段的 `MF_DetectSilence` 不同，`MF_DetectScenes` 一定回傳涵蓋全片的 ranges。
+
+**範例 chain**：`MF_DetectScenes (threshold=0.4) → MF_TrimByRanges (接 ranges pin, mode=keep)` — 只留想要的場景（或用 `mode=remove` 刪掉指定場景）。
+
+---
+
+### `MediaForge/Audio`
+
+Phase 6 的第一個 standalone Audio 節點。跟 Compose 的音訊 *chain*（在視訊編碼「過程中」做混音/淡入淡出/normalize）不同，也跟 Analysis（只檢視、不寫檔）不同 — `MF_ExtractAudio` 把音軌落地成獨立檔案，來源可以是影片/音訊路徑，也可以是 in-memory 的 `AUDIO` dict（目前唯一能把 `AUDIO` dict 寫成檔案的節點）。
+
+#### 🎧 Extract Audio (`MF_ExtractAudio`) **(dual-input audio)**
+
+把影片裡的音軌抽出來（或重存一份音訊檔）成獨立音訊檔。預設 stream copy（快、零畫質/音質損失）；改 `format` 可轉碼。
+
+**適用情境**：從影片來源產出獨立音訊檔做剪輯 / 上傳；把 in-memory 的 `AUDIO` dict（例如來自 `MF_LoadVideoFrames` 或 Compose 音訊 chain）落地成檔案。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `audio_source` | `input/sample.mp4` | 含音軌的影片或音訊檔；`audio` pin 接上時隱藏 |
+| `format` | `copy` | `copy`（stream copy，不 re-encode）/ `mp3` / `aac (m4a)` / `wav (pcm_s16le)` / `flac` |
+| `filename_prefix` | `MediaForge/audio` | → `output/<prefix>_NNNNN.<ext>` |
+
+**選用**：`audio`（AUDIO dict）— 接了就忽略 `audio_source`，改把 dict 先落地成 temp WAV。
+
+**`format=copy` 副檔名對映**（來源 codec → 輸出副檔名，不 re-encode）：`aac → .m4a`、`mp3 → .mp3`、`opus → .ogg`、`vorbis → .ogg`、`flac → .flac`、任何 `pcm_*` → `.wav`。來源 codec 不在此清單內 → **raise**，建議改走轉碼 `format`。
+
+**輸出**：`audio_file_path` STRING。
+
+**說明**：接 `audio` dict 時 `format=copy`沒有字面意義（dict 沒有來源 codec）— 視為 `wav` 並印出提示。來源沒有音軌 → **raise**。
+
+**範例**：`MF_SelectVideo → MF_ExtractAudio (format=mp3)` 從影片抽出 MP3 給 podcast feed 用；或 `MF_LoadVideoFrames → MF_ExtractAudio (接 audio pin)` 把解碼出的 `AUDIO` dict 落地成 WAV 檔。
+
+---
 
 ### `MediaForge/Compose` — 單次編碼 pipeline(視訊 overlay + 音訊 chain)
 
@@ -883,7 +955,8 @@ model      = llama3.2                       # 你本地 pull 過的任何 model
 - **IMAGE**: `torch.Tensor [B, H, W, C], float32, [0, 1]`
 - **AUDIO**: `{'waveform': torch.Tensor [B, C, T], 'sample_rate': int}`（ComfyUI core canonical）
 - **SILENCE_RANGES**: `list[[float, float]]` — `[start_sec, end_sec]` 配對
-- **MF_COMPOSE**: `ComposeIR` dataclass（見 `utils/compose_ir.py`）。Phase 4 後 schema 凍結 — 只能加新欄位，不能改既有。
+- **MF_COMPOSE_OPS**：`list[dict]` — 純 op-spec dict（`{"type": "drawtext" | "overlay" | "watermark" | "subtitle", "params": {...}, "image_path"?: ...}`），由 `MF_ComposeOverlayText` / `MF_ComposeOverlayImage` / `MF_ComposeWatermark` / `MF_ComposeBurnSubtitle` append。Compose v2 的視訊 chain 連線型別。
+- **MF_COMPOSE_AUDIO_OPS**：`list[dict]` — 音訊 chain 版本（`{"type": "volume" | "amix" | "afade" | "loudnorm", "params": {...}}`），由 `MF_ComposeVolume` / `MF_ComposeAudioMix` / `MF_ComposeAudioFade` / `MF_ComposeNormalize` append。`MF_ComposeVideo` 在 compile 時透過 `utils/compose_ops.py` dispatch 把兩條 chain 解析進內部的 `ComposeIR` dataclass（`utils/compose_ir.py`）— IR 本身已經不是跨節點的連線型別（那是 Compose v1 的 `MF_COMPOSE`，隨 `ComposeStart`/`ComposeFinalize` 一起除役）。
 - **AI_CONFIG**: `dict`，keys 為 `provider / base_url / api_key / model / device / extra`。Experimental。
 
 ## Architecture
@@ -907,7 +980,9 @@ comfyui_MediaForge/
 │   ├── compose_normalize.py    # MF_ComposeNormalize  — loudnorm
 │   ├── concat_videos.py        # MF_ConcatVideos
 │   ├── convert_chinese.py      # MF_ConvertChinese  — OpenCC 簡繁轉換
+│   ├── detect_scenes.py        # MF_DetectScenes  — MediaForge/Analysis
 │   ├── detect_silence.py       # MF_DetectSilence
+│   ├── extract_audio.py        # MF_ExtractAudio  — MediaForge/Audio（Phase 6 第一個節點）
 │   ├── load_video_frames.py    # MF_LoadVideoFrames
 │   ├── loop_video.py           # MF_LoopVideo
 │   ├── probe_media.py          # MF_ProbeMedia
@@ -931,11 +1006,11 @@ comfyui_MediaForge/
 │   └── dual_input_lock.js   # 前端 extension：依 dual-input 模式隱藏不適用 widget
 │                            #   - lock_widget / hidden_when_connected: tensor 模式隱藏
 │                            #   - linked_widgets: path 模式隱藏
-└── tests/                   # 58 個測試，pytest 跑
-    ├── test_compose_ir.py        # 8 個 IR spike case（Phase 4 prerequisite）
-    ├── test_compose_e2e.py       # 3 個 real-ffmpeg e2e
-    ├── test_video_io_roundtrip.py# 5 個 PSNR > 38 dB rawvideo roundtrip
-    └── test_codex_r*_fixes.py    # 10 輪 codex review 留下的 42 個回歸測試
+└── tests/                   # 開發者本地 pytest suite — gitignored，不隨公開 repo 發佈（見「測試」章節）
+    ├── test_compose_ir.py        # IR spike case（Phase 4 prerequisite）
+    ├── test_compose_e2e.py       # real-ffmpeg e2e
+    ├── test_video_io_roundtrip.py# PSNR > 38 dB rawvideo roundtrip
+    └── test_codex_r*_fixes.py    # 各輪 codex review 留下的回歸測試
 ```
 
 **加新節點**：丟一個 `nodes/<verb>_<noun>.py`，內含 `MF_<Verb><Noun>` 類別 + `NODE_CLASS_MAPPINGS` / `NODE_DISPLAY_NAME_MAPPINGS`。Aggregator 會自動撿到 — 重啟 ComfyUI 即可。
@@ -970,7 +1045,7 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/leon80148/comfyui_MediaForge.git
 ```
 
-重啟 ComfyUI — 節點會出現在 `MediaForge/Subtitle | Video | Compose | AI | Analysis`。
+重啟 ComfyUI — 節點會出現在 `MediaForge/Subtitle | Video | Analysis | Audio | Compose | AI`。
 
 ### 選用相依（lazy — 你會用到才裝）
 
@@ -986,6 +1061,8 @@ pip install faster-whisper    # 只給 backend="faster_whisper_local" 用
 | 重啟後 menu 找不到節點 | Module-level import 錯（ComfyUI 會吞掉訊息） | `python -c "from custom_nodes.comfyui_MediaForge.nodes.<file> import *"` 把真正的 traceback 逼出來 |
 | `RuntimeError: ffmpeg ... failed` | FFmpeg exit code 非 0 | 往上滑 — raise 前面已經印了 FFmpeg stderr 最後 30 行 |
 | FFmpeg 在 filter 階段抱怨路徑裡的 `:`（Windows） | 路徑沒 escape 就進 filter graph | 我們會自動走 `escape_filter_path()` — 只有自製節點繞過它才會中招 |
+| 檔名含 `[ ] ' , ;` 等 filter 特殊字元，字幕/drawtext/overlay 節點出錯 | 跟 `:` 同一個根因 — 這些字元在 filtergraph 語法裡也有特殊意義 | 同樣自動處理：`escape_filter_path()` 現在做完整的兩層 FFmpeg escape（`: ' \ [ ] , ;`），不只 colon。只影響 filter graph 內的路徑（`subtitles=`、`textfile=` 等）— 純 `-i` 參數本來就不需要 escape |
+| `MF_ConcatVideos` `mode=copy` raise 出一份逐檔 codec/解析度/pix_fmt/音訊差異列表 | Preflight probe 發現輸入彼此不相容、無法 stream copy | 正常行為 — concat demuxer + `-c copy` 對不相容輸入以前會 exit 0 但輸出從第二段開始壞掉。改用 `mode=transcode`（一定可用、一定 re-encode） |
 | Whisper local backend 超慢 | CTranslate2 在 CPU 上推論 | 在 `MF_AIConfig` 設 `device = "cuda"`；或改 hosted backend（Groq 比本地 CPU 快非常多） |
 | `loop` filter 在超長素材報錯 | Frame 緩衝上限是 `MAX_LOOP_FRAMES = 32767`（INT16） | 降低 fps，或改 `crossfade` mode（走 xfade chain，沒有單一緩衝上限） |
 | 翻譯輸出行數對不上原文 | 小 LLM 把編號批次搞混了 | 換大模型（`gpt-4o`、`llama-3.3-70b-versatile`）；prompt 已加行號對齊，但小模型超過 50 行還是會漏 |
@@ -1011,12 +1088,12 @@ A：可以 — FFmpeg + `faster-whisper` 都支援 M1/M2/M3。faster-whisper 沒
 **Q：怎麼跟沒裝 MediaForge 的人分享 workflow？**
 A：對方會看到 "Missing nodes" 警告。叫他開 ComfyUI Manager → "Install Missing Custom Nodes" 即可。ComfyUI 標準流程。
 
-**Q：為什麼還沒有 Audio domain 節點？**
-A:Phase 4.5 已有「Compose chain 內」的音訊 op(Volume / AudioMix / Fade / Normalize、跟視訊 overlay 共享一次 encode)。獨立的 Phase 6 audio domain(檔案級 denoise、normalize-file、cut/trim、ducking) 在 AI shakedown 之後做、`MediaForge/Audio` 分類名稱已保留。
+**Q：standalone Audio domain 目前有什麼？**
+A：Phase 4.5 已有「Compose chain 內」的音訊 op(Volume / AudioMix / Fade / Normalize、跟視訊 overlay 共享一次 encode)。Phase 6 在這之上加獨立的檔案級 Audio 節點：`MF_ExtractAudio`（把音軌抽出 / 落地成檔案）先上，denoise、normalize-file、cut/trim、ducking 仍在規劃中。
 
 ## 測試
 
-Repo 內含 **58 個測試**，覆蓋 IR 編譯、real-ffmpeg roundtrip、10 輪 codex review 留下的回歸測試：
+`tests/` 是開發者本地的 pytest suite（IR 編譯、real-ffmpeg roundtrip、各輪 review 累積下來的回歸測試），已從公開 repo 與套件中排除 — `.gitignore` 排除，一般 `git clone` 或 ComfyUI Manager 安裝都不會帶到這個目錄（這是預期行為，不是安裝壞掉）。若你的 checkout 剛好還留著這個目錄（例如 contributor checkout），可以跑：
 
 ```bash
 cd ComfyUI/custom_nodes/comfyui_MediaForge
@@ -1035,7 +1112,7 @@ real-ffmpeg 系列需要 PATH 上有 `ffmpeg`。
 - **Phase 4** ✅ Compose pipeline v1 — single-encode multi-overlay (Start + Finalize)
 - **Phase 4.5** ✅ Compose pipeline v2 — 合一 ComposeVideo + 字幕進 chain + audio chain(Volume / AudioMix / Fade / Normalize)
 - **Phase 5** 🚧 AI — WhisperTranscribe / TranslateSubtitle(schema 仍 experimental)
-- **Phase 6** ⏳ 獨立 Audio domain — 檔案級 denoise、normalize-file、audio cut/trim、ducking(Phase 4.5 的 Compose audio chain 是子集)
+- **Phase 6** 🚧 獨立 Audio domain — `MF_ExtractAudio` 先上；檔案級 denoise、normalize-file、audio cut/trim、ducking 仍規劃中(Phase 4.5 的 Compose audio chain 是子集)
 - **Phase 7** ⏳ Net domain — yt-dlp ingest、HTTP fetch(lazy import)
 
 ## License

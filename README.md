@@ -10,7 +10,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 
 ## Highlights
 
-- 🎞️ **22 nodes** across 5 categories — Subtitle / Video / Analysis / Compose (now with audio chain) / AI (+ standalone Audio / Net / Image planned)
+- 🎞️ **24 nodes** across 6 categories — Subtitle / Video / Analysis / Audio (Phase 6 kickoff) / Compose (now with audio chain) / AI (+ Net / Image planned)
 - 🔗 **Dual-input bridge** — file-consumer nodes accept *either* a `video_path` string *or* an in-memory `IMAGE + AUDIO + tensor_fps` triplet, so MediaForge chains with VHS / AnimateDiff / any IMAGE-pipeline plugin without a SaveVideoFrames round-trip
 - 🚀 **Smart GPU codec default** — `h264_nvenc` is auto-selected when NVENC is available, libx264 fallback on CPU-only systems. No per-workflow switching needed
 - 📡 **API-ready output** — every file-producing node emits ComfyUI `ui.images` metadata so `/history/<prompt_id>` exposes the output filename; download via `/view?filename=X&subfolder=Y&type=output` (see [Using via API](#using-via-api))
@@ -27,7 +27,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 2. [Using via API](#using-via-api)
 3. [Smart GPU codec default](#smart-gpu-codec-default)
 4. [Why this plugin (vs VideoHelperSuite)](#why-this-plugin-vs-videohelpersuite)
-5. [Nodes (18)](#nodes-18)
+5. [Nodes (24)](#nodes-24)
 6. [AI Provider Recipes](#ai-provider-recipes)
 7. [Hidden Contracts](#hidden-contracts)
 8. [Architecture](#architecture)
@@ -100,7 +100,7 @@ See [AI Provider Recipes](#ai-provider-recipes) below for copy-paste `base_url` 
 
 ## Using via API
 
-All file-producing nodes (BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeFinalize / ConvertChinese) emit ComfyUI `ui.images` metadata alongside the STRING path output. API clients can discover and download outputs without parsing paths.
+All file-producing nodes (BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo / ExtractAudio / ConvertChinese) emit ComfyUI `ui.images` metadata alongside the STRING path output. API clients can discover and download outputs without parsing paths.
 
 ### 1. Submit a workflow
 
@@ -150,9 +150,11 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 
 ## Smart GPU codec default
 
-All encode-capable nodes (BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeFinalize) default their `codec` dropdown to **`h264 NVIDIA GPU (h264_nvenc)`** when ffmpeg detects NVENC support at startup. CPU-only systems automatically fall back to **`h264 (libx264)`** — no manual configuration, no broken defaults on machines without NVIDIA cards.
+All encode-capable nodes (BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo) default their `codec` dropdown to **`h264 NVIDIA GPU (h264_nvenc)`** when ffmpeg detects NVENC support at startup. CPU-only systems automatically fall back to **`h264 (libx264)`** — no manual configuration, no broken defaults on machines without NVIDIA cards.
 
 The probe runs once per ComfyUI session via `utils/encoder.py:pick_default_codec()`, which checks `ffmpeg -encoders` for `h264_nvenc` presence. NVENC variants (`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`) all appear in the dropdown when available; `av1_nvenc` requires Ada Lovelace (RTX 4000+).
+
+**CRF-equivalent quality (`cq`)**: when `crf` maps to an NVENC encoder, `utils/encoder.py:build_encoder_args()` emits `-rc vbr -cq <n> -b:v 0`. The `-b:v 0` matters — without it NVENC still applies its default ~2 Mbps bitrate target on top of `-cq`, capping quality no matter how low you set `crf`. `-cq` and `-crf` share the same 0–51 numeric range and rough visual-quality meaning (18 ≈ visually lossless, 23 ≈ standard), so existing `crf` values carry over sensibly when switching a node between a CPU and NVENC codec.
 
 To override per-node, just pick from the dropdown — existing workflows that hard-coded `"h264 (libx264)"` keep working (default change only affects newly dragged nodes).
 
@@ -162,10 +164,13 @@ To override per-node, just pick from the dropdown — existing workflows that ha
 |---|---|---|---|
 | Load video → IMAGE batch | ✅ opencv | ✅ FFmpeg | MediaForge handles AV1 / HEVC 10-bit / ProRes / VP9 / arbitrary colorspaces |
 | Save IMAGE batch → video | ✅ H.264 only | ✅ H.264 / HEVC / AV1 / ProRes | Plus CRF / bitrate / target-size modes |
+| GIF export | ❌ | ✅ | `MF_SaveVideoFrames` `codec=gif (palette)` — two-pass palette + Bayer dither |
 | Audio in/out (canonical dict) | ⚠️ limited | ✅ both directions | `{'waveform': Tensor[B,C,T], 'sample_rate': int}` |
 | Trim by ranges | ✅ image-batch | ✅ video + image-batch | MediaForge takes `SILENCE_RANGES` from `MF_DetectSilence` |
+| Lossless cut (no re-encode) | ❌ | ✅ | `MF_TrimByRanges` `precision=lossless (stream copy)` |
 | **Path-level video concat (cross-codec, with audio)** | **❌** | **✅** | MediaForge-only — VHS Combine only stitches IMAGE batches |
 | Silence detection | ❌ | ✅ | |
+| Scene-change detection | ❌ | ✅ | `MF_DetectScenes` — wires straight into `MF_TrimByRanges` |
 | Subtitle burn | ❌ | ✅ | |
 | Multi-overlay Compose pipeline (single re-encode) | ❌ | ✅ | filter_complex graph compiler |
 | Watermark preset (opacity / margins / temporal / placement) | ❌ | ✅ | |
@@ -174,13 +179,15 @@ To override per-node, just pick from the dropdown — existing workflows that ha
 
 **TL;DR:** Install both. VHS for fast IMAGE-batch workflows; MediaForge for broadcast encoding, file-level ops, Compose pipeline, and AI-driven subtitle work.
 
-## Nodes (22)
+## Nodes (24)
 
 Each node section below follows the same template: **purpose → when to use → required widgets → optional inputs → output → example**. Skim the widget tables to find the knob you need; fall back to the example for typical wiring.
 
 > **Dual-input note**: nodes marked **(dual-input)** accept *either* a file path (the `video_path` STRING widget) *or* an in-memory tensor (wire `frames` + `tensor_fps` + `audio` from VHS / AnimateDiff / `MF_LoadVideoFrames` / etc.). When tensor is wired, MediaForge writes a temp `.mp4` internally and FFmpeg processes that.
 >
 > The frontend extension `web/dual_input_lock.js` connects widget visibility to wiring state: the path widget hides when `frames` is wired, and `tensor_fps` only shows up in tensor mode. Path-mode-only widgets like `keep_source_audio` hide in tensor mode.
+>
+> Some dual-input nodes key off an **AUDIO** pin instead of `frames` — `MF_ComposeAudioMix` / `MF_DetectSilence` / `MF_ExtractAudio` hide their `audio_path` / `audio_source` STRING widget when the `audio` pin is wired. Same mechanism (`DUAL_INPUT_NODES` in `web/dual_input_lock.js`), just a different trigger socket.
 >
 > **Output filename pattern**: every file-producing node uses `filename_prefix` + auto-counter (same pattern as ComfyUI core `SaveImage`). Each run writes `output/<prefix>_00001.mp4` → `_00002.mp4` → ... so repeated workflow runs never silently overwrite earlier results. Subdirectories in the prefix are fine (e.g. `MediaForge/subtitled`).
 
@@ -345,9 +352,9 @@ Tensor → encoded video file. The canonical tensor→file producer; pairs with 
 | Widget | Default | Notes |
 |---|---|---|
 | `frames` | (required IMAGE) | `[B, H, W, C]` float32 [0, 1] |
-| `filename_prefix` | `MediaForge/video` | Extension auto-picked per codec (.mp4 / .mov) |
+| `filename_prefix` | `MediaForge/video` | Extension auto-picked per codec (.mp4 / .mov / .gif) |
 | `fps` | `30.0` | Source fps for the rawvideo pipe — use `LoadVideoFrames.fps` for roundtrip |
-| `codec` | smart default | H.264 / HEVC / AV1 / ProRes + NVENC variants |
+| `codec` | smart default | H.264 / HEVC / AV1 / ProRes / `gif (palette)` + NVENC variants |
 | `encode_mode` | `crf` | `crf` / `bitrate` / `target_size` |
 | `crf` | `18` (0–51) | Used in `crf` mode. 0 lossless, 18 visually lossless, 23 standard, 28 acceptable |
 | `bitrate_kbps` | `4000` | Used in `bitrate` mode (e.g. `4000` = 4 Mbps) |
@@ -355,11 +362,13 @@ Tensor → encoded video file. The canonical tensor→file producer; pairs with 
 | `preset` | `medium` | `ultrafast` … `veryslow` |
 | `pix_fmt_override` | `""` | Leave empty for codec default (yuv420p for x264/x265, yuv422p10le for ProRes) |
 
-**Optional**: `audio` AUDIO dict — muxed into the output if provided.
+**Widget visibility** (frontend-enforced, `web/dual_input_lock.js`): `encode_mode` is a three-way exclusive radio — each value hides the other two rate-control widgets (e.g. `encode_mode=crf` hides `bitrate_kbps` + `target_size_mb`). `codec=gif (palette)` hides the entire rate-control group (`encode_mode` / `crf` / `bitrate_kbps` / `target_size_mb` / `preset` / `pix_fmt_override`) since GIF has no CRF/bitrate/preset/pix_fmt concept. `codec=prores (prores_ks)` hides the same group except `pix_fmt_override` (ProRes still honors a pixel-format override).
+
+**Optional**: `audio` AUDIO dict — muxed into the output if provided. Ignored (printed warning) when `codec=gif (palette)` — GIF has no audio track.
 
 **Output**: `final_video_path` STRING.
 
-**Notes**: ProRes outputs `.mov` (`prores_ks` uses `yuv422p10le` for 10-bit precision). All other codecs → `.mp4`. NVENC variants use `-cq` instead of `-crf` internally but the UI is unified.
+**Notes**: ProRes outputs `.mov` (`prores_ks` uses `yuv422p10le` for 10-bit precision). `gif (palette)` outputs `.gif` via a two-pass `palettegen`/`paletteuse` filter (diff-stats palette + Bayer dither) for higher quality than FFmpeg's default GIF encoder. All other codecs → `.mp4`. NVENC variants use `-cq` instead of `-crf` internally but the UI is unified (see [Smart GPU codec default](#smart-gpu-codec-default)).
 
 ---
 
@@ -369,8 +378,12 @@ Cut a video by time ranges. Primary use case: auto-remove silence (wire from `MF
 
 **When to use**: removing dead air from a lecture / podcast / livestream recording; keeping only highlighted segments from raw footage.
 
+**Precision modes**:
+- `precise (re-encode)` — `trim` + `setpts` re-encode (original behavior, frame-accurate cuts). Default; workflow JSON saved before this widget existed loads unchanged.
+- `lossless (stream copy)` — keyframe-seek segment copy (`-c copy`) + concat-demuxer merge. Near-instant even on long sources with no quality loss, but cuts snap to the source's previous keyframe (GOP-level timing error) and `crossfade_sec` must be `0` — the node **raises** if you set both.
+
 **Range input** (mutually exclusive — pin takes priority):
-- `ranges` (pin, optional) — `SILENCE_RANGES` from `MF_DetectSilence`.
+- `ranges` (pin, optional) — `SILENCE_RANGES` from `MF_DetectSilence` (or `MF_DetectScenes`).
 - `ranges_json` (STRING widget, multiline) — manual JSON, e.g. `[[1.5, 3.0], [10.0, 12.5]]`.
 
 | Widget | Default | Notes |
@@ -378,17 +391,20 @@ Cut a video by time ranges. Primary use case: auto-remove silence (wire from `MF
 | `video_path` | `input/sample.mp4` | |
 | `filename_prefix` | `MediaForge/trimmed` | |
 | `mode` | `remove` | `remove` = drop ranges, keep rest. `keep` = keep ranges, drop rest |
+| `precision` | `precise (re-encode)` | `lossless (stream copy)` hides `codec` / `crf` / `preset` / `crossfade_sec` (frontend-enforced) — none of them reach ffmpeg in that mode |
 | `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | Used when `ranges` pin not wired |
-| `crossfade_sec` | `0.0` (0–2) | `xfade` between adjacent kept segments; `0` = hard cut |
-| `codec` / `crf` / `preset` | smart / `18` / `medium` | |
+| `crossfade_sec` | `0.0` (0–2) | `xfade` between adjacent kept segments; `0` = hard cut. Unavailable in `precision=lossless` |
+| `codec` / `crf` / `preset` | smart / `18` / `medium` | Ignored in `precision=lossless` (output container follows the source instead) |
 
 **Mode semantics**:
 - `keep` + empty ranges → **raises** (refuses to produce an empty output).
 - `remove` + empty ranges → **identity** (returns full clip unchanged).
 
-**Audio sync**: video and audio segments are interleaved-concat (`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`), so audio stays aligned across cuts. Sources without audio are auto-handled with silence pads.
+**Audio sync**: video and audio segments are interleaved-concat (`[v0][a0][v1][a1]…concat=n=N:v=1:a=1`), so audio stays aligned across cuts. Sources without audio are auto-handled with silence pads. (`precision=lossless` instead stream-copies each segment and concat-demuxes them — no filter graph involved.)
 
-**Example chain**: `MF_LoadVideoFrames → MF_DetectSilence (noise_db=-30) → MF_TrimByRanges (mode=remove, crossfade_sec=0.1)` for podcast pre-edit with subtle fade between segments.
+**Output container** (`precision=lossless` only): follows the source file's extension (`.mp4` / `.mov` / `.mkv` / `.webm` / `.avi` / `.m4v`; unrecognized extensions fall back to `.mp4`). `precision=precise` always follows the `codec` choice instead (`.mov` for ProRes, `.mp4` otherwise).
+
+**Example chain**: `MF_LoadVideoFrames → MF_DetectSilence (noise_db=-30) → MF_TrimByRanges (mode=remove, crossfade_sec=0.1)` for podcast pre-edit with subtle fade between segments. For a hard cut with zero quality loss on a long source, wire the same ranges into `MF_TrimByRanges (mode=remove, precision=lossless (stream copy))` instead.
 
 ---
 
@@ -472,6 +488,62 @@ FFmpeg `silencedetect` wrapper → `SILENCE_RANGES` list. Canonical upstream for
 | `count` | INT | Number of detected silence regions |
 
 **Tuning**: typical podcast — `noise_db=-30, min_duration_sec=0.5`. Lecture recording with hum / fan noise — try `noise_db=-25, min_duration_sec=1.0`. Music with quiet passages — go stricter: `noise_db=-50, min_duration_sec=2.0`.
+
+---
+
+#### 🎞️ Detect Scenes (`MF_DetectScenes`)
+
+FFmpeg scene-change detection (`select='gt(scene,threshold)'` + `showinfo`) → scene boundary ranges. Emits the same `SILENCE_RANGES` connection type as `MF_DetectSilence`, so it wires straight into `MF_TrimByRanges` with no adapter node.
+
+**When to use**: splitting raw footage into shots for a highlight reel, feeding scene boundaries into an editing pipeline, or finding cut points in unstructured source video.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `video_path` | `input/sample.mp4` | |
+| `threshold` | `0.4` (0.05–1.0) | FFmpeg `scene` filter score threshold. Lower = more sensitive (flags smaller frame-to-frame changes as cuts) |
+| `min_scene_sec` | `1.0` (0–60) | Scenes shorter than this are merged into the previous one, so noisy cuts don't over-fragment the output |
+
+**Outputs** (3 ports):
+
+| Output | Type | Notes |
+|---|---|---|
+| `scene_ranges` | SILENCE_RANGES | `[[start_sec, end_sec], ...]` covering the entire clip (no gaps) — wire to `MF_TrimByRanges.ranges` |
+| `ranges_json` | STRING | Same data as JSON string (for debugging / preview) |
+| `count` | INT | Number of scenes after `min_scene_sec` merging |
+
+**Notes**: the `SILENCE_RANGES` type name is a historical artifact — it's a generic `list[[start, end]]` contract shared with `MF_DetectSilence`, not silence-specific. Unlike `MF_DetectSilence` (which only returns the detected silent spans), `MF_DetectScenes` always returns ranges covering the whole clip.
+
+**Example chain**: `MF_DetectScenes (threshold=0.4) → MF_TrimByRanges (ranges pin wired, mode=keep)` — keep only the scenes you want (or `mode=remove` to drop specific ones).
+
+---
+
+### `MediaForge/Audio`
+
+Phase 6's first standalone Audio node. Different from Compose's audio *chain* (which mixes/fades/normalizes *during* a video encode) and from Analysis (which only inspects, never writes) — `MF_ExtractAudio` materializes an audio track to its own file, from either a video/audio path or an in-memory `AUDIO` dict (the only node that can write an `AUDIO` dict to disk).
+
+#### 🎧 Extract Audio (`MF_ExtractAudio`) **(dual-input audio)**
+
+Pull the audio track out of a video (or re-save an audio file) as a standalone audio file. Stream-copies by default (fast, no quality loss); switch `format` to transcode.
+
+**When to use**: producing a standalone audio file for editing/upload from a video source; materializing an in-memory `AUDIO` dict (e.g. from `MF_LoadVideoFrames` or a Compose audio chain) to disk.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `audio_source` | `input/sample.mp4` | Video or audio file with an audio stream. Hidden when the `audio` pin is wired |
+| `format` | `copy` | `copy` (stream copy, no re-encode) / `mp3` / `aac (m4a)` / `wav (pcm_s16le)` / `flac` |
+| `filename_prefix` | `MediaForge/audio` | → `output/<prefix>_NNNNN.<ext>` |
+
+**Optional**: `audio` (AUDIO dict) — when wired, `audio_source` is ignored and the dict is materialized to a temp WAV first.
+
+**`format=copy` extension mapping** (source codec → output extension, no re-encode): `aac → .m4a`, `mp3 → .mp3`, `opus → .ogg`, `vorbis → .ogg`, `flac → .flac`, any `pcm_*` → `.wav`. A source codec outside this list **raises**, suggesting a transcode `format` instead.
+
+**Output**: `audio_file_path` STRING.
+
+**Notes**: with an `audio` dict input, `format=copy` has no literal meaning (the dict has no source codec) — it's treated as `wav` and a notice is printed. A source with no audio stream **raises**.
+
+**Example**: `MF_SelectVideo → MF_ExtractAudio (format=mp3)` to pull an MP3 out of a video for a podcast feed; or `MF_LoadVideoFrames → MF_ExtractAudio (audio pin wired)` to materialize a decoded `AUDIO` dict to a WAV file.
+
+---
 
 ### `MediaForge/Compose` — single-encode pipeline (video overlays + audio chain)
 
@@ -883,7 +955,8 @@ For **translate only** — Ollama / LM Studio don't expose Whisper. Pair with `f
 - **IMAGE**: `torch.Tensor [B, H, W, C], float32, [0, 1]`
 - **AUDIO**: `{'waveform': torch.Tensor [B, C, T], 'sample_rate': int}` (ComfyUI core canonical)
 - **SILENCE_RANGES**: `list[[float, float]]` — `[start_sec, end_sec]` pairs
-- **MF_COMPOSE**: `ComposeIR` dataclass (see `utils/compose_ir.py`). Frozen schema after Phase 4 — only additive changes allowed.
+- **MF_COMPOSE_OPS**: `list[dict]` — plain op-spec dicts (`{"type": "drawtext" | "overlay" | "watermark" | "subtitle", "params": {...}, "image_path"?: ...}`) appended by `MF_ComposeOverlayText` / `MF_ComposeOverlayImage` / `MF_ComposeWatermark` / `MF_ComposeBurnSubtitle`. Compose v2's video-chain wire type.
+- **MF_COMPOSE_AUDIO_OPS**: `list[dict]` — same idea for the audio chain (`{"type": "volume" | "amix" | "afade" | "loudnorm", "params": {...}}`), appended by `MF_ComposeVolume` / `MF_ComposeAudioMix` / `MF_ComposeAudioFade` / `MF_ComposeNormalize`. `MF_ComposeVideo` resolves both chains into the internal `ComposeIR` dataclass (`utils/compose_ir.py`) via `utils/compose_ops.py` dispatch at compile time — the IR itself is no longer a cross-node wire type (that was Compose v1's `MF_COMPOSE`, retired with `ComposeStart`/`ComposeFinalize`).
 - **AI_CONFIG**: `dict` with keys `provider / base_url / api_key / model / device / extra`. Experimental.
 
 ## Architecture
@@ -907,7 +980,9 @@ comfyui_MediaForge/
 │   ├── compose_normalize.py    # MF_ComposeNormalize  — loudnorm
 │   ├── concat_videos.py        # MF_ConcatVideos
 │   ├── convert_chinese.py      # MF_ConvertChinese  — OpenCC simp↔trad
+│   ├── detect_scenes.py        # MF_DetectScenes  — MediaForge/Analysis
 │   ├── detect_silence.py       # MF_DetectSilence
+│   ├── extract_audio.py        # MF_ExtractAudio  — MediaForge/Audio (Phase 6 first node)
 │   ├── load_video_frames.py    # MF_LoadVideoFrames
 │   ├── loop_video.py           # MF_LoopVideo
 │   ├── probe_media.py          # MF_ProbeMedia
@@ -931,11 +1006,11 @@ comfyui_MediaForge/
 │   └── dual_input_lock.js   # frontend extension: hide widgets per dual-input mode
 │                            #   - lock_widget / hidden_when_connected: hide on tensor mode
 │                            #   - linked_widgets: hide on path mode
-└── tests/                   # 58 tests, pytest-runnable
-    ├── test_compose_ir.py        # 8 IR spike cases (Phase 4 prerequisite)
-    ├── test_compose_e2e.py       # 3 real-ffmpeg e2e
-    ├── test_video_io_roundtrip.py# 5 PSNR > 38 dB rawvideo roundtrip
-    └── test_codex_r*_fixes.py    # 42 regression tests across 10 review rounds
+└── tests/                   # dev-only pytest suite — gitignored, not in the published repo (see Testing)
+    ├── test_compose_ir.py        # IR spike cases (Phase 4 prerequisite)
+    ├── test_compose_e2e.py       # real-ffmpeg e2e
+    ├── test_video_io_roundtrip.py# PSNR > 38 dB rawvideo roundtrip
+    └── test_codex_r*_fixes.py    # regression tests across Codex review rounds
 ```
 
 **Add a new node:** drop `nodes/<verb>_<noun>.py` with `MF_<Verb><Noun>` class + `NODE_CLASS_MAPPINGS` / `NODE_DISPLAY_NAME_MAPPINGS`. The aggregator picks it up — restart ComfyUI.
@@ -970,7 +1045,7 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/leon80148/comfyui_MediaForge.git
 ```
 
-Restart ComfyUI — nodes appear under `MediaForge/Subtitle | Video | Compose | AI | Analysis`.
+Restart ComfyUI — nodes appear under `MediaForge/Subtitle | Video | Analysis | Audio | Compose | AI`.
 
 ### Optional dependencies (lazy — install only what you actually use)
 
@@ -986,6 +1061,8 @@ pip install faster-whisper    # only for backend="faster_whisper_local"
 | Nodes don't appear in menu after restart | Module-level import error (ComfyUI swallows it silently) | `python -c "from custom_nodes.comfyui_MediaForge.nodes.<file> import *"` to surface the real traceback |
 | `RuntimeError: ffmpeg ... failed` | FFmpeg returned non-zero exit | Scroll up — the last 30 lines of FFmpeg stderr are printed before the raise |
 | FFmpeg complains about filter syntax with `:` in path (Windows) | Path leaked into filter graph unescaped | We auto-handle this via `escape_filter_path()` — only an issue if you wrote a custom node bypassing it |
+| Filename with `[ ] ' , ;` or other filter-special characters breaks a subtitle/drawtext/overlay node | Same root cause as the `:` case — those characters are also filtergraph syntax | Also auto-handled: `escape_filter_path()` now does the full two-level FFmpeg escape (`: ' \ [ ] , ;`), not just colon. Only affects filter-graph paths (`subtitles=`, `textfile=`, etc.) — plain `-i` arguments never needed escaping |
+| `MF_ConcatVideos` `mode=copy` raises listing per-file codec/dims/pix_fmt/audio differences | Preflight probe found the inputs aren't stream-copy compatible | Expected — concat demuxer + `-c copy` on mismatched inputs used to exit 0 but emit a corrupt file after the first segment. Switch to `mode=transcode` (always works, always re-encodes) |
 | Whisper local backend extremely slow | CTranslate2 CPU inference | Set `device = "cuda"` in `MF_AIConfig`; or use a hosted backend (Groq is much faster than local CPU) |
 | `loop` filter errors on very long source | Buffered-frame limit (`MAX_LOOP_FRAMES = 32767`, INT16) | Reduce fps or use `crossfade` mode (xfade chain, no single buffer) |
 | Translate output line count drifts | Small LLM lost track of numbered batches | Switch to a stronger model (`gpt-4o`, `llama-3.3-70b-versatile`); the prompt does line-number alignment but small models miss it on > 50-line batches |
@@ -1011,12 +1088,12 @@ A: Yes — FFmpeg + `faster-whisper` both work on M1/M2/M3. Metal isn't supporte
 **Q: How do I share a workflow with someone who doesn't have MediaForge?**
 A: They'll see "Missing nodes" warnings. Direct them to ComfyUI Manager → "Install Missing Custom Nodes". Standard ComfyUI plugin behavior.
 
-**Q: Why no Audio domain nodes yet?**
-A: Phase 4.5 already ships **Compose-chain** audio ops (Volume / AudioMix / Fade / Normalize — folded into the single-encode pipeline alongside video overlays). The dedicated Phase 6 standalone Audio domain (file-level denoise, normalize-file, cut/trim, ducking) comes after AI shakedown. The `MediaForge/Audio` category name is reserved for those standalone nodes.
+**Q: What's in the standalone Audio domain?**
+A: Phase 4.5 shipped **Compose-chain** audio ops (Volume / AudioMix / Fade / Normalize — folded into the single-encode pipeline alongside video overlays). Phase 6 adds standalone file-level Audio nodes on top of that: `MF_ExtractAudio` (pull/materialize a track to its own file) ships first; denoise, normalize-file, cut/trim, and ducking are still planned.
 
 ## Testing
 
-The repo ships **58 tests** covering IR compilation, real-ffmpeg roundtrips, and 10 rounds of Codex-review regression tests:
+`tests/` is a developer-local pytest suite (IR compilation, real-ffmpeg roundtrips, and regression tests accumulated across review rounds) kept out of the published repo and package — it's excluded via `.gitignore`, so a fresh `git clone` or ComfyUI Manager install won't include it (expected, not a broken install). Contributors working from a checkout that still has the directory can run:
 
 ```bash
 cd ComfyUI/custom_nodes/comfyui_MediaForge
@@ -1035,7 +1112,7 @@ Real-ffmpeg tests require `ffmpeg` on PATH.
 - **Phase 4** ✅ Compose pipeline v1 — single-encode multi-overlay (Start + Finalize)
 - **Phase 4.5** ✅ Compose pipeline v2 — merged ComposeVideo + subtitle-in-chain + audio chain (Volume / AudioMix / Fade / Normalize)
 - **Phase 5** 🚧 AI — WhisperTranscribe / TranslateSubtitle (experimental schema)
-- **Phase 6** ⏳ Standalone Audio domain — file-level denoise, normalize-file, audio cut/trim, ducking (the Compose chain audio ops in Phase 4.5 are a subset)
+- **Phase 6** 🚧 Standalone Audio domain — `MF_ExtractAudio` ships first; file-level denoise, normalize-file, audio cut/trim, ducking still planned (the Compose chain audio ops in Phase 4.5 are a subset)
 - **Phase 7** ⏳ Net domain — yt-dlp ingest, HTTP fetch (lazy-import)
 
 ## License
