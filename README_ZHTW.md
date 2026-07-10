@@ -391,10 +391,10 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 | `video_path` | `input/sample.mp4` | |
 | `filename_prefix` | `MediaForge/trimmed` | |
 | `mode` | `remove` | `remove` = 刪除指定區間、留其他；`keep` = 留指定區間、刪其他 |
-| `precision` | `precise (re-encode)` | `lossless (stream copy)` 會隱藏 `codec` / `crf` / `preset` / `crossfade_sec`（前端強制）— 這幾個在該模式下都不會傳給 ffmpeg |
 | `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | 沒接 `ranges` pin 時用這個 |
 | `crossfade_sec` | `0.0` (0–2) | 保留段之間走 `xfade`；`0` = 硬切。`precision=lossless` 時不可用 |
 | `codec` / `crf` / `preset` | smart / `18` / `medium` | `precision=lossless` 時忽略（輸出容器改沿用來源） |
+| `precision` | `precise (re-encode)` | `lossless (stream copy)` 會隱藏 `codec` / `crf` / `preset` / `crossfade_sec`（前端強制）— 這幾個在該模式下都不會傳給 ffmpeg。刻意宣告在 schema **最後一個位置**（不是排在 `mode` 旁邊）：ComfyUI 存檔的 widget 值是按位置對齊的，後加的 widget 必須 append 到尾端，舊 workflow JSON 才能繼續正確載入 |
 
 **模式語意**：
 - `keep` + 空 ranges → **raise**（拒絕輸出空檔）。
@@ -415,7 +415,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 **適用情境**：同台相機素材拼接（用 `copy` 秒接 stream-copy）、跨 codec / 跨解析度素材拼接（用 `transcode` 加可選過場）。
 
 **Modes**：
-- `copy` — FFmpeg concat demuxer、stream copy 不 re-encode。極快但**要求**所有輸入的 codec / 解析度 / fps / pix_fmt 完全一致。
+- `copy` — FFmpeg concat demuxer、stream copy 不 re-encode。極快，但**要求**所有輸入通過 preflight probe 比對：video/audio stream 數量、video `codec_name`/`width`/`height`/`pix_fmt`/`profile`、audio `codec_name`/`sample_rate`/`channels`/`channel_layout` 皆須一致。不一致會在跑 ffmpeg 前直接 raise，而不是 silently 產出壞檔（concat demuxer + `-c copy` 常常 exit code 0 但輸出從第二段開始 glitch）。刻意**不比對** `time_base` / `level` / `r_frame_rate`——concat demuxer 本來就會 rescale timestamps、播放器對 level 差異普遍容忍，比了反而會誤殺原本可以安全 concat 的輸入組合。
 - `transcode` — `filter_complex` graph 加可選 `xfade`。一定可用、一定 re-encode。
 
 **必填 widget**：
@@ -434,7 +434,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 
 **輸出**：`final_video_path` STRING。
 
-**說明**：`transcode` mode 沒音軌的輸入自動補 `anullsrc` 靜音；`copy` mode 在音訊串流不一致時 hard fail — 跨 source 拼接前先用 `MF_SaveVideoFrames` normalize。
+**說明**：`transcode` mode 沒音軌的輸入自動補 `anullsrc` 靜音；`copy` mode 只要 preflight（見上）比對出任何差異就 hard fail — 跨 source 拼接前先用 `MF_SaveVideoFrames` normalize。`copy` mode 輸出的副檔名沿用**第一個輸入**的容器（不是看 `codec` widget，`copy` mode 完全忽略它）——例如兩個 ProRes `.mov` 輸入會產出 `.mov`，不是 `.mp4`（`.mp4` muxer 沒有 ProRes tag，硬塞會 mux 失敗）。
 
 ---
 

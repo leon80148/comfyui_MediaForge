@@ -10,7 +10,7 @@ import tempfile
 from ..utils.cache_key import path_fingerprint
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg, run_ffmpeg
-from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
+from ..utils.output_path import output_path_to_ui_entry, resolve_output_path, source_container_ext
 from ..utils.video_io import encode_tensor_to_tempfile
 
 # 註：本 module 不 import `escape_filter_path` — concat demuxer 走 list 檔走 abspath、
@@ -78,16 +78,6 @@ class MF_ConcatVideos:
         if not ensure_ffmpeg():
             raise RuntimeError("[Concat Videos] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
-        # W1-6：ProRes 需要 .mov 容器才能 mux 成功；copy 模式不看 codec widget
-        # （demuxer 直接 stream copy，跟輸出容器選擇無關），永遠 .mp4。
-        ext = ".mp4"
-        if mode == "transcode":
-            codec_map = get_available_codecs()
-            codec_id, _pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
-            if codec_id == "prores_ks":
-                ext = ".mov"
-        output_path = resolve_output_path(filename_prefix, ext)
-
         cleanup_tmp = None
         try:
             paths = [p.strip() for p in video_paths.splitlines() if p.strip()]
@@ -113,6 +103,18 @@ class MF_ConcatVideos:
             for p in paths:
                 if not os.path.exists(p):
                     raise FileNotFoundError(f"[Concat Videos] 找不到檔案：{p}")
+
+            # W1-6：ProRes 需要 .mov 容器才能 mux 成功（只影響 transcode 模式，codec
+            # widget 才有意義）。F3：copy 模式不 re-encode，容器必須跟來源一致才能
+            # mux 成功（例：兩個 ProRes .mov 過 preflight 後硬塞進 .mp4 muxer 會失敗，
+            # mp4 muxer 沒有 prores tag）——沿用第一個輸入的副檔名，不看 codec widget。
+            if mode == "transcode":
+                codec_map = get_available_codecs()
+                codec_id, _pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+                ext = ".mov" if codec_id == "prores_ks" else ".mp4"
+            else:
+                ext = source_container_ext(paths[0])
+            output_path = resolve_output_path(filename_prefix, ext)
 
             out_dir = os.path.dirname(output_path)
             if out_dir and not os.path.exists(out_dir):
@@ -146,6 +148,13 @@ class MF_ConcatVideos:
         # W1-2：concat demuxer + `-c copy` 對 codec / 解析度 / pix_fmt 不一致的輸入常常
         # exit code 0 但輸出壞檔（第一段後 glitch）——正是本專案 error policy 最防的
         # silent corruption，所以送 ffmpeg 前先 probe 全部輸入、不一致就提早 raise。
+        #
+        # F4 [P2]：比對範圍擴充到 video/audio stream 數量 + video profile + audio
+        # 聲道數/聲道佈局（原本漏比這三者：立體聲 + 單聲道輸入一樣能過關，concat 後
+        # 第二段音訊會壞）。刻意不比對 time_base / level / r_frame_rate —— concat
+        # demuxer 本來就會 rescale timestamps、播放器對 level 差異普遍容忍，比了這些
+        # 反而會誤殺原本可以安全 concat 的輸入組合（例如同 codec 不同 profile level
+        # 的手機直出素材）。
         from ..utils.ffmpeg import probe as _probe
 
         infos = []
@@ -158,30 +167,41 @@ class MF_ConcatVideos:
                 )
             infos.append(info)
 
+        def _stream_count(info, kind):
+            return sum(1 for s in info.get("streams", []) if s.get("codec_type") == kind)
+
         def _video_sig(info):
             v = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
             if v is None:
                 return None
-            return (v.get("codec_name"), v.get("width"), v.get("height"), v.get("pix_fmt"))
+            return (v.get("codec_name"), v.get("width"), v.get("height"), v.get("pix_fmt"), v.get("profile"))
 
         def _audio_sig(info):
             a = next((s for s in info.get("streams", []) if s.get("codec_type") == "audio"), None)
             if a is None:
                 return None
-            return (a.get("codec_name"), a.get("sample_rate"))
+            return (a.get("codec_name"), a.get("sample_rate"), a.get("channels"), a.get("channel_layout"))
 
+        video_counts = [_stream_count(info, "video") for info in infos]
+        audio_counts = [_stream_count(info, "audio") for info in infos]
         video_sigs = [_video_sig(info) for info in infos]
         audio_sigs = [_audio_sig(info) for info in infos]
 
-        if len(set(video_sigs)) > 1 or len(set(audio_sigs)) > 1:
+        mismatched = (
+            len(set(video_counts)) > 1 or len(set(audio_counts)) > 1
+            or len(set(video_sigs)) > 1 or len(set(audio_sigs)) > 1
+        )
+        if mismatched:
             lines = [
-                f"  {p}: video(codec/寬/高/pix_fmt)={vs}, audio(codec/取樣率)={a_sig}"
-                for p, vs, a_sig in zip(paths, video_sigs, audio_sigs)
+                f"  {p}: video(數量={vc}, codec/寬/高/pix_fmt/profile={vs}), "
+                f"audio(數量={ac}, codec/取樣率/聲道數/聲道佈局={a_sig})"
+                for p, vc, vs, ac, a_sig in zip(paths, video_counts, video_sigs, audio_counts, audio_sigs)
             ]
             raise ValueError(
-                "[Concat Videos] mode=copy 要求所有輸入的 video codec/解析度/pix_fmt "
-                "與 audio 存在性/codec/取樣率完全一致，否則 concat demuxer 常 exit code 0 "
-                "但輸出壞檔（第一段後 glitch）。偵測到差異：\n" + "\n".join(lines) +
+                "[Concat Videos] mode=copy 要求所有輸入的 video/audio stream 數量、"
+                "video codec/解析度/pix_fmt/profile、audio codec/取樣率/聲道數/聲道佈局 "
+                "完全一致，否則 concat demuxer 常 exit code 0 但輸出壞檔"
+                "（第一段後 glitch，或第二段音訊聲道錯亂）。偵測到差異：\n" + "\n".join(lines) +
                 "\n請改用 mode=transcode。"
             )
 

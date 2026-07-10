@@ -267,9 +267,35 @@ class MF_ComposeVideo:
     def IS_CHANGED(s, **kwargs):
         # frames 接了 -> video_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
         # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
-        if kwargs.get("frames") is not None:
-            return ""
-        return path_fingerprint(kwargs.get("video_path", ""))
+        #
+        # F5 [P2]：video_path 不是唯一會被讀的檔案路徑 —— overlays / audio_ops chain
+        # 內每個 op spec 也帶路徑（image_path / params.srt_path / params.fontfile /
+        # audio_path），且這些路徑不管 path mode 或 tensor mode 都會被讀（frames 只
+        # 取代 video_path 本身，不取代 overlay 檔案），所以要跟 video_path 分開處理：
+        # video_path 只在 path mode 納入，overlay/audio op 路徑兩種 mode 都要納入。
+        # op spec 結構見 utils/compose_ops.py docstring。
+        paths = []
+        if kwargs.get("frames") is None:
+            paths.append(kwargs.get("video_path", ""))
+
+        for op_spec in kwargs.get("overlays") or []:
+            if op_spec.get("image_path"):
+                paths.append(op_spec["image_path"])
+            params = op_spec.get("params") or {}
+            if params.get("srt_path"):
+                paths.append(params["srt_path"])
+            if params.get("fontfile"):
+                paths.append(params["fontfile"])
+
+        for op_spec in kwargs.get("audio_ops") or []:
+            if op_spec.get("_is_temp"):
+                # 每次執行都是新 temp 檔（AUDIO dict materialize 出來的 WAV）；
+                # fingerprint 它會讓節點永遠判定「變了」，cache 形同虛設 — 跳過。
+                continue
+            if op_spec.get("audio_path"):
+                paths.append(op_spec["audio_path"])
+
+        return path_fingerprint(*paths)
 
 
 NODE_CLASS_MAPPINGS = {"MF_ComposeVideo": MF_ComposeVideo}

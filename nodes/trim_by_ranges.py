@@ -18,7 +18,7 @@ from ..utils.ffmpeg import (
     probe_video_duration,
     run_ffmpeg,
 )
-from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
+from ..utils.output_path import output_path_to_ui_entry, resolve_output_path, source_container_ext
 from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
 
 
@@ -31,13 +31,6 @@ class MF_TrimByRanges:
                 "video_path": ("STRING", {"default": "input/sample.mp4"}),
                 "filename_prefix": ("STRING", {"default": "MediaForge/trimmed"}),
                 "mode": (["keep", "remove"], {"default": "remove"}),
-                # W3-1：precise = 現行 trim+setpts re-encode；lossless = stream copy 切段
-                # + concat demuxer 合併，無 re-encode 但切點只能對齊來源前一個 keyframe。
-                # default 維持 precise -> 舊 workflow JSON 沒這欄位時行為 100% 相容。
-                "precision": (
-                    ["precise (re-encode)", "lossless (stream copy)"],
-                    {"default": "precise (re-encode)"},
-                ),
                 # 兩條 input path：(1) SILENCE_RANGES 連線；(2) 手寫 JSON fallback
                 "ranges_json": (
                     "STRING",
@@ -52,6 +45,17 @@ class MF_TrimByRanges:
                     ["ultrafast", "superfast", "veryfast", "faster", "fast",
                      "medium", "slow", "slower", "veryslow"],
                     {"default": "medium"},
+                ),
+                # F1 fix：ComfyUI 存檔的 widgets_values 用「位置」對齊 required 宣告順序；
+                # precision 曾被插在 mode 之後（中段），導致舊 8-widget workflow JSON 載入
+                # 時 ranges_json 以降全部錯位對到下一個 widget。新 widget 一律 append-only
+                # 加到 required 尾端，才能維持舊存檔的 widgets_values 前綴不變、新 widget
+                # 自己落到 default（此欄位固定放最後一個位置，不要再往前搬）。
+                # W3-1：precise = 現行 trim+setpts re-encode；lossless = stream copy 切段
+                # + concat demuxer 合併，無 re-encode 但切點只能對齊來源前一個 keyframe。
+                "precision": (
+                    ["precise (re-encode)", "lossless (stream copy)"],
+                    {"default": "precise (re-encode)"},
                 ),
             },
             "optional": {
@@ -104,9 +108,10 @@ class MF_TrimByRanges:
             # ProRes 需要 .mov 容器才能 mux 成功 (W1-6)；_build_concat_command 內部另外查一次
             # codec_id 供 encoder args 用 — 這裡只是為了決定副檔名，不影響下游那份查表。
             # W3-1：lossless 模式不轉容器，副檔名沿用來源（stream copy 語意上就是「跟來源
-            # 一致」），codec/crf/preset widget 在這個分支被忽略。
+            # 一致」），codec/crf/preset widget 在這個分支被忽略。F3：共用 helper 抽到
+            # utils/output_path.py，concat_videos.py 的 copy 模式也用同一份。
             if is_lossless:
-                ext = _source_container_ext(source_path)
+                ext = source_container_ext(source_path)
             else:
                 codec_map = get_available_codecs()
                 codec_id, _pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
@@ -346,15 +351,6 @@ def _normalize_ranges(ranges, duration):
         if e - s > 1e-4:  # 短於 0.1ms 的片段視為 noise
             out.append([s, e])
     return out
-
-
-# W3-1：lossless 模式輸出容器沿用來源；未知（或缺）副檔名退階 .mp4（最泛用容器）。
-_LOSSLESS_KNOWN_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
-
-
-def _source_container_ext(source_path):
-    ext = os.path.splitext(source_path)[1].lower()
-    return ext if ext in _LOSSLESS_KNOWN_EXTS else ".mp4"
 
 
 NODE_CLASS_MAPPINGS = {"MF_TrimByRanges": MF_TrimByRanges}

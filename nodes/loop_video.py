@@ -8,6 +8,7 @@ from ..utils.ffmpeg import (
     probe_has_audio_stream,
     probe_video_duration,
     probe_video_fps,
+    probe_video_frame_count,
     run_ffmpeg,
 )
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
@@ -136,19 +137,28 @@ class MF_LoopVideo:
 
             if loop_mode in ("strict", "ping_pong"):
                 # loop filter 的 size 是「單一 unit」緩衝上限（INT16_MAX），不是總輸出
-                # 長度；ping_pong 的 unit 是 effective_dur 正反接一次、長度 ×2。超過就只
-                # 會 buffer 前 32767 frames、其餘 silently 消失 — 必須在送進 ffmpeg 前擋
-                # 下（CLAUDE.md gotcha #3）。crossfade 走 xfade、不受此限制。
-                src_fps = probe_video_fps(source_path)
-                if src_fps:
-                    unit_dur = effective_dur * 2 if loop_mode == "ping_pong" else effective_dur
-                    est_frames = unit_dur * src_fps
-                    if est_frames > MAX_LOOP_FRAMES:
+                # 長度；超過就只會 buffer 前 32767 frames、其餘 silently 消失 — 必須在
+                # 送進 ffmpeg 前擋下（CLAUDE.md gotcha #3）。crossfade 走 xfade、不受此限制。
+                #
+                # F2 fix：`setpts` 只改時間戳、不改幀數 —— 進 loop filter 的幀數是「來源
+                # 實際幀數」，與 speed 無關（舊公式用 effective_dur(=source_dur/speed) ×
+                # fps 估算：speed=4 時低估 4 倍、guard 誤放行；speed=0.25 時高估、誤擋
+                # 合法輸入）。reverse 同理不影響幀數。優先用 ffprobe 原生 nb_frames
+                # （精確值），沒有才退階用 fps × 來源 duration 估算。
+                source_frames = probe_video_frame_count(source_path)
+                if source_frames is None:
+                    src_fps = probe_video_fps(source_path)
+                    source_frames = source_dur * src_fps if src_fps else None
+                if source_frames is not None:
+                    # ping_pong 是 concat(正+反) 後再 loop，單位幀數 = 來源幀數 ×2
+                    unit_frames = source_frames * 2 if loop_mode == "ping_pong" else source_frames
+                    if unit_frames > MAX_LOOP_FRAMES:
                         raise ValueError(
-                            f"[Loop Video] loop_mode={loop_mode} 需要緩衝約 {est_frames:.0f} frames"
-                            f"（{unit_dur:.2f}s × {src_fps:.2f}fps），超過 FFmpeg loop filter 上限"
-                            f" {MAX_LOOP_FRAMES}，只會 loop 到前段內容、輸出會是錯誤結果。"
-                            "請改用 loop_mode=crossfade，或先降低來源 fps / 縮短素材長度。"
+                            f"[Loop Video] loop_mode={loop_mode} 需要緩衝約 {unit_frames:.0f} frames"
+                            f"（來源 {source_frames:.0f} frames"
+                            f"{' ×2(ping_pong 正反合併)' if loop_mode == 'ping_pong' else ''}），"
+                            f"超過 FFmpeg loop filter 上限 {MAX_LOOP_FRAMES}，只會 loop 到前段內容、"
+                            "輸出會是錯誤結果。請改用 loop_mode=crossfade，或先降低來源 fps / 縮短素材長度。"
                         )
 
             filter_parts, v_out, a_out = self._build_filter(

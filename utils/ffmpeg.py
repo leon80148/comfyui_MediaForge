@@ -329,6 +329,28 @@ def probe_video_fps(path):
     return None
 
 
+def probe_video_frame_count(path):
+    """Video stream 的 `nb_frames`（ffprobe 原生 metadata，非估算值）。
+
+    多數 container 有精確 nb_frames；部分串流格式（某些 mkv muxer / VFR 素材）缺這個
+    欄位，回傳 None 讓 caller 退階用 fps × duration 估算。
+
+    用途：LoopVideo frame-count guard（F2 fix）優先用真實幀數 —— 比 fps × duration
+    估算更準，尤其 VFR 素材的 fps 只是平均值。
+    """
+    info = probe(path)
+    if info is None:
+        return None
+    v = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
+    if v is None:
+        return None
+    try:
+        nb = int(v.get("nb_frames") or 0)
+    except (ValueError, TypeError):
+        return None
+    return nb if nb > 0 else None
+
+
 def probe_video_duration(path):
     """Video stream 自己的時長。
 

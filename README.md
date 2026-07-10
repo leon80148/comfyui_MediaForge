@@ -391,10 +391,10 @@ Cut a video by time ranges. Primary use case: auto-remove silence (wire from `MF
 | `video_path` | `input/sample.mp4` | |
 | `filename_prefix` | `MediaForge/trimmed` | |
 | `mode` | `remove` | `remove` = drop ranges, keep rest. `keep` = keep ranges, drop rest |
-| `precision` | `precise (re-encode)` | `lossless (stream copy)` hides `codec` / `crf` / `preset` / `crossfade_sec` (frontend-enforced) — none of them reach ffmpeg in that mode |
 | `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | Used when `ranges` pin not wired |
 | `crossfade_sec` | `0.0` (0–2) | `xfade` between adjacent kept segments; `0` = hard cut. Unavailable in `precision=lossless` |
 | `codec` / `crf` / `preset` | smart / `18` / `medium` | Ignored in `precision=lossless` (output container follows the source instead) |
+| `precision` | `precise (re-encode)` | `lossless (stream copy)` hides `codec` / `crf` / `preset` / `crossfade_sec` (frontend-enforced) — none of them reach ffmpeg in that mode. Declared **last** in the node's schema (not grouped next to `mode`) on purpose: ComfyUI aligns a saved workflow's widget values positionally, so a widget added later must be appended at the end to keep old workflow JSON loading correctly |
 
 **Mode semantics**:
 - `keep` + empty ranges → **raises** (refuses to produce an empty output).
@@ -415,7 +415,7 @@ Stitch multiple video files end-to-end at the path level. Two strategies for spe
 **When to use**: joining clips from the same camera (use `copy` for instant stream-copy), stitching footage with different codecs or resolutions (use `transcode` with optional transition).
 
 **Modes**:
-- `copy` — FFmpeg concat demuxer, no re-encode. Lightning fast. **Requires** identical codec / resolution / fps / pix_fmt across all inputs.
+- `copy` — FFmpeg concat demuxer, no re-encode. Lightning fast. **Requires** all inputs to match on a preflight probe check: video/audio stream counts, video `codec_name`/`width`/`height`/`pix_fmt`/`profile`, and audio `codec_name`/`sample_rate`/`channels`/`channel_layout`. Mismatches raise before ffmpeg runs, instead of silently producing a corrupt file (concat demuxer + `-c copy` often exits 0 with glitched output past the first segment). `time_base` / `level` / `r_frame_rate` are intentionally **not** compared — the concat demuxer rescales timestamps anyway, and players tolerate level differences, so checking those would over-reject otherwise-safe inputs.
 - `transcode` — `filter_complex` graph with optional `xfade` transition. Always works; always re-encodes.
 
 **Required widgets**:
@@ -434,7 +434,7 @@ Stitch multiple video files end-to-end at the path level. Two strategies for spe
 
 **Output**: `final_video_path` STRING.
 
-**Notes**: in `transcode` mode, inputs missing audio are auto-padded with `anullsrc` silence. In `copy` mode, audio-stream mismatch causes a hard fail — pre-normalize with `MF_SaveVideoFrames` if mixing sources.
+**Notes**: in `transcode` mode, inputs missing audio are auto-padded with `anullsrc` silence. In `copy` mode, any preflight mismatch (see above) causes a hard fail — pre-normalize with `MF_SaveVideoFrames` if mixing sources. `copy` mode's output container extension follows the **first input's** file extension (not the `codec` widget, which `copy` mode ignores entirely) — e.g. two ProRes `.mov` inputs produce a `.mov` output, not `.mp4` (the `.mp4` muxer has no ProRes tag and would fail to mux).
 
 ---
 

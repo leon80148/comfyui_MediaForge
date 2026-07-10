@@ -13,9 +13,12 @@ import re
 
 # 使用者可能誤把副檔名打進 filename_prefix（如 "looped.mp4"）；
 # 先剝掉這些已知 ext，下游再加自己想要的副檔名上去
+# F6 [P3]：補 gif（MF_SaveVideoFrames 的 gif 偽 codec）與常見音訊副檔名
+# （wav/mp3/m4a/ogg/flac，ExtractAudio 等音訊輸出節點會用到）。
 _KNOWN_EXTS = (
     ".srt", ".txt", ".vtt", ".ass",
     ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v",
+    ".gif", ".wav", ".mp3", ".m4a", ".ogg", ".flac",
 )
 
 
@@ -105,3 +108,20 @@ def output_path_to_ui_entry(output_path, type="output"):
         "subfolder": subfolder.replace("\\", "/"),
         "type": type,
     }
+
+
+# F3 [P2]：stream-copy 語意的輸出（lossless trim / concat copy 模式）不 re-encode，
+# 輸出容器必須跟來源一致，否則可能 mux 進不支援來源 codec tag 的容器（例：ProRes
+# 塞進 .mp4 muxer 直接 mux fail，mp4 muxer 沒有 prores tag）。
+_VIDEO_CONTAINER_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
+
+
+def source_container_ext(path):
+    """來源檔案副檔名（lower-case，含 leading dot）；未知或缺副檔名退 `.mp4`。
+
+    給 stream-copy 輸出用：`nodes/trim_by_ranges.py` 的 lossless 模式、
+    `nodes/concat_videos.py` 的 copy 模式都靠這個決定輸出容器（沿用第一個/來源
+    輸入的副檔名，不看 codec widget）。
+    """
+    ext = os.path.splitext(path)[1].lower()
+    return ext if ext in _VIDEO_CONTAINER_EXTS else ".mp4"
