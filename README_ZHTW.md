@@ -380,7 +380,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 
 **Precision 模式**：
 - `precise (re-encode)` — `trim` + `setpts` re-encode（原本的行為，逐幀精確）。預設值；這個 widget 加入前存的 workflow JSON 載入後行為不變。
-- `lossless (stream copy)` — keyframe-seek 分段 stream copy（`-c copy`）+ concat demuxer 合併。長素材上幾乎瞬間完成、零畫質損失，但切點會對齊來源前一個 keyframe（有 GOP 級的時間誤差）。`crossfade_sec` 在這個模式無法生效（stream copy 無法混合像素）— widget 會被隱藏，殘留自 `precise` 模式的非 0 值會被**忽略**（印警告），不會 raise。每段抽取與最終合併都會 `-map 0` 保留全部 stream，多音軌來源（例如英文＋評論雙音軌）不會漏軌。
+- `lossless (stream copy)` — keyframe-seek 分段 stream copy（`-c copy`）+ concat demuxer 合併。長素材上幾乎瞬間完成、零畫質損失。每個 keep 段的起點一律**向後**對齊到來源下一顆 keyframe（絕不往前對齊——往前對齊會把已經被判定要移除的內容重新包回輸出，見 Codex R6-1）。若 keep 段內完全沒有 keyframe（區間比來源 GOP 還窄、剛好卡在兩顆 keyframe 中間），lossless 模式無法表示該段，節點會 **raise**——請改用 `precision=precise (re-encode)`，或放寬該段範圍。`crossfade_sec` 在這個模式無法生效（stream copy 無法混合像素）— widget 會被隱藏，殘留自 `precise` 模式的非 0 值會被**忽略**（印警告），不會 raise。每段抽取與最終合併都會 `-map 0` 保留全部 stream，多音軌來源（例如英文＋評論雙音軌）不會漏軌。
 
 **Ranges 輸入**（兩種、互斥 — pin 優先）：
 - `ranges`（pin、選用）— 從 `MF_DetectSilence`（或 `MF_DetectScenes`）接過來的 `SILENCE_RANGES`。

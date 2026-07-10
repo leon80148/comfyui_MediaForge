@@ -382,3 +382,96 @@ def probe_video_duration(path):
         pass
     # 最後退階：container duration
     return probe_duration(path)
+
+
+def probe_audio_duration(path):
+    """第一條 audio stream 自己的時長（非 container 整體）。
+
+    為什麼分開做（Codex R6-2 finding）：probe_duration() 回傳的 container duration
+    是所有 stream 的 max；若 audio stream 比 video 短（audio 提前結束、container
+    靠 video 撐長度），呼叫端拿 container duration 當「音訊已經沒有內容」的終點就
+    會誤把 container 還有畫面、但 audio 已經沒有的那段也算進去
+    （MF_DetectSilence 補靜音收尾段正是這個情境）。優先讀 audio stream 自己的
+    `duration` 欄位；缺這欄位時 (部分 mkv muxer 常見) 退而讀 `tags.DURATION`。
+    走 probe()，自動吃 W2-1 的 LRU cache。
+    """
+    info = probe(path)
+    if info is None:
+        return None
+    a = next((s for s in info.get("streams", []) if s.get("codec_type") == "audio"), None)
+    if a is None:
+        return None
+    try:
+        d = a.get("duration")
+        if d is not None:
+            return float(d)
+    except (ValueError, TypeError):
+        pass
+    tags = a.get("tags") or {}
+    return _parse_hms_duration(tags.get("DURATION"))
+
+
+def _parse_hms_duration(text):
+    """Parse mkv 常見的 `tags.DURATION` 字串（`HH:MM:SS.nnnnnnnnn`）→ 秒數 float。
+
+    格式不符（None / 缺冒號 / 非數字）一律回傳 None，讓 caller 忽略、走下一個 fallback。
+    """
+    if not text:
+        return None
+    try:
+        h, m, s = text.strip().split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    except (ValueError, AttributeError):
+        return None
+
+
+def probe_keyframe_times(path):
+    """回傳影片所有 keyframe 的 pts_time（秒，sorted asc）；失敗或找不到回傳 None。
+
+    用途（Codex R6-1 finding）：`MF_TrimByRanges._trim_lossless()` 用這份 keyframe
+    清單做「前向對齊」—— stream copy 的 input-side `-ss` 只能落在 keyframe 上，若
+    不先知道 keyframe 實際位置就切，FFmpeg 可能往前退到 keep range 起點之前的
+    keyframe，把 mode=remove 判定要移除的內容重新包進輸出。
+
+    走獨立的 ffprobe 指令（`-skip_frame nokey` 只解 keyframe，比逐幀掃描快很多，
+    但仍需 decode 整段，對超長素材可能慢）。**不進 probe() 的 LRU cache**：這是
+    不同語意的命令（select_streams + skip_frame，不是 show_format/show_streams），
+    混進同一份 cache 會讓同一個 cache key 對到不同命令的結果。呼叫端
+    （_trim_lossless）每次執行只呼叫一次，不需要額外快取。
+    """
+    cmd = resolve_ffmpeg_cmd([
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-skip_frame", "nokey",
+        "-show_entries", "frame=pts_time",
+        "-of", "csv=p=0",
+        path,
+    ])
+    try:
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"[ffprobe] keyframe 掃描失敗: {e}")
+        return None
+
+    times = []
+    for line in result.stdout.splitlines():
+        # 實測 ffprobe 8.1 的 `-of csv=p=0` 對這個 -show_entries 組合，第一筆資料列
+        # 偶爾會多印一個逗號結尾的空欄位（例如 "0.000000,"）——原因不明（其餘列正常），
+        # 但用 float(line) 直接解析整行會在那一列丟 ValueError、把它悄悄跳過，導致
+        # 遺漏最早的 keyframe（往往正是 0.0 秒那顆，前向對齊演算法最依賴的一顆）。
+        # 一律只取第一個逗號分隔欄位，不論多出幾個空欄位都不受影響。
+        token = line.strip().split(",")[0].strip()
+        if not token:
+            continue
+        try:
+            times.append(float(token))
+        except ValueError:
+            continue
+    return sorted(times) if times else None

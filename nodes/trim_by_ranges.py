@@ -15,6 +15,7 @@ from ..utils.ffmpeg import (
     ensure_ffmpeg,
     escape_filter_path,
     probe_has_audio_stream,
+    probe_keyframe_times,
     probe_video_duration,
     run_ffmpeg,
 )
@@ -277,23 +278,56 @@ class MF_TrimByRanges:
 
     @staticmethod
     def _trim_lossless(source_path, output_path, keep_ranges):
-        # Stream copy 只能在 keyframe 上切：`-ss`/`-to` 放在 `-i` 前是 input seek，會對齊到
-        # 前一個 keyframe（非逐幀精確），實際切點時間可能有 GOP 級誤差 —— 這是用 re-encode
-        # 換來近乎零成本切割的已知取捨，print 警告讓使用者知道差異來源。
-        print(
-            "[Trim By Ranges] 注意：precision=lossless 用 stream copy 切段，切點會對齊來源"
-            "前一個 keyframe（非逐幀精確），實際時長可能有 GOP 級誤差。"
+        # R6-1 [P1] fix：stream copy 只能在 keyframe 上切。原本 `-ss {s} -to {e}` 都是
+        # input-side seek——FFmpeg 會把 `-ss` 往前退到 s 之前最近的 keyframe，但 `-to`
+        # 是絕對終點不變，GOP 稀疏時等於把 mode=remove 判定要移除的內容重新包進輸出
+        # （甚至整段重複）。改成「前向」對齊：每個 keep range 的起點只准往後挪到下一顆
+        # keyframe，絕不往前擴進已移除區間；range 內完全沒有可用 keyframe 就 raise
+        # （往前擴或悄悄跳過都會產生錯誤內容，不是可接受的 graceful degradation）。
+        keyframes = probe_keyframe_times(source_path)
+        if not keyframes:
+            raise RuntimeError(
+                "[Trim By Ranges] 無法取得來源影片的 keyframe 資訊，lossless 模式需要"
+                "keyframe 對齊才能安全切段，請改用 precision=precise (re-encode)。"
+            )
+
+        adjusted = []
+        for i, (s, e) in enumerate(keep_ranges):
+            candidates = [k for k in keyframes if k >= s - 1e-3]
+            if not candidates or candidates[0] >= e - 1e-3:
+                raise RuntimeError(
+                    f"[Trim By Ranges] 第 {i + 1} 段 keep range [{s:.2f}s, {e:.2f}s] "
+                    "內沒有可用的 keyframe，lossless 模式無法保留此段。請改用 "
+                    "precision=precise (re-encode)，或調整 ranges 讓每段至少涵蓋一顆 "
+                    "keyframe。"
+                )
+            adjusted.append((s, candidates[0], e))
+
+        detail = ", ".join(
+            f"第{i + 1}段 {s:.3f}s→{s_adj:.3f}s(+{max(0.0, s_adj - s):.3f}s)"
+            for i, (s, s_adj, _e) in enumerate(adjusted)
         )
+        print(
+            "[Trim By Ranges] 注意：precision=lossless 用 stream copy 切段，keep 段起點"
+            f"已向後對齊至最近的來源 keyframe（絕不往前擴進已移除內容）：{detail}"
+        )
+
         ext = os.path.splitext(output_path)[1] or ".mp4"
         tmpdir = tempfile.mkdtemp(prefix="mf_trim_lossless_")
         try:
             seg_paths = []
-            for i, (s, e) in enumerate(keep_ranges):
+            for i, (s, s_adj, e) in enumerate(adjusted):
                 seg_path = os.path.join(tmpdir, f"seg_{i}{ext}")
                 cmd = [
                     "ffmpeg", "-y",
-                    "-ss", f"{s:.6f}", "-to", f"{e:.6f}",
+                    # +0.5ms 微偏移保證 input seek 精確落在 s_adj 這顆 keyframe 上，
+                    # 不會因浮點數 timestamp 誤差又回退一顆；`-t`（相對秒數，取代
+                    # `-to` 絕對終點）從實際 seek 到的位置起算，避免 input-side `-to`
+                    # 的版本語意分歧。結尾切在非 keyframe 是安全的——段首是 keyframe、
+                    # 後續 frame 順序可解。
+                    "-ss", f"{s_adj + 0.0005:.6f}",
                     "-i", source_path,
+                    "-t", f"{e - s_adj:.6f}",
                     # R4-2 fix：不加 -map 0 只會抽到預設音軌，雙音軌來源（如英文 +
                     # 評論軌 mkv）在切段當下就已經丟軌——「lossless」掉軌非常違反直覺。
                     "-map", "0",
@@ -303,7 +337,7 @@ class MF_TrimByRanges:
                 if not run_ffmpeg(cmd, tag="Trim By Ranges"):
                     raise RuntimeError(
                         f"[Trim By Ranges] lossless 切段失敗（第 {i + 1} 段 "
-                        f"{s:.2f}s-{e:.2f}s），請查看上方 stderr 輸出。"
+                        f"{s_adj:.2f}s-{e:.2f}s），請查看上方 stderr 輸出。"
                     )
                 seg_paths.append(seg_path)
 

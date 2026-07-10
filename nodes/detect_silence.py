@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 
 from ..utils.cache_key import path_fingerprint
-from ..utils.ffmpeg import ensure_ffmpeg, probe_duration, resolve_ffmpeg_cmd
+from ..utils.ffmpeg import ensure_ffmpeg, probe_audio_duration, probe_duration, resolve_ffmpeg_cmd
 
 
 # silencedetect 輸出例：
@@ -73,9 +73,17 @@ class MF_DetectSilence:
                     f"[Detect Silence] FFmpeg 失敗 (exit {proc.returncode}):\n{tail}"
                 )
 
-            # W1-5：影片以靜音收尾時最後一段沒有 silence_end，probe 檔案總長度讓
+            # W1-5：影片以靜音收尾時最後一段沒有 silence_end，probe 時長讓
             # _parse_silence_log 能把它收尾成 [last_start, duration] 而非直接丟棄。
-            duration = probe_duration(source_path)
+            # R6-2 fix：優先用 audio stream 自己的 duration，不是 container 整體 ——
+            # container 是所有 stream 的 max，audio 比 video 短時（audio 提前結束）
+            # 用 container 補尾段，會把「container 有、但 audio 已經沒有」的畫面也
+            # 判成靜音，下游 mode=remove 連這段畫面都會被剪掉。audio stream duration
+            # 缺失時才退階用 container（best-effort、可能長於實際音軌，但總比整段
+            # 捨棄好）。
+            duration = probe_audio_duration(source_path)
+            if duration is None:
+                duration = probe_duration(source_path)
             ranges = _parse_silence_log(proc.stderr or "", duration=duration)
         finally:
             if cleanup_tmp:
