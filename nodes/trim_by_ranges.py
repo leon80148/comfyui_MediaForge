@@ -294,6 +294,9 @@ class MF_TrimByRanges:
                     "ffmpeg", "-y",
                     "-ss", f"{s:.6f}", "-to", f"{e:.6f}",
                     "-i", source_path,
+                    # R4-2 fix：不加 -map 0 只會抽到預設音軌，雙音軌來源（如英文 +
+                    # 評論軌 mkv）在切段當下就已經丟軌——「lossless」掉軌非常違反直覺。
+                    "-map", "0",
                     "-c", "copy", "-avoid_negative_ts", "make_zero",
                     seg_path,
                 ]
@@ -313,7 +316,9 @@ class MF_TrimByRanges:
 
             concat_cmd = [
                 "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                "-i", list_path, "-c", "copy", output_path,
+                # R4-2 fix：段檔本身可能保留了多軌（上面 per-segment 已加 -map 0），
+                # 合併時同樣要 -map 0 才不會在這一步二次丟軌。
+                "-i", list_path, "-map", "0", "-c", "copy", output_path,
             ]
             if not run_ffmpeg(concat_cmd, tag="Trim By Ranges"):
                 raise RuntimeError("[Trim By Ranges] lossless 合併片段失敗，請查看上方 stderr 輸出。")

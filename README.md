@@ -380,7 +380,7 @@ Cut a video by time ranges. Primary use case: auto-remove silence (wire from `MF
 
 **Precision modes**:
 - `precise (re-encode)` — `trim` + `setpts` re-encode (original behavior, frame-accurate cuts). Default; workflow JSON saved before this widget existed loads unchanged.
-- `lossless (stream copy)` — keyframe-seek segment copy (`-c copy`) + concat-demuxer merge. Near-instant even on long sources with no quality loss, but cuts snap to the source's previous keyframe (GOP-level timing error). `crossfade_sec` can't apply (stream copy can't blend pixels) — the widget is hidden in this mode, and any stale non-zero value left over from `precise` mode is **ignored** (with a console warning), not an error.
+- `lossless (stream copy)` — keyframe-seek segment copy (`-c copy`) + concat-demuxer merge. Near-instant even on long sources with no quality loss, but cuts snap to the source's previous keyframe (GOP-level timing error). `crossfade_sec` can't apply (stream copy can't blend pixels) — the widget is hidden in this mode, and any stale non-zero value left over from `precise` mode is **ignored** (with a console warning), not an error. Both the per-segment extraction and the final merge map every stream (`-map 0`), so multi-track sources (e.g. English + commentary audio) keep all their tracks instead of losing the non-default ones.
 
 **Range input** (mutually exclusive — pin takes priority):
 - `ranges` (pin, optional) — `SILENCE_RANGES` from `MF_DetectSilence` (or `MF_DetectScenes`).
@@ -415,7 +415,7 @@ Stitch multiple video files end-to-end at the path level. Two strategies for spe
 **When to use**: joining clips from the same camera (use `copy` for instant stream-copy), stitching footage with different codecs or resolutions (use `transcode` with optional transition).
 
 **Modes**:
-- `copy` — FFmpeg concat demuxer, no re-encode. Lightning fast. **Requires** all inputs to match on a preflight probe check: video/audio stream counts, video `codec_name`/`width`/`height`/`pix_fmt`/`profile`, and audio `codec_name`/`sample_rate`/`channels`/`channel_layout`. Mismatches raise before ffmpeg runs, instead of silently producing a corrupt file (concat demuxer + `-c copy` often exits 0 with glitched output past the first segment). `time_base` / `level` / `r_frame_rate` are intentionally **not** compared — the concat demuxer rescales timestamps anyway, and players tolerate level differences, so checking those would over-reject otherwise-safe inputs.
+- `copy` — FFmpeg concat demuxer, no re-encode. Lightning fast. **Requires** all inputs to match on a preflight probe check: video/audio stream counts, video `codec_name`/`width`/`height`/`pix_fmt`/`profile`/`sample_aspect_ratio`, and audio `codec_name`/`sample_rate`/`channels`/`channel_layout`. Mismatches raise before ffmpeg runs, instead of silently producing a corrupt file (concat demuxer + `-c copy` often exits 0 with glitched output past the first segment). `time_base` / `level` / `r_frame_rate` are intentionally **not** compared — the concat demuxer rescales timestamps anyway, and players tolerate level differences, so checking those would over-reject otherwise-safe inputs. The merge itself maps every validated stream (`-map 0`), so extra tracks — e.g. a commentary audio track — survive instead of being silently dropped by ffmpeg's default one-stream-per-type selection.
 - `transcode` — `filter_complex` graph with optional `xfade` transition. Always works; always re-encodes.
 
 **Required widgets**:

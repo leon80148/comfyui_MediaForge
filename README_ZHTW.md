@@ -380,7 +380,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 
 **Precision 模式**：
 - `precise (re-encode)` — `trim` + `setpts` re-encode（原本的行為，逐幀精確）。預設值；這個 widget 加入前存的 workflow JSON 載入後行為不變。
-- `lossless (stream copy)` — keyframe-seek 分段 stream copy（`-c copy`）+ concat demuxer 合併。長素材上幾乎瞬間完成、零畫質損失，但切點會對齊來源前一個 keyframe（有 GOP 級的時間誤差）。`crossfade_sec` 在這個模式無法生效（stream copy 無法混合像素）— widget 會被隱藏，殘留自 `precise` 模式的非 0 值會被**忽略**（印警告），不會 raise。
+- `lossless (stream copy)` — keyframe-seek 分段 stream copy（`-c copy`）+ concat demuxer 合併。長素材上幾乎瞬間完成、零畫質損失，但切點會對齊來源前一個 keyframe（有 GOP 級的時間誤差）。`crossfade_sec` 在這個模式無法生效（stream copy 無法混合像素）— widget 會被隱藏，殘留自 `precise` 模式的非 0 值會被**忽略**（印警告），不會 raise。每段抽取與最終合併都會 `-map 0` 保留全部 stream，多音軌來源（例如英文＋評論雙音軌）不會漏軌。
 
 **Ranges 輸入**（兩種、互斥 — pin 優先）：
 - `ranges`（pin、選用）— 從 `MF_DetectSilence`（或 `MF_DetectScenes`）接過來的 `SILENCE_RANGES`。
@@ -415,7 +415,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 **適用情境**：同台相機素材拼接（用 `copy` 秒接 stream-copy）、跨 codec / 跨解析度素材拼接（用 `transcode` 加可選過場）。
 
 **Modes**：
-- `copy` — FFmpeg concat demuxer、stream copy 不 re-encode。極快，但**要求**所有輸入通過 preflight probe 比對：video/audio stream 數量、video `codec_name`/`width`/`height`/`pix_fmt`/`profile`、audio `codec_name`/`sample_rate`/`channels`/`channel_layout` 皆須一致。不一致會在跑 ffmpeg 前直接 raise，而不是 silently 產出壞檔（concat demuxer + `-c copy` 常常 exit code 0 但輸出從第二段開始 glitch）。刻意**不比對** `time_base` / `level` / `r_frame_rate`——concat demuxer 本來就會 rescale timestamps、播放器對 level 差異普遍容忍，比了反而會誤殺原本可以安全 concat 的輸入組合。
+- `copy` — FFmpeg concat demuxer、stream copy 不 re-encode。極快，但**要求**所有輸入通過 preflight probe 比對：video/audio stream 數量、video `codec_name`/`width`/`height`/`pix_fmt`/`profile`/`sample_aspect_ratio`、audio `codec_name`/`sample_rate`/`channels`/`channel_layout` 皆須一致。不一致會在跑 ffmpeg 前直接 raise，而不是 silently 產出壞檔（concat demuxer + `-c copy` 常常 exit code 0 但輸出從第二段開始 glitch）。刻意**不比對** `time_base` / `level` / `r_frame_rate`——concat demuxer 本來就會 rescale timestamps、播放器對 level 差異普遍容忍，比了反而會誤殺原本可以安全 concat 的輸入組合。合併時會 map 所有已驗證的 stream（`-map 0`），額外音軌（例如評論音軌）不會被 ffmpeg 預設的單軌選取邏輯 silently 丟掉。
 - `transcode` — `filter_complex` graph 加可選 `xfade`。一定可用、一定 re-encode。
 
 **必填 widget**：

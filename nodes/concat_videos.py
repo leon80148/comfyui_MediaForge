@@ -173,14 +173,28 @@ class MF_ConcatVideos:
                 )
             infos.append(info)
 
-        video_fields = ("codec_name", "width", "height", "pix_fmt", "profile")
+        # R4-3 [P2]：video signature 補 sample_aspect_ratio —— codec/解析度/pix_fmt/
+        # profile 全同但 SAR 不同（例：16:15 vs 64:45）copy 合併後顯示比例會被擠壓，
+        # 原本沒比對這欄位讓 preflight 誤判通過。
+        video_fields = ("codec_name", "width", "height", "pix_fmt", "profile", "sample_aspect_ratio")
         audio_fields = ("codec_name", "sample_rate", "channels", "channel_layout")
 
+        def _normalize_sar(value):
+            # 未標 SAR 的檔實務上都是方形像素（1:1）顯示；把 ffprobe 各種「沒填」的
+            # 等價表示（缺欄位 None / 空字串 / 明確 "0:1"）都收斂成 "1:1"，避免
+            # 「一支寫 1:1、一支沒寫」被誤判成不相容而擋掉合法的 copy 合併。
+            return "1:1" if value in (None, "", "0:1") else value
+
         def _sigs(info, kind, fields):
-            return [
-                tuple(s.get(f) for f in fields)
-                for s in info.get("streams", []) if s.get("codec_type") == kind
-            ]
+            sigs = []
+            for s in info.get("streams", []):
+                if s.get("codec_type") != kind:
+                    continue
+                sigs.append(tuple(
+                    _normalize_sar(s.get(f)) if f == "sample_aspect_ratio" else s.get(f)
+                    for f in fields
+                ))
+            return sigs
 
         def _diff(kind, fields, baseline, sigs):
             if len(sigs) != len(baseline):
@@ -233,6 +247,10 @@ class MF_ConcatVideos:
             cmd = [
                 "ffmpeg", "-y", "-f", "concat", "-safe", "0",
                 "-i", list_path,
+                # R4-1 fix：concat demuxer 預設 stream selection 只挑一條 audio，
+                # 沒有 -map 0 會 silently 丟掉非預設軌（例如評論音軌）——preflight
+                # 已逐 stream 驗證全部輸入相容，這裡要保留全部 stream 才符合合約。
+                "-map", "0",
                 "-c", "copy",
                 output_path,
             ]

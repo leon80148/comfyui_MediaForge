@@ -144,9 +144,13 @@ class MF_ConvertChinese:
 
     @classmethod
     def IS_CHANGED(s, **kwargs):
-        # input_path 非空才代表這輪執行可能讀檔（text 有值時 text 優先、input_path
-        # 被忽略）；同路徑換內容(mtime 變)要 invalidate cache(W1-13)。text widget
-        # 模式的變動已由 ComfyUI 原生 value hashing 涵蓋，這裡不需要額外處理。
+        # R4-4 fix：鏡射 convert() 的輸入優先序 —— text.strip() 非空時執行完全
+        # 不讀 input_path，IS_CHANGED 也要跟著忽略它，否則 touch 一個被忽略的檔案
+        # 會 invalidate cache、白跑一次。text 本身已由 ComfyUI 原生 value hashing
+        # 涵蓋，這裡不需要額外處理。text 空時才 fingerprint input_path（W1-13）。
+        text = (kwargs.get("text") or "").strip()
+        if text:
+            return ""
         input_path = kwargs.get("input_path", "")
         if not input_path:
             return ""
