@@ -1,5 +1,6 @@
 import os
 
+from ..utils.cache_key import path_fingerprint
 from ..utils.ffmpeg import ensure_ffmpeg, get_video_display_dims
 from ..utils.ffmpeg import probe as ffprobe_data
 from ..utils.video_io import encode_tensor_to_tempfile
@@ -81,6 +82,14 @@ class MF_ProbeMedia:
                     os.unlink(cleanup_tmp)
                 except OSError:
                     pass
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # frames 接了 -> media_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
+        # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
+        if kwargs.get("frames") is not None:
+            return ""
+        return path_fingerprint(kwargs.get("media_path", ""))
 
 
 NODE_CLASS_MAPPINGS = {"MF_ProbeMedia": MF_ProbeMedia}

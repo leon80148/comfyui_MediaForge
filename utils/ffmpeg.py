@@ -260,6 +260,31 @@ def get_video_display_dims(stream):
     return coded_w, coded_h
 
 
+def probe_video_fps(path):
+    """Video stream fps：優先 avg_frame_rate，值為 0（variable frame rate 常見）才退
+    r_frame_rate。找不到可用值回傳 None。
+
+    用途：LoopVideo 估算 loop filter 需緩衝的 frame 數是否超過 MAX_LOOP_FRAMES（W1-4）。
+    走 probe() 而非自建 subprocess，日後 W2-1 probe cache 生效時這裡自動吃到。
+    """
+    info = probe(path)
+    if info is None:
+        return None
+    v = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
+    if v is None:
+        return None
+    for key in ("avg_frame_rate", "r_frame_rate"):
+        rate_str = v.get(key) or "0/0"
+        try:
+            num, den = rate_str.split("/")
+            fps = float(num) / float(den) if float(den) != 0 else 0.0
+            if fps > 0:
+                return fps
+        except (ValueError, AttributeError):
+            continue
+    return None
+
+
 def probe_video_duration(path):
     """Video stream 自己的時長。
 

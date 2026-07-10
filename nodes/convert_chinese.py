@@ -11,6 +11,7 @@ I/O 三段式：
 """
 import os
 
+from ..utils.cache_key import path_fingerprint
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 
 
@@ -86,6 +87,7 @@ class MF_ConvertChinese:
 
         # 決定輸入來源：text 有內容用它，否則讀檔
         source_text = text if text.strip() else ""
+        source_from_input_path = False
         if not source_text:
             if not input_path.strip():
                 raise ValueError(
@@ -96,6 +98,7 @@ class MF_ConvertChinese:
                 raise FileNotFoundError(f"[Convert Chinese] 找不到輸入檔：{input_path}")
             # 自動偵測 encoding — 處理 GBK / BIG5 / UTF-16 等 non-UTF-8 SRT 檔
             source_text = _read_text_with_encoding_detect(input_path)
+            source_from_input_path = True
 
         # Lazy import — 對齊 translate_subtitle / whisper_transcribe 的 ImportError 友善訊息 pattern
         try:
@@ -112,8 +115,19 @@ class MF_ConvertChinese:
         # 可選寫檔
         saved_path = ""
         if filename_prefix.strip():
-            # Heuristic：含 `-->` 視為 SRT（標準 SRT timestamp 符號），否則 .txt
-            ext = ".srt" if "-->" in converted else ".txt"
+            # W1-12：source 來自 input_path 且副檔名是已知字幕/文字格式 → 直接沿用，
+            # 避免「一般文字剛好含 --> 被誤判成 .srt」的 heuristic 誤判；text widget
+            # 模式（或 input_path 副檔名不在已知集合）維持原 heuristic。
+            known_ext = None
+            if source_from_input_path:
+                _root, input_ext = os.path.splitext(input_path)
+                if input_ext.lower() in (".srt", ".txt", ".vtt", ".ass"):
+                    known_ext = input_ext.lower()
+            if known_ext:
+                ext = known_ext
+            else:
+                # Heuristic：含 `-->` 視為 SRT（標準 SRT timestamp 符號），否則 .txt
+                ext = ".srt" if "-->" in converted else ".txt"
             saved_path = resolve_output_path(filename_prefix.strip(), ext)
             with open(saved_path, "w", encoding="utf-8") as f:
                 f.write(converted)
@@ -127,6 +141,16 @@ class MF_ConvertChinese:
                 "result": (converted, saved_path),
             }
         return (converted, saved_path)
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # input_path 非空才代表這輪執行可能讀檔（text 有值時 text 優先、input_path
+        # 被忽略）；同路徑換內容(mtime 變)要 invalidate cache(W1-13)。text widget
+        # 模式的變動已由 ComfyUI 原生 value hashing 涵蓋，這裡不需要額外處理。
+        input_path = kwargs.get("input_path", "")
+        if not input_path:
+            return ""
+        return path_fingerprint(input_path)
 
 
 NODE_CLASS_MAPPINGS = {"MF_ConvertChinese": MF_ConvertChinese}

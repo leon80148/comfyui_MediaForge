@@ -15,6 +15,7 @@
 """
 import os
 
+from ..utils.cache_key import path_fingerprint
 from ..utils.compose_ir import ComposeIR, compile_audio_chain, compile_ir, write_filter_script_if_long
 from ..utils.compose_ops import apply_audio_ops_to_ir, apply_overlays_to_ir
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
@@ -80,6 +81,7 @@ class MF_ComposeVideo:
 
         # Source 解析 — dual-input pattern
         cleanup_source_tmp = None
+        cleanup_paths = []  # drawtext textfile / 超長 filter script / IR tensor temp（W1-3：finally 統一清）
         if frames is not None:
             # tensor → temp mp4 (encode_tensor_to_tempfile 已處理 audio mux)
             source_path = encode_tensor_to_tempfile(frames, fps=tensor_fps, audio=audio)
@@ -237,12 +239,6 @@ class MF_ComposeVideo:
                 )
 
             print(f"[Compose Video] 輸出成功({len(ir.ops)} video ops + {len(ir.audio_ops)} audio ops): {output_path}")
-            # Cleanup compile-time tmp files (drawtext text files + tmp script + IR-tracked temps)
-            for p in cleanup_paths:
-                try:
-                    os.unlink(p)
-                except OSError:
-                    pass
 
             # UI metadata emit:讓 /history/<prompt_id> 看到、API 端 /view 可下載
             return {
@@ -256,6 +252,22 @@ class MF_ComposeVideo:
                     os.unlink(cleanup_source_tmp)
                 except OSError:
                     pass
+            # W1-3：compile-time tmp files (drawtext textfile / 超長 filter script /
+            # IR tensor temp) 原本只在成功路徑 unlink;encode 失敗 raise 後就永久留在
+            # 磁碟(tensor temp mp4 可達數百 MB)。移進 finally 讓兩種 path 都清得到。
+            for p in cleanup_paths:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # frames 接了 -> video_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
+        # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
+        if kwargs.get("frames") is not None:
+            return ""
+        return path_fingerprint(kwargs.get("video_path", ""))
 
 
 NODE_CLASS_MAPPINGS = {"MF_ComposeVideo": MF_ComposeVideo}

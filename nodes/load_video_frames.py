@@ -6,6 +6,7 @@ v2.1 ROADMAP Phase 2 foundation 節點。
 import json
 import os
 
+from ..utils.cache_key import path_fingerprint
 from ..utils.ffmpeg import ensure_ffmpeg
 from ..utils.video_io import decode_audio_to_dict, decode_video_to_tensor
 
@@ -62,6 +63,12 @@ class MF_LoadVideoFrames:
             int(meta["n_frames"]),
             json.dumps(meta, ensure_ascii=False),
         )
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # 同路徑換內容(mtime 變)→ ComfyUI 需要 invalidate cache 重新 decode，
+        # 對齊 core LoadImage 慣例(W1-13)。這個節點沒有 tensor 替代輸入，永遠讀 path。
+        return path_fingerprint(kwargs.get("video_path", ""))
 
 
 NODE_CLASS_MAPPINGS = {"MF_LoadVideoFrames": MF_LoadVideoFrames}

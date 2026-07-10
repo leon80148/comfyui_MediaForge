@@ -7,6 +7,7 @@ v2.1 ROADMAP Phase 3。
 import json
 import os
 
+from ..utils.cache_key import path_fingerprint
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import (
     ensure_ffmpeg,
@@ -65,7 +66,12 @@ class MF_TrimByRanges:
         if not ensure_ffmpeg():
             raise RuntimeError("[Trim By Ranges] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
-        output_path = resolve_output_path(filename_prefix, ".mp4")
+        # ProRes 需要 .mov 容器才能 mux 成功 (W1-6)；_build_concat_command 內部另外查一次
+        # codec_id 供 encoder args 用 — 這裡只是為了決定副檔名，不影響下游那份查表。
+        codec_map = get_available_codecs()
+        codec_id, _pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+        ext = ".mov" if codec_id == "prores_ks" else ".mp4"
+        output_path = resolve_output_path(filename_prefix, ext)
 
         cleanup_tmp = None
         try:
@@ -232,6 +238,14 @@ class MF_TrimByRanges:
             "-pix_fmt", default_pix_fmt,
             output_path,
         ]
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # frames 接了 -> video_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
+        # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
+        if kwargs.get("frames") is not None:
+            return ""
+        return path_fingerprint(kwargs.get("video_path", ""))
 
 
 def _complement_ranges(ranges, duration):

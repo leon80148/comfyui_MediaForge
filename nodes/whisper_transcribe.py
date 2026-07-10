@@ -9,6 +9,7 @@
 import os
 import tempfile
 
+from ..utils.cache_key import path_fingerprint
 from ..utils.ffmpeg import ensure_ffmpeg, resolve_ffmpeg_cmd
 
 
@@ -85,6 +86,14 @@ class MF_WhisperTranscribe:
         line_count = srt.count("\n\n")
         print(f"[Whisper Transcribe] 完成（{line_count} 段）")
         return (srt,)
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # audio 接了 -> audio_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
+        # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
+        if kwargs.get("audio") is not None:
+            return ""
+        return path_fingerprint(kwargs.get("audio_path", ""))
 
 
 # faster-whisper 認得的 model 名稱 prefix (官方 huggingface tag)。其他字串如 'gpt-4o-mini' 視為非 STT。

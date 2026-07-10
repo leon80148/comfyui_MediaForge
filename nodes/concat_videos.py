@@ -7,6 +7,7 @@ mode='transcode' 走 filter concat 安全路徑（可跨 codec），可加 xfade
 import os
 import tempfile
 
+from ..utils.cache_key import path_fingerprint
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg, run_ffmpeg
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
@@ -77,7 +78,15 @@ class MF_ConcatVideos:
         if not ensure_ffmpeg():
             raise RuntimeError("[Concat Videos] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
-        output_path = resolve_output_path(filename_prefix, ".mp4")
+        # W1-6：ProRes 需要 .mov 容器才能 mux 成功；copy 模式不看 codec widget
+        # （demuxer 直接 stream copy，跟輸出容器選擇無關），永遠 .mp4。
+        ext = ".mp4"
+        if mode == "transcode":
+            codec_map = get_available_codecs()
+            codec_id, _pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+            if codec_id == "prores_ks":
+                ext = ".mov"
+        output_path = resolve_output_path(filename_prefix, ext)
 
         cleanup_tmp = None
         try:
@@ -112,6 +121,7 @@ class MF_ConcatVideos:
             if mode == "copy":
                 if transition_sec > 0:
                     print("[Concat Videos] 注意：mode=copy 無法加 transition，已忽略 transition_sec")
+                self._preflight_check_copy_compat(paths)
                 self._concat_demuxer(paths, output_path)
             else:
                 self._concat_transcode(
@@ -130,6 +140,50 @@ class MF_ConcatVideos:
                     os.unlink(cleanup_tmp)
                 except OSError:
                     pass
+
+    @staticmethod
+    def _preflight_check_copy_compat(paths):
+        # W1-2：concat demuxer + `-c copy` 對 codec / 解析度 / pix_fmt 不一致的輸入常常
+        # exit code 0 但輸出壞檔（第一段後 glitch）——正是本專案 error policy 最防的
+        # silent corruption，所以送 ffmpeg 前先 probe 全部輸入、不一致就提早 raise。
+        from ..utils.ffmpeg import probe as _probe
+
+        infos = []
+        for p in paths:
+            info = _probe(p)
+            if not info:
+                raise RuntimeError(
+                    f"[Concat Videos] ffprobe 無法解析：{p}。"
+                    "請確認檔案未損毀，或改用 mode=transcode 跳過 preflight。"
+                )
+            infos.append(info)
+
+        def _video_sig(info):
+            v = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
+            if v is None:
+                return None
+            return (v.get("codec_name"), v.get("width"), v.get("height"), v.get("pix_fmt"))
+
+        def _audio_sig(info):
+            a = next((s for s in info.get("streams", []) if s.get("codec_type") == "audio"), None)
+            if a is None:
+                return None
+            return (a.get("codec_name"), a.get("sample_rate"))
+
+        video_sigs = [_video_sig(info) for info in infos]
+        audio_sigs = [_audio_sig(info) for info in infos]
+
+        if len(set(video_sigs)) > 1 or len(set(audio_sigs)) > 1:
+            lines = [
+                f"  {p}: video(codec/寬/高/pix_fmt)={vs}, audio(codec/取樣率)={a_sig}"
+                for p, vs, a_sig in zip(paths, video_sigs, audio_sigs)
+            ]
+            raise ValueError(
+                "[Concat Videos] mode=copy 要求所有輸入的 video codec/解析度/pix_fmt "
+                "與 audio 存在性/codec/取樣率完全一致，否則 concat demuxer 常 exit code 0 "
+                "但輸出壞檔（第一段後 glitch）。偵測到差異：\n" + "\n".join(lines) +
+                "\n請改用 mode=transcode。"
+            )
 
     @staticmethod
     def _concat_demuxer(paths, output_path):
@@ -280,6 +334,15 @@ class MF_ConcatVideos:
         ])
         if not run_ffmpeg(cmd, tag="Concat Videos"):
             raise RuntimeError("[Concat Videos] transcode 模式失敗，請查看上方 stderr 輸出。")
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # video_paths 的每一行都會被讀入 —— 即使 frames 接了，tensor 也只是 prepend
+        # 成 path[0]、其餘行仍照樣被 concat，跟 BurnSubtitle 的 srt_path 是同款「frames
+        # 不會取代它」的欄位，因此不受 frames 是否連接影響(W1-13)。
+        video_paths = kwargs.get("video_paths", "") or ""
+        paths = [p.strip() for p in video_paths.splitlines() if p.strip()]
+        return path_fingerprint(*paths)
 
 
 NODE_CLASS_MAPPINGS = {"MF_ConcatVideos": MF_ConcatVideos}

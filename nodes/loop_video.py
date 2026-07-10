@@ -1,8 +1,15 @@
 import math
 import os
 
+from ..utils.cache_key import path_fingerprint
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
-from ..utils.ffmpeg import ensure_ffmpeg, probe_has_audio_stream, probe_video_duration, run_ffmpeg
+from ..utils.ffmpeg import (
+    ensure_ffmpeg,
+    probe_has_audio_stream,
+    probe_video_duration,
+    probe_video_fps,
+    run_ffmpeg,
+)
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 from ..utils.video_io import encode_tensor_to_tempfile, mux_path_with_audio_dict
 
@@ -79,8 +86,12 @@ class MF_LoopVideo:
         if not ensure_ffmpeg():
             raise RuntimeError("[Loop Video] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
-        # 解析輸出路徑 — auto-counter，避免覆蓋
-        output_path = resolve_output_path(filename_prefix, ".mp4")
+        # P1-4：跟 BurnSubtitle / SaveVideoFrames / ComposeFinalize 共用 encoder builder
+        codec_map = get_available_codecs()
+        codec_id, default_pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+        # 解析輸出路徑 — auto-counter，避免覆蓋；ProRes 需要 .mov 容器才能 mux 成功 (W1-6)
+        ext = ".mov" if codec_id == "prores_ks" else ".mp4"
+        output_path = resolve_output_path(filename_prefix, ext)
 
         cleanup_tmp = None
         try:
@@ -123,6 +134,23 @@ class MF_LoopVideo:
                 )
                 loop_mode = "strict"
 
+            if loop_mode in ("strict", "ping_pong"):
+                # loop filter 的 size 是「單一 unit」緩衝上限（INT16_MAX），不是總輸出
+                # 長度；ping_pong 的 unit 是 effective_dur 正反接一次、長度 ×2。超過就只
+                # 會 buffer 前 32767 frames、其餘 silently 消失 — 必須在送進 ffmpeg 前擋
+                # 下（CLAUDE.md gotcha #3）。crossfade 走 xfade、不受此限制。
+                src_fps = probe_video_fps(source_path)
+                if src_fps:
+                    unit_dur = effective_dur * 2 if loop_mode == "ping_pong" else effective_dur
+                    est_frames = unit_dur * src_fps
+                    if est_frames > MAX_LOOP_FRAMES:
+                        raise ValueError(
+                            f"[Loop Video] loop_mode={loop_mode} 需要緩衝約 {est_frames:.0f} frames"
+                            f"（{unit_dur:.2f}s × {src_fps:.2f}fps），超過 FFmpeg loop filter 上限"
+                            f" {MAX_LOOP_FRAMES}，只會 loop 到前段內容、輸出會是錯誤結果。"
+                            "請改用 loop_mode=crossfade，或先降低來源 fps / 縮短素材長度。"
+                        )
+
             filter_parts, v_out, a_out = self._build_filter(
                 loop_mode, effective_dur, target_duration_sec, crossfade_sec,
                 speed, reverse, has_audio, audio_volume,
@@ -135,9 +163,7 @@ class MF_LoopVideo:
                 cmd.extend(["-map", f"[{a_out}]"])
             else:
                 cmd.append("-an")
-            # P1-4：跟 BurnSubtitle / SaveVideoFrames / ComposeFinalize 共用 encoder builder
-            codec_map = get_available_codecs()
-            codec_id, default_pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+            # codec_id / default_pix_fmt 已在輸出路徑解析時算過 (W1-6)，這裡直接沿用
             cmd.extend(build_encoder_args(codec_id, crf=crf, preset=preset))
             cmd.extend(["-pix_fmt", default_pix_fmt])
             cmd.extend(["-t", f"{target_duration_sec}", output_path])
@@ -244,6 +270,14 @@ class MF_LoopVideo:
             )
 
         return parts, "looped_v", "looped_a"
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # frames 接了 -> video_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
+        # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
+        if kwargs.get("frames") is not None:
+            return ""
+        return path_fingerprint(kwargs.get("video_path", ""))
 
 
 NODE_CLASS_MAPPINGS = {"MF_LoopVideo": MF_LoopVideo}

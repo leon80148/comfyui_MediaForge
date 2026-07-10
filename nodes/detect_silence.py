@@ -9,7 +9,8 @@ import re
 import subprocess
 import tempfile
 
-from ..utils.ffmpeg import ensure_ffmpeg, resolve_ffmpeg_cmd
+from ..utils.cache_key import path_fingerprint
+from ..utils.ffmpeg import ensure_ffmpeg, probe_duration, resolve_ffmpeg_cmd
 
 
 # silencedetect 輸出例：
@@ -72,7 +73,10 @@ class MF_DetectSilence:
                     f"[Detect Silence] FFmpeg 失敗 (exit {proc.returncode}):\n{tail}"
                 )
 
-            ranges = _parse_silence_log(proc.stderr or "")
+            # W1-5：影片以靜音收尾時最後一段沒有 silence_end，probe 檔案總長度讓
+            # _parse_silence_log 能把它收尾成 [last_start, duration] 而非直接丟棄。
+            duration = probe_duration(source_path)
+            ranges = _parse_silence_log(proc.stderr or "", duration=duration)
         finally:
             if cleanup_tmp:
                 try:
@@ -85,20 +89,44 @@ class MF_DetectSilence:
         print(f"[Detect Silence] 偵測到 {len(ranges)} 段靜音 (noise<={noise_db}dB, dur>={min_duration_sec}s)")
         return (ranges, ranges_json, len(ranges))
 
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # audio 接了 -> audio_source 不會被讀，tensor 本身已參與 ComfyUI 原生 input
+        # hash；否則同路徑換內容(mtime 變)要 invalidate cache(W1-13)。
+        if kwargs.get("audio") is not None:
+            return ""
+        return path_fingerprint(kwargs.get("audio_source", ""))
 
-def _parse_silence_log(log):
-    """Parse silencedetect stderr → list of [start, end]."""
+
+def _parse_silence_log(log, duration=None):
+    """Parse silencedetect stderr → list of [start, end]。
+
+    影片以靜音收尾時 FFmpeg 不會印對應的 silence_end（EOF 前沒有「非靜音」事件觸發
+    log）。若 caller 傳入 duration（source 檔案總長度）且大於最後一個沒配對的
+    silence_start，把它收尾成 [start, duration]；沒傳 duration（呼叫端 probe 失敗）
+    或 duration 不合理（<= trailing start）就退回原行為（捨棄該段 + 印警告）。
+    """
     starts = [float(m.group(1)) for m in SILENCE_START_RE.finditer(log)]
     ends = [float(m.group(1)) for m in SILENCE_END_RE.finditer(log)]
-    if len(starts) > len(ends):
-        # 影片以靜音結尾 → silencedetect 看不到 end (EOF 未明確收尾)；
-        # 提示給 caller 知道結尾還有一段被丟掉的靜音
-        print(
-            f"[Detect Silence] 注意：偵測到 {len(starts) - len(ends)} 個 silence_start 沒對到 silence_end，"
-            "通常代表影片結尾即為靜音，該段已被忽略；若需保留請改用 MF_ProbeMedia 取 duration 補。"
-        )
     n = min(len(starts), len(ends))
-    return [[starts[i], ends[i]] for i in range(n)]
+    ranges = [[starts[i], ends[i]] for i in range(n)]
+
+    if len(starts) > len(ends):
+        trailing_start = starts[-1]
+        if duration is not None and duration > trailing_start:
+            ranges.append([trailing_start, duration])
+            print(
+                f"[Detect Silence] 影片以靜音收尾，已用檔案時長補上最後一段："
+                f"[{trailing_start:.2f}, {duration:.2f}]"
+            )
+        else:
+            # 影片以靜音結尾 → silencedetect 看不到 end (EOF 未明確收尾)；
+            # 提示給 caller 知道結尾還有一段被丟掉的靜音
+            print(
+                f"[Detect Silence] 注意：偵測到 {len(starts) - len(ends)} 個 silence_start 沒對到 silence_end，"
+                "通常代表影片結尾即為靜音，該段已被忽略；若需保留請改用 MF_ProbeMedia 取 duration 補。"
+            )
+    return ranges
 
 
 def _audio_dict_to_tmp_wav(audio_dict):

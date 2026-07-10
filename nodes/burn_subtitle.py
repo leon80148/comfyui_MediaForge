@@ -9,6 +9,7 @@ from ..utils.ass_style import (
     resolve_font,
 )
 from ..utils.audio_mix import build_amix_filter
+from ..utils.cache_key import path_fingerprint
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg, probe_has_audio_stream, run_ffmpeg
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
@@ -113,8 +114,11 @@ class MF_BurnSubtitle:
         # 字型解析 — placeholder / 不存在 / family name 偵測都走 helper、共用 ComposeBurnSubtitle
         _ttf_path, family_name = resolve_font(font, tag="Burn Subtitle")
 
-        # 解析輸出路徑 — auto-counter 不會覆蓋舊檔
-        output_path = resolve_output_path(filename_prefix, ".mp4")
+        # 解析輸出路徑 — auto-counter 不會覆蓋舊檔；ProRes 需要 .mov 容器才能 mux 成功 (W1-6)
+        codec_map = get_available_codecs()
+        codec_id, default_pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+        ext = ".mov" if codec_id == "prores_ks" else ".mp4"
+        output_path = resolve_output_path(filename_prefix, ext)
 
         # ASS style string 組裝 — 同 helper、跟 ComposeBurnSubtitle 結果完全一致
         style = build_ass_style_string(
@@ -185,8 +189,7 @@ class MF_BurnSubtitle:
             # 變成 no-op、輸出沒有音軌。
             # R10 P2 fix:`-c:a copy` 跨容器 (e.g., MKV/WebM → MP4) mux fail,統一轉 AAC
             # P1-1:codec / crf / preset 共用 encoder builder(含 NVENC 自動切到 -rc vbr -cq)
-            codec_map = get_available_codecs()
-            codec_id, default_pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+            # codec_id / default_pix_fmt 已在輸出路徑解析時算過 (W1-6)，這裡直接沿用
             # -filter_complex 處理 audio amix;同時 -vf 仍跑 video subtitle chain。
             # 兩者共存 OK(label 不衝突)— -vf 是 implicit single-IO video graph,
             # -filter_complex 顯式 graph 處理跨輸入 audio mux。
@@ -215,6 +218,15 @@ class MF_BurnSubtitle:
         # UI emit:讓 ComfyUI /history/<prompt_id> 把成品檔案路徑暴露給 API 客戶端,
         # `/view?filename=X&subfolder=Y&type=output` 可直接下載。result 保留 tuple、下游 wire 不變。
         return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        # video_path 只在 path mode 才會被讀(frames 接了就整段忽略、tensor 本身已
+        # 參與 ComfyUI 原生 input hash)；srt_path 兩種 mode 都會讀,永遠納入
+        # fingerprint(W1-13)。
+        if kwargs.get("frames") is not None:
+            return path_fingerprint(kwargs.get("srt_path", ""))
+        return path_fingerprint(kwargs.get("video_path", ""), kwargs.get("srt_path", ""))
 
 
 NODE_CLASS_MAPPINGS = {"MF_BurnSubtitle": MF_BurnSubtitle}
