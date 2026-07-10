@@ -3,9 +3,10 @@
 // Two complementary mechanisms, both about hiding dead UI surface:
 //
 // 1) Dual-input lock (DUAL_INPUT_NODES) — input-connection-driven
-//    Hide + collapse the path widget (video_path / media_path) on a dual-input
-//    node when its `frames` IMAGE input gets connected — restore when disconnected.
-//    Trigger source: onConnectionsChange.
+//    Hide + collapse the path widget (video_path / media_path / audio_path /
+//    audio_source) on a dual-input node when its `trigger_input` socket (an
+//    IMAGE `frames` pin or an AUDIO `audio` pin) gets connected — restore when
+//    disconnected. Trigger source: onConnectionsChange.
 //
 //    Why: file-consumer nodes accept EITHER a path string widget OR a tensor pin.
 //    At execution time the Python side picks tensor over path. Without this
@@ -27,7 +28,8 @@
 
 import { app } from "../../scripts/app.js";
 
-// node type → which widgets to flip when the IMAGE input named `trigger_input` connects/disconnects
+// node type → which widgets to flip when the input named `trigger_input`
+// (IMAGE `frames` or AUDIO `audio`) connects/disconnects
 //   lock_widget           : reverse direction — visible only when trigger is DISCONNECTED (path mode)
 //   linked_widgets        : same direction    — visible only when trigger is CONNECTED   (tensor mode)
 //   hidden_when_connected : reverse direction — extra widgets to hide alongside lock_widget when
@@ -44,11 +46,13 @@ const DUAL_INPUT_NODES = {
     "MF_LoopVideo":     { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"] },
     "MF_TrimByRanges":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"] },
     "MF_ProbeMedia":    { trigger_input: "frames", lock_widget: "media_path", linked_widgets: ["tensor_fps"] },
-    "MF_ComposeStart":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"] },
     "MF_ComposeVideo":  { trigger_input: "frames", lock_widget: "video_path", linked_widgets: ["tensor_fps"] },
-    // Audio-input dual mode: AUDIO socket replaces audio_path. No tensor_fps analog
-    // because AUDIO dict carries its own sample_rate.
+    // Audio-input dual mode: AUDIO socket replaces audio_path / audio_source. No tensor_fps
+    // analog because AUDIO dict carries its own sample_rate.
     "MF_WhisperTranscribe": { trigger_input: "audio", lock_widget: "audio_path" },
+    "MF_ComposeAudioMix":   { trigger_input: "audio", lock_widget: "audio_path" },
+    "MF_DetectSilence":     { trigger_input: "audio", lock_widget: "audio_source" },
+    "MF_ExtractAudio":      { trigger_input: "audio", lock_widget: "audio_source" },
 };
 
 // node type → array of widget-value conditional rules
@@ -58,9 +62,44 @@ const DUAL_INPUT_NODES = {
 //
 // Why separate from DUAL_INPUT_NODES: trigger source is different
 // (widget.callback vs onConnectionsChange) and a node may use one or both.
+//
+// A node's rules array can list more than one rule (possibly keyed off different
+// triggers). A widget hidden by ANY matching rule stays hidden — see the two-pass
+// OR-then-apply in applyWidgetValueLocks() below.
 const WIDGET_VALUE_LOCKS = {
     "MF_ComposeOverlayText": [
         { trigger: "effect", value: "none", hide: ["effect_duration"] },
+    ],
+    "MF_SaveVideoFrames": [
+        // encode_mode is a three-way radio over rate-control widgets — each mode hides
+        // the other two's input.
+        { trigger: "encode_mode", value: "crf", hide: ["bitrate_kbps", "target_size_mb"] },
+        { trigger: "encode_mode", value: "bitrate", hide: ["crf", "target_size_mb"] },
+        { trigger: "encode_mode", value: "target_size", hide: ["crf", "bitrate_kbps"] },
+        // gif/prores have no rate-control concept at all (palette-based / fixed profile),
+        // so they hide the entire encode_mode sub-group regardless of its own value.
+        { trigger: "codec", value: "gif (palette)", hide: ["encode_mode", "crf", "bitrate_kbps", "target_size_mb", "preset", "pix_fmt_override"] },
+        { trigger: "codec", value: "prores (prores_ks)", hide: ["encode_mode", "crf", "bitrate_kbps", "target_size_mb", "preset"] },
+    ],
+    "MF_ComposeVideo": [
+        // Unlike the other file-producer nodes, this node's codec dropdown holds the raw
+        // codec_id ("prores_ks"), not the "name (id)" display string.
+        { trigger: "codec", value: "prores_ks", hide: ["crf", "preset"] },
+    ],
+    "MF_BurnSubtitle": [
+        { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
+    ],
+    "MF_LoopVideo": [
+        { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
+    ],
+    "MF_TrimByRanges": [
+        { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
+        // Lossless mode stream-copies segments — codec/crf/preset never reach ffmpeg, and
+        // crossfade needs re-encoded pixels so it's unusable too.
+        { trigger: "precision", value: "lossless (stream copy)", hide: ["codec", "crf", "preset", "crossfade_sec"] },
+    ],
+    "MF_ConcatVideos": [
+        { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
     ],
 };
 
@@ -119,12 +158,26 @@ function applyLockState(node, config) {
 }
 
 function applyWidgetValueLocks(node, rules) {
+    // W4-1: two-pass apply. A single sequential pass (setWidgetHidden per rule, in rule
+    // order) breaks once a node has multiple rules touching the same widget from different
+    // triggers (e.g. MF_SaveVideoFrames' encode_mode sub-rules and its codec=gif/prores
+    // rules both target crf/preset) — a later unmatched rule would re-show a widget an
+    // earlier matched rule just hid. Instead: collect the OR of "hidden" across every
+    // matched rule first, then apply once.
+    const hideSet = new Set();
+    const allNames = new Set();
     for (const rule of rules) {
         const trig = findWidget(node, rule.trigger);
         const matched = trig && trig.value === rule.value;
         for (const name of rule.hide) {
-            setWidgetHidden(findWidget(node, name), matched);
+            allNames.add(name);
+            if (matched) hideSet.add(name);
         }
+    }
+    // Any widget named by some rule but not hidden by a currently-matched rule is
+    // explicitly restored — covers widgets orphaned when their hiding rule stops matching.
+    for (const name of allNames) {
+        setWidgetHidden(findWidget(node, name), hideSet.has(name));
     }
     if (node.setSize && node.computeSize) {
         node.setSize(node.computeSize());
