@@ -49,6 +49,9 @@ tmp/
 *.tmp
 *.bak
 
+# Plugin-internal temp dir (compose_ir drawtext textfile / long filter script staging — W1-9)
+.mf_tmp/
+
 # Internal test suite (developer-only — not for public repo)
 tests/
 

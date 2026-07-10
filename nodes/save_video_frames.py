@@ -27,7 +27,7 @@ class MF_SaveVideoFrames:
                 "filename_prefix": ("STRING", {"default": "MediaForge/video"}),
                 "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
                 "codec": (list(codec_map.keys()), {"default": pick_default_codec()}),
-                # CRF mode 為 v2.1 預設；bitrate>0 切到 bitrate mode；target_size_mb>0 切到 two-pass
+                # CRF mode 為 v2.1 預設；bitrate>0 切到 bitrate mode；target_size_mb>0 切到 single-pass 反推 bitrate
                 "encode_mode": (["crf", "bitrate", "target_size"], {"default": "crf"}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
                 "bitrate_kbps": ("INT", {"default": 4000, "min": 100, "max": 200000, "step": 100}),

@@ -4,14 +4,34 @@ import shutil
 import subprocess
 
 
+# FFmpeg filter graph 官方兩層 escape 規則（ffmpeg-filters.html "Notes on
+# filtergraph escaping"）：
+#   Level 1（單一 filter option value 內）：`:` `'` `\` 需要 escape。
+#   Level 2（整個 filtergraph 敘述）：`\` `'` `[` `]` `,` `;` 需要 escape。
+# 兩層依序疊加，level 1 產生的反斜線會被 level 2 的規則再跳脫一次 —— colon 因此變成
+# `\\:`（2 個反斜線 + colon），這是既有行為、必須維持相容（FFmpeg 4.x/5.x parser
+# lenient、單層也接受；8.x stricter，必爆）。
+_LEVEL1_SPECIALS = frozenset({':', "'", '\\'})
+_LEVEL2_SPECIALS = frozenset({'\\', "'", '[', ']', ',', ';'})
+
+
+def _escape_chars(s, specials):
+    # 逐字元掃過『原始』輸入字串一次、屬於 specials 集合的字元前面補一個反斜線。
+    # 只掃原字串（不重掃剛產生的反斜線），兩層疊加時才不會互相干擾出非預期的跳脫次數。
+    out = []
+    for ch in s:
+        if ch in specials:
+            out.append('\\')
+        out.append(ch)
+    return ''.join(out)
+
+
 def escape_filter_path(path):
-    # FFmpeg filter graph 兩層 escape：path 內的 colon 必須兩層都做。
-    # Level 1 (filter args): colon 是 option separator → escape 成 `\` + `:`
-    # Level 2 (filter description): backslash 再 escape 成 `\\`
-    # 合併後每個 colon 在 filter description 字串中是 `\\:` (3 chars)。
-    # FFmpeg 4.x/5.x parser lenient、單層也接受；FFmpeg 8.x stricter，必爆。
-    # Windows path 的 `\` 先正規化成 `/`（filter graph 慣例），剩下純粹處理 colon。
-    return path.replace('\\', '/').replace(':', r'\\:')
+    # Windows path 的 `\` 先正規化成 `/`（filter graph 路徑慣例），做完後字串內沒有
+    # 反斜線，才不會被下面兩層 escape 誤判成使用者原本就寫的 escape char。
+    normalized = path.replace('\\', '/')
+    level1 = _escape_chars(normalized, _LEVEL1_SPECIALS)
+    return _escape_chars(level1, _LEVEL2_SPECIALS)
 
 
 # ─── Binary resolution: system → imageio-ffmpeg → static-ffmpeg ───

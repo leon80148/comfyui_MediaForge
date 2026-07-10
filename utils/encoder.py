@@ -160,8 +160,10 @@ def build_encoder_args(codec_id, *, crf=None, bitrate=None, preset=None):
             # bitrate mode：VBR 配 bitrate target，硬體控制
             args.extend(["-rc", "vbr", "-b:v", str(bitrate)])
         elif crf is not None:
-            # CRF-equivalent mode：NVENC 用 -rc vbr -cq <n>，n 範圍 0-51 同 libx264 -crf
-            args.extend(["-rc", "vbr", "-cq", str(crf)])
+            # CRF-equivalent mode：NVENC 用 -rc vbr -cq <n>，n 範圍 0-51 同 libx264 -crf。
+            # -b:v 0 缺席時 NVENC 仍套用預設 bitrate target（~2M）把 cq 蓋掉，
+            # NVIDIA 官方 constant-quality 配方必須顯式關掉 bitrate cap。
+            args.extend(["-rc", "vbr", "-cq", str(crf), "-b:v", "0"])
 
     # prores_ks 等其他 codec：caller 透過 extra_args 自己處理 -profile:v 等
     return args

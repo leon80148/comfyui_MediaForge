@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 # Plugin root = utils/.. — used to locate the font/ subdirectory shared with burn_subtitle.
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FONT_DIR = os.path.join(_PLUGIN_DIR, "font")
+# drawtext textfile / 超長 filter script 的暫存目錄 — 見 _mkstemp_in_plugin_tmp (W1-9)。
+_PLUGIN_TMP_DIR = os.path.join(_PLUGIN_DIR, ".mf_tmp")
 
 # Common system fonts as fallback when plugin's font/ is empty.
 # drawtext on Windows native ffmpeg has no fontconfig — without an explicit fontfile=
@@ -255,6 +257,23 @@ class ComposeIR:
 
 # 超過此長度自動切到 -filter_complex_script tempfile
 FILTER_SCRIPT_THRESHOLD = 6000
+
+
+def _mkstemp_in_plugin_tmp(suffix="", prefix="mf_"):
+    """跟 tempfile.mkstemp 同介面 (fd, path)，優先寫進 plugin 內 `.mf_tmp/`。
+
+    為什麼不用系統 temp：Windows 中文使用者名稱（例如
+    `C:\\Users\\游永亮\\AppData\\Local\\Temp\\`）的路徑含非 ASCII 字元，
+    libavfilter 開 textfile= / -filter_complex_script 讀檔偶爾失敗（P0-9）。
+    Plugin 內路徑固定、ASCII，由我們自己管控。
+    目錄建立或寫入失敗（唯讀安裝 / 權限問題）時退回 tempfile.mkstemp 原行為 ——
+    caller 的 cleanup（unlink 回傳的 path）語意兩種來源一致，不受影響。
+    """
+    try:
+        os.makedirs(_PLUGIN_TMP_DIR, exist_ok=True)
+        return tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=_PLUGIN_TMP_DIR)
+    except OSError:
+        return tempfile.mkstemp(suffix=suffix, prefix=prefix)
 
 
 def _count_extra_input_consumers(ir: ComposeIR) -> dict[str, int]:
@@ -522,7 +541,7 @@ def compile_ir(ir: ComposeIR) -> tuple[str, str, list[str]]:
     # bundled font 或 system font。找不到才 raise 帶友善訊息。
     for op in ir.ops:
         if op.kind == "drawtext":
-            fd, tmp = tempfile.mkstemp(suffix=".txt", prefix="mf_drawtext_")
+            fd, tmp = _mkstemp_in_plugin_tmp(suffix=".txt", prefix="mf_drawtext_")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(str(op.params.get("text", "")))
             op.params["_textfile_path"] = tmp
@@ -574,7 +593,7 @@ def write_filter_script_if_long(script: str) -> tuple[str, str | None]:
     """超長 filter_complex 寫到 tempfile，回傳 (cli_arg_value, tmpfile_path|None)。"""
     if len(script) <= FILTER_SCRIPT_THRESHOLD:
         return script, None
-    fd, path = tempfile.mkstemp(suffix=".txt", prefix="mf_filter_")
+    fd, path = _mkstemp_in_plugin_tmp(suffix=".txt", prefix="mf_filter_")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(script)
     return path, path

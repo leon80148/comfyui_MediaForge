@@ -25,11 +25,16 @@ def resolve_output_path(filename_prefix, ext):
     Args:
         filename_prefix: 使用者填的 prefix，可含子目錄如 "MediaForge/looped"。
                          誤填副檔名（如 "looped.mp4"）會被剝掉，避免雙副檔名。
+                         `/` 或 `\\` 皆可分子目錄（兩平台語意一致）；不允許用 `..`
+                         跳出 output_dir。
         ext: 副檔名（含 leading dot），例 ".mp4" / ".srt" / ".mov"。
 
     Returns:
         絕對路徑：`<output_dir>/<subfolder>/<filename>_<counter:05d><ext>`。
         Counter = 該資料夾內既有同 prefix+ext 檔的 max 序號 + 1（從 1 起跳）。
+
+    Raises:
+        ValueError: filename_prefix 解析後的資料夾落在 output_dir 之外（路徑穿越）。
     """
     import folder_paths
 
@@ -39,10 +44,33 @@ def resolve_output_path(filename_prefix, ext):
             filename_prefix = filename_prefix[: -len(known)]
             break
 
+    # Windows 反斜線正規化成 `/`：POSIX 上 os.path.split 認不得 `\` 當分隔符，
+    # 沒這步 Linux/macOS 部署填 "MediaForge\looped" 會整串被當成檔名、分不出子目錄。
+    filename_prefix = filename_prefix.replace("\\", "/")
+
     # 切子目錄 + 確保目錄存在
     output_dir = folder_paths.get_output_directory()
     subfolder, filename = os.path.split(filename_prefix)
     full_output_folder = os.path.join(output_dir, subfolder) if subfolder else output_dir
+
+    # 防路徑穿越：`..` 或絕對路徑 subfolder 可能讓 full_output_folder 落在 output_dir
+    # 之外；用 realpath 解掉 `..` / symlink 後跟 output_dir 比對 commonpath。
+    # ComfyUI core 的 get_save_image_path 有做這層防護，我們自製版原本沒有（W1-7）。
+    real_output_dir = os.path.realpath(output_dir)
+    real_full_output_folder = os.path.realpath(full_output_folder)
+    try:
+        inside_output_dir = (
+            os.path.commonpath([real_output_dir, real_full_output_folder]) == real_output_dir
+        )
+    except ValueError:
+        inside_output_dir = False  # 不同磁碟機代號（Windows）→ 一定不在 output_dir 內
+    if not inside_output_dir:
+        raise ValueError(
+            f"[resolve_output_path] filename_prefix={filename_prefix!r} 解析後的路徑"
+            f"（{real_full_output_folder}）落在 output 目錄之外。允許使用子目錄，"
+            "但不允許用 `..` 或絕對路徑跳出 output/ —— 請改用不含 `..` 的相對子目錄路徑。"
+        )
+
     os.makedirs(full_output_folder, exist_ok=True)
 
     # 掃既存檔取 max counter
