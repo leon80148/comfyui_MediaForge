@@ -399,16 +399,19 @@ def mux_path_with_audio_dict(video_path, audio_dict, *, keep_original=False):
     import tempfile
 
     from .ffmpeg import probe_has_audio_stream, resolve_ffmpeg_cmd
-    from .output_path import source_container_ext
 
     # source 有沒有 audio 軌決定 keep_original=True 走 amix 還是退化 replace
     source_has_audio = keep_original and probe_has_audio_stream(video_path)
 
     wav_path = write_audio_dict_to_wav(audio_dict)
-    # R2-1 fix：temp 容器沿用來源副檔名，不硬編 .mp4 —— 來源是 ProRes .mov 時
-    # `-c:v copy` 寫進 mp4 muxer 會直接 mux fail（mp4 沒有 prores tag）。
-    tmp_ext = source_container_ext(video_path)
-    fd, tmp_media = tempfile.mkstemp(suffix=tmp_ext, prefix="mf_path_audio_mux_")
+    # R3-1 fix：temp 容器固定用 .mkv，不再沿用來源副檔名 (R2-1 的 source_container_ext
+    # 呼叫已移除)。這是內部 transit 檔 —— 下游 ffmpeg 讀內容不看副檔名，caller 只
+    # 把它當 `-i` 輸入。R2-1 沿用來源副檔名修了 ProRes（.mov 容器才能 mux prores
+    # video），但 audio 永遠硬編 `-c:a aac`：來源若是 .webm（VP9），temp 沿用 .webm
+    # + AAC audio 會 mux fail（WebM 不收 AAC）。Matroska 是 universal transit
+    # container，ProRes/VP9/h264 等任意 video codec 配 AAC audio 都能收，一次涵蓋
+    # R2 的 ProRes 情境與本輪的 WebM 情境。
+    fd, tmp_media = tempfile.mkstemp(suffix=".mkv", prefix="mf_path_audio_mux_")
     os.close(fd)
     try:
         base = [

@@ -539,23 +539,38 @@ def compile_ir(ir: ComposeIR) -> tuple[str, str, list[str]]:
     # 否則 parallel fan-out raise 時 tmpfile 會 leak。同時：drawtext 沒指定 fontfile
     # 在 Windows native ffmpeg 上必爆 (沒裝 fontconfig) — 自動 fallback 到 plugin
     # bundled font 或 system font。找不到才 raise 帶友善訊息。
-    for op in ir.ops:
-        if op.kind == "drawtext":
-            fd, tmp = _mkstemp_in_plugin_tmp(suffix=".txt", prefix="mf_drawtext_")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(str(op.params.get("text", "")))
-            op.params["_textfile_path"] = tmp
-            cleanup_paths.append(tmp)
-            if not op.params.get("fontfile"):
-                fallback = _resolve_default_fontfile()
-                if fallback:
-                    op.params["fontfile"] = fallback
-                else:
-                    raise RuntimeError(
-                        f"[ComposeIR] drawtext op {op.label} 沒指定 fontfile，且系統找不到任何"
-                        " fallback 字型檔。請：(1) 在 ComposeOverlayText 節點設 fontfile=絕對路徑，"
-                        " 或 (2) 把 .ttf/.otf/.ttc 字型檔放進 plugin 的 font/ 目錄。"
-                    )
+    # R3-3 fix：整段包 try/except —— 第 N 個 op 已寫的 textfile 只進了本地
+    # written_textfiles，還沒併入 cleanup_paths；若第 M(>N) 個 op 因缺字型 raise，
+    # cleanup_paths 沒機會回傳給 caller，第 1..M 個 op 已寫的 textfile 就會永久留在
+    # .mf_tmp/。raise 前先把本輪已寫的都 unlink（best-effort，OSError pass 不掩蓋
+    # 原始錯誤）再 re-raise；全部成功才併入 cleanup_paths 交給 caller 事後清。
+    written_textfiles: list[str] = []
+    try:
+        for op in ir.ops:
+            if op.kind == "drawtext":
+                fd, tmp = _mkstemp_in_plugin_tmp(suffix=".txt", prefix="mf_drawtext_")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(str(op.params.get("text", "")))
+                op.params["_textfile_path"] = tmp
+                written_textfiles.append(tmp)
+                if not op.params.get("fontfile"):
+                    fallback = _resolve_default_fontfile()
+                    if fallback:
+                        op.params["fontfile"] = fallback
+                    else:
+                        raise RuntimeError(
+                            f"[ComposeIR] drawtext op {op.label} 沒指定 fontfile，且系統找不到任何"
+                            " fallback 字型檔。請：(1) 在 ComposeOverlayText 節點設 fontfile=絕對路徑，"
+                            " 或 (2) 把 .ttf/.otf/.ttc 字型檔放進 plugin 的 font/ 目錄。"
+                        )
+    except Exception:
+        for leaked in written_textfiles:
+            try:
+                os.unlink(leaked)
+            except OSError:
+                pass
+        raise
+    cleanup_paths.extend(written_textfiles)
 
     # 3. extra_input fan-out split：同一張 image / aux stream 被多個 overlay op 引用就插 split
     consumers = _count_extra_input_consumers(ir)

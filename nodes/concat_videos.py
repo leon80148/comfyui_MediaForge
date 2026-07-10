@@ -155,6 +155,12 @@ class MF_ConcatVideos:
         # demuxer 本來就會 rescale timestamps、播放器對 level 差異普遍容忍，比了這些
         # 反而會誤殺原本可以安全 concat 的輸入組合（例如同 codec 不同 profile level
         # 的手機直出素材）。
+        #
+        # R3-2 [P2]：F4 雖然已比對 stream *數量*，但 signature 只取每個 kind 的第一條
+        # stream —— 兩輸入各有兩條 audio stream、`0:a:0` 相同但 `0:a:1` codec 不同時，
+        # 數量比對過關、signature 也只看到第一條，preflight 誤判通過、copy 輸出第二段
+        # 音訊壞。改成逐 stream（依 probe 順序）比對完整 signature 列表，不一致時指名
+        # 哪個檔案、哪條 stream index、哪個欄位不同。
         from ..utils.ffmpeg import probe as _probe
 
         infos = []
@@ -167,41 +173,47 @@ class MF_ConcatVideos:
                 )
             infos.append(info)
 
-        def _stream_count(info, kind):
-            return sum(1 for s in info.get("streams", []) if s.get("codec_type") == kind)
+        video_fields = ("codec_name", "width", "height", "pix_fmt", "profile")
+        audio_fields = ("codec_name", "sample_rate", "channels", "channel_layout")
 
-        def _video_sig(info):
-            v = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
-            if v is None:
-                return None
-            return (v.get("codec_name"), v.get("width"), v.get("height"), v.get("pix_fmt"), v.get("profile"))
-
-        def _audio_sig(info):
-            a = next((s for s in info.get("streams", []) if s.get("codec_type") == "audio"), None)
-            if a is None:
-                return None
-            return (a.get("codec_name"), a.get("sample_rate"), a.get("channels"), a.get("channel_layout"))
-
-        video_counts = [_stream_count(info, "video") for info in infos]
-        audio_counts = [_stream_count(info, "audio") for info in infos]
-        video_sigs = [_video_sig(info) for info in infos]
-        audio_sigs = [_audio_sig(info) for info in infos]
-
-        mismatched = (
-            len(set(video_counts)) > 1 or len(set(audio_counts)) > 1
-            or len(set(video_sigs)) > 1 or len(set(audio_sigs)) > 1
-        )
-        if mismatched:
-            lines = [
-                f"  {p}: video(數量={vc}, codec/寬/高/pix_fmt/profile={vs}), "
-                f"audio(數量={ac}, codec/取樣率/聲道數/聲道佈局={a_sig})"
-                for p, vc, vs, ac, a_sig in zip(paths, video_counts, video_sigs, audio_counts, audio_sigs)
+        def _sigs(info, kind, fields):
+            return [
+                tuple(s.get(f) for f in fields)
+                for s in info.get("streams", []) if s.get("codec_type") == kind
             ]
+
+        def _diff(kind, fields, baseline, sigs):
+            if len(sigs) != len(baseline):
+                return [f"{kind} stream 數量={len(sigs)}（第一個輸入為 {len(baseline)}）"]
+            out = []
+            for idx, (base_sig, sig) in enumerate(zip(baseline, sigs)):
+                if sig == base_sig:
+                    continue
+                field_diffs = ", ".join(
+                    f"{name}={val!r}(第一個輸入={base_val!r})"
+                    for name, val, base_val in zip(fields, sig, base_sig)
+                    if val != base_val
+                )
+                out.append(f"{kind}[{idx}]: {field_diffs}")
+            return out
+
+        video_sig_lists = [_sigs(info, "video", video_fields) for info in infos]
+        audio_sig_lists = [_sigs(info, "audio", audio_fields) for info in infos]
+        baseline_v, baseline_a = video_sig_lists[0], audio_sig_lists[0]
+
+        mismatched_lines = []
+        for p, v_sigs, a_sigs in zip(paths, video_sig_lists, audio_sig_lists):
+            diffs = _diff("video", video_fields, baseline_v, v_sigs) + _diff("audio", audio_fields, baseline_a, a_sigs)
+            if diffs:
+                mismatched_lines.append(f"  {p}: " + "; ".join(diffs))
+
+        if mismatched_lines:
             raise ValueError(
-                "[Concat Videos] mode=copy 要求所有輸入的 video/audio stream 數量、"
-                "video codec/解析度/pix_fmt/profile、audio codec/取樣率/聲道數/聲道佈局 "
-                "完全一致，否則 concat demuxer 常 exit code 0 但輸出壞檔"
-                "（第一段後 glitch，或第二段音訊聲道錯亂）。偵測到差異：\n" + "\n".join(lines) +
+                "[Concat Videos] mode=copy 要求所有輸入的每一條 video/audio stream"
+                "（依 probe 順序逐條比對）codec/解析度/pix_fmt/profile（video）或"
+                "codec/取樣率/聲道數/聲道佈局（audio）完全一致，否則 concat demuxer 常"
+                "exit code 0 但輸出壞檔（第一段後 glitch，或某條音訊軌聲道錯亂）。"
+                "偵測到差異（以第一個輸入為基準）：\n" + "\n".join(mismatched_lines) +
                 "\n請改用 mode=transcode。"
             )
 
