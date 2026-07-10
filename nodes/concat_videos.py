@@ -161,6 +161,15 @@ class MF_ConcatVideos:
         # 數量比對過關、signature 也只看到第一條，preflight 誤判通過、copy 輸出第二段
         # 音訊壞。改成逐 stream（依 probe 順序）比對完整 signature 列表，不一致時指名
         # 哪個檔案、哪條 stream index、哪個欄位不同。
+        #
+        # R5-2 [P2]：preflight 之前只驗 video/audio,但 `_concat_demuxer` 送出的
+        # `-map 0` 會 copy 全部 stream(含 subtitle/data/attachment)。若兩個輸入
+        # video/audio 完全一致、但只有一支帶字幕軌(或字幕 codec 不同),preflight
+        # 過關、`-map 0` copy 時晚爆或輸出字幕不完整 —— preflight 合約沒對齊 `-map 0`
+        # 的實際行為。改成先比對「完整 stream 佈局」(依 probe 順序列出每條 stream 的
+        # codec_type,序列長度與內容需逐一致),再對 subtitle/data/attachment 類
+        # stream 額外比對 codec_type + codec_name(同屬 subtitle 但字幕 codec 不同,
+        # 例如 srt vs ass,單看佈局序列看不出來)。
         from ..utils.ffmpeg import probe as _probe
 
         infos = []
@@ -178,6 +187,11 @@ class MF_ConcatVideos:
         # 原本沒比對這欄位讓 preflight 誤判通過。
         video_fields = ("codec_name", "width", "height", "pix_fmt", "profile", "sample_aspect_ratio")
         audio_fields = ("codec_name", "sample_rate", "channels", "channel_layout")
+        # R5-2：layout = 全部 stream(不分 kind)依序的 codec_type,抓「哪個位置多/少/
+        # 換了一種 stream」；other = subtitle/data/attachment 類 stream 額外比 codec_name。
+        layout_fields = ("codec_type",)
+        other_kinds = ("subtitle", "data", "attachment")
+        other_fields = ("codec_type", "codec_name")
 
         def _normalize_sar(value):
             # 未標 SAR 的檔實務上都是方形像素（1:1）顯示；把 ffprobe 各種「沒填」的
@@ -186,9 +200,19 @@ class MF_ConcatVideos:
             return "1:1" if value in (None, "", "0:1") else value
 
         def _sigs(info, kind, fields):
+            # kind=None → 不篩選(取全部 stream，給 layout 用);字串 → 精確比對
+            # （沿用既有 "video"/"audio" 呼叫方式）;容器（tuple/set）→ 屬於其中之一
+            # （給 other_kinds 分組用）。
+            def _matches(codec_type):
+                if kind is None:
+                    return True
+                if isinstance(kind, str):
+                    return codec_type == kind
+                return codec_type in kind
+
             sigs = []
             for s in info.get("streams", []):
-                if s.get("codec_type") != kind:
+                if not _matches(s.get("codec_type")):
                     continue
                 sigs.append(tuple(
                     _normalize_sar(s.get(f)) if f == "sample_aspect_ratio" else s.get(f)
@@ -211,22 +235,36 @@ class MF_ConcatVideos:
                 out.append(f"{kind}[{idx}]: {field_diffs}")
             return out
 
+        layout_sig_lists = [_sigs(info, None, layout_fields) for info in infos]
         video_sig_lists = [_sigs(info, "video", video_fields) for info in infos]
         audio_sig_lists = [_sigs(info, "audio", audio_fields) for info in infos]
+        other_sig_lists = [_sigs(info, other_kinds, other_fields) for info in infos]
+        baseline_layout = layout_sig_lists[0]
         baseline_v, baseline_a = video_sig_lists[0], audio_sig_lists[0]
+        baseline_other = other_sig_lists[0]
 
         mismatched_lines = []
-        for p, v_sigs, a_sigs in zip(paths, video_sig_lists, audio_sig_lists):
-            diffs = _diff("video", video_fields, baseline_v, v_sigs) + _diff("audio", audio_fields, baseline_a, a_sigs)
+        for p, layout_sigs, v_sigs, a_sigs, other_sigs in zip(
+            paths, layout_sig_lists, video_sig_lists, audio_sig_lists, other_sig_lists,
+        ):
+            diffs = (
+                _diff("layout", layout_fields, baseline_layout, layout_sigs)
+                + _diff("video", video_fields, baseline_v, v_sigs)
+                + _diff("audio", audio_fields, baseline_a, a_sigs)
+                + _diff("other", other_fields, baseline_other, other_sigs)
+            )
             if diffs:
                 mismatched_lines.append(f"  {p}: " + "; ".join(diffs))
 
         if mismatched_lines:
             raise ValueError(
-                "[Concat Videos] mode=copy 要求所有輸入的每一條 video/audio stream"
+                "[Concat Videos] mode=copy 要求所有輸入的 stream 佈局一致"
+                "（依 probe 順序列出每條 stream 的 codec_type，序列長度與內容需逐一致，"
+                "含字幕/data/attachment 軌），且每一條 video/audio stream"
                 "（依 probe 順序逐條比對）codec/解析度/pix_fmt/profile（video）或"
-                "codec/取樣率/聲道數/聲道佈局（audio）完全一致，否則 concat demuxer 常"
-                "exit code 0 但輸出壞檔（第一段後 glitch，或某條音訊軌聲道錯亂）。"
+                "codec/取樣率/聲道數/聲道佈局（audio）完全一致、subtitle/data/attachment"
+                "類 stream 的 codec_type/codec_name 也需一致，否則 concat demuxer 常"
+                "exit code 0 但輸出壞檔（第一段後 glitch、音訊軌聲道錯亂，或字幕軌缺漏/錯亂）。"
                 "偵測到差異（以第一個輸入為基準）：\n" + "\n".join(mismatched_lines) +
                 "\n請改用 mode=transcode。"
             )

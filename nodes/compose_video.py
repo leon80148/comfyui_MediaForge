@@ -81,6 +81,8 @@ class MF_ComposeVideo:
         # Source 解析 — dual-input pattern
         cleanup_source_tmp = None
         cleanup_paths = []  # drawtext textfile / 超長 filter script / IR tensor temp（W1-3：finally 統一清）
+        ir = None  # R5-1：宣告在 try 外，讓 finally 在 apply_overlays_to_ir / apply_audio_ops_to_ir /
+        # compile_ir 任一階段 raise 時，都能透過 ir.tmp_paths_to_cleanup 兜底清 tensor temp / audio WAV
         if frames is not None:
             # tensor → temp mp4 (encode_tensor_to_tempfile 已處理 audio mux)
             source_path = encode_tensor_to_tempfile(frames, fps=tensor_fps, audio=audio)
@@ -248,16 +250,24 @@ class MF_ComposeVideo:
                 "result": (output_path, full_script),
             }
         finally:
-            # cleanup_source_tmp 若沒成功轉給 IR、這裡兜底清掉(避免 leak)
-            if cleanup_source_tmp:
-                try:
-                    os.unlink(cleanup_source_tmp)
-                except OSError:
-                    pass
             # W1-3：compile-time tmp files (drawtext textfile / 超長 filter script /
             # IR tensor temp) 原本只在成功路徑 unlink;encode 失敗 raise 後就永久留在
             # 磁碟(tensor temp mp4 可達數百 MB)。移進 finally 讓兩種 path 都清得到。
-            for p in cleanup_paths:
+            #
+            # R5-1：cleanup_paths 要等 compile_ir 成功回傳才會被填,但
+            # apply_overlays_to_ir / apply_audio_ops_to_ir / compile_ir 任一階段中途
+            # raise 時,tensor temp（ir.add_video_input 後）與 _is_temp audio WAV
+            # （apply_audio_ops_to_ir 的 amix 分支）都已經寫進 ir.tmp_paths_to_cleanup、
+            # 只是還沒被 compile_ir 併入 cleanup_paths。改成 set 聯集三個來源
+            # （cleanup_paths ∪ ir.tmp_paths_to_cleanup ∪ cleanup_source_tmp）再逐一
+            # best-effort unlink,任一階段 raise 都不 leak；重複路徑 unlink 兩次無害
+            # （第二次 OSError → pass）。
+            all_cleanup = set(cleanup_paths)
+            if ir is not None:
+                all_cleanup.update(ir.tmp_paths_to_cleanup)
+            if cleanup_source_tmp:
+                all_cleanup.add(cleanup_source_tmp)
+            for p in all_cleanup:
                 try:
                     os.unlink(p)
                 except OSError:
