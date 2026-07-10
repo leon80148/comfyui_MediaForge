@@ -6,7 +6,7 @@ v2.1 ROADMAP Phase 2 foundation 節點。
 from ..utils.encoder import get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
-from ..utils.video_io import encode_tensor_to_video
+from ..utils.video_io import encode_tensor_to_gif, encode_tensor_to_video
 
 
 # CRF mode 預設值（範圍依各 codec 不同，UI 以單一旗標展示後內部 clamp）
@@ -16,17 +16,22 @@ CRF_DEFAULTS = {
     "h264_nvenc": 23, "hevc_nvenc": 25, "av1_nvenc": 28,
 }
 
+# W3-4：GIF 是節點層 append 的偽 codec，不進 utils/encoder.py 的 catalog——
+# rate control 語意完全不同（palette-based，沒有 CRF/bitrate/preset 概念）。
+GIF_CODEC_CHOICE = "gif (palette)"
+
 
 class MF_SaveVideoFrames:
     @classmethod
     def INPUT_TYPES(s):
         codec_map = get_available_codecs()
+        codec_choices = list(codec_map.keys()) + [GIF_CODEC_CHOICE]
         return {
             "required": {
                 "frames": ("IMAGE",),
                 "filename_prefix": ("STRING", {"default": "MediaForge/video"}),
                 "fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
-                "codec": (list(codec_map.keys()), {"default": pick_default_codec()}),
+                "codec": (codec_choices, {"default": pick_default_codec()}),
                 # CRF mode 為 v2.1 預設；bitrate>0 切到 bitrate mode；target_size_mb>0 切到 single-pass 反推 bitrate
                 "encode_mode": (["crf", "bitrate", "target_size"], {"default": "crf"}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
@@ -60,6 +65,18 @@ class MF_SaveVideoFrames:
                 f"[Save Video Frames] frames 必須是 [B,H,W,C] 非空 tensor，但拿到 "
                 f"{tuple(frames.shape) if frames is not None else None}"
             )
+
+        # W3-4：GIF 是 palette-based 偽 codec，不在 get_available_codecs() 查表內
+        # （下面 codec_map lookup 會 KeyError），且沒有 audio / encode_mode / crf /
+        # bitrate / preset / pix_fmt 概念（Wave 4 才會在 frontend 隱藏對應 widget，
+        # 這裡先在行為上忽略）——早分支、早 return，不流進其餘 codec 的處理邏輯。
+        if codec == GIF_CODEC_CHOICE:
+            if audio is not None:
+                print("[Save Video Frames] 注意：GIF 沒有音軌概念，audio 輸入已忽略。")
+            output_path = resolve_output_path(filename_prefix, ".gif")
+            encode_tensor_to_gif(frames, output_path, fps=fps)
+            print(f"[Save Video Frames] 輸出成功: {output_path}")
+            return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
 
         # 防呆：丟棄退化的 AUDIO dict（length<=1 sample 視為「上游無 audio」的假合成）。
         # 不這樣做的話 ffmpeg 加 -shortest 後整段 frames 被截到 1-sample 的長度。

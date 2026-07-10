@@ -277,6 +277,63 @@ def encode_tensor_to_video(
     return output_path
 
 
+def encode_tensor_to_gif(tensor, output_path, fps):
+    """Encode IMAGE tensor [B,H,W,C] float32 [0,1] → animated GIF (palette-based).
+
+    GIF 沒有 audio 概念、也沒有 CRF/bitrate rate-control — 品質完全靠調色盤。這裡用
+    FFmpeg wiki 推薦的高品質單命令雙 pass 配方：`split` 把輸入分兩路，一路
+    `palettegen=stats_mode=diff` 生成針對「幀間差異」優化的調色盤，另一路用
+    `paletteuse` 套用該調色盤 + Bayer dither，比不做 palette 的預設 GIF encoder
+    畫質好非常多。
+
+    Pipe 處理方式抄 encode_tensor_to_video 的 Popen/communicate/BrokenPipeError 模式，
+    但精簡掉 audio mux 分支（GIF 無音軌）。
+    """
+    if tensor.ndim != 4 or tensor.shape[-1] != 3:
+        raise ValueError(
+            f"[MediaForge.video_io] tensor shape 必須是 [B,H,W,3]，但拿到 {tuple(tensor.shape)}"
+        )
+    if fps <= 0:
+        raise ValueError(f"[MediaForge.video_io] fps 必須 > 0，但拿到 {fps}")
+
+    _, h, w, _ = tensor.shape
+    arr = (tensor.detach().cpu().clamp(0.0, 1.0) * 255.0).round().to(torch.uint8).numpy()
+    if not arr.flags["C_CONTIGUOUS"]:
+        arr = np.ascontiguousarray(arr)
+
+    cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-f", "rawvideo", "-pix_fmt", "rgb24",
+        "-s", f"{w}x{h}", "-r", f"{fps}",
+        "-i", "pipe:0",
+        "-filter_complex",
+        "[0:v]split[a][b];[a]palettegen=stats_mode=diff[p];"
+        "[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+        "-loop", "0",
+        output_path,
+    ]
+
+    proc = subprocess.Popen(resolve_ffmpeg_cmd(cmd), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    stderr = b""
+    write_err = None
+    try:
+        _, stderr = proc.communicate(input=arr.tobytes())
+    except BrokenPipeError as e:
+        write_err = e
+        try:
+            _, stderr = proc.communicate()
+        except (BrokenPipeError, ValueError):
+            pass
+
+    if proc.returncode != 0 or write_err is not None:
+        tail = "\n".join(stderr.decode("utf-8", errors="replace").strip().splitlines()[-30:])
+        suffix = f"\n（stdin write 中斷：{write_err}）" if write_err else ""
+        raise RuntimeError(
+            f"[MediaForge.video_io] FFmpeg GIF encode 失敗 (exit {proc.returncode}):\n{tail}{suffix}"
+        )
+    return output_path
+
+
 def write_audio_dict_to_wav(audio_dict):
     """Validate AUDIO dict and write a temp 16-bit PCM .wav; returns the temp path.
 

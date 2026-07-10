@@ -6,6 +6,8 @@ v2.1 ROADMAP Phase 3。
 """
 import json
 import os
+import shutil
+import tempfile
 
 from ..utils.cache_key import path_fingerprint
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
@@ -29,6 +31,13 @@ class MF_TrimByRanges:
                 "video_path": ("STRING", {"default": "input/sample.mp4"}),
                 "filename_prefix": ("STRING", {"default": "MediaForge/trimmed"}),
                 "mode": (["keep", "remove"], {"default": "remove"}),
+                # W3-1：precise = 現行 trim+setpts re-encode；lossless = stream copy 切段
+                # + concat demuxer 合併，無 re-encode 但切點只能對齊來源前一個 keyframe。
+                # default 維持 precise -> 舊 workflow JSON 沒這欄位時行為 100% 相容。
+                "precision": (
+                    ["precise (re-encode)", "lossless (stream copy)"],
+                    {"default": "precise (re-encode)"},
+                ),
                 # 兩條 input path：(1) SILENCE_RANGES 連線；(2) 手寫 JSON fallback
                 "ranges_json": (
                     "STRING",
@@ -60,18 +69,21 @@ class MF_TrimByRanges:
     CATEGORY = "MediaForge/Video"
 
     def trim(self, video_path, filename_prefix, mode, ranges_json, crossfade_sec,
-             codec="h264 (libx264)", crf=18, preset="medium",
+             codec="h264 (libx264)", crf=18, preset="medium", precision="precise (re-encode)",
              ranges=None,
              frames=None, tensor_fps=30.0, audio=None):
         if not ensure_ffmpeg():
             raise RuntimeError("[Trim By Ranges] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
 
-        # ProRes 需要 .mov 容器才能 mux 成功 (W1-6)；_build_concat_command 內部另外查一次
-        # codec_id 供 encoder args 用 — 這裡只是為了決定副檔名，不影響下游那份查表。
-        codec_map = get_available_codecs()
-        codec_id, _pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
-        ext = ".mov" if codec_id == "prores_ks" else ".mp4"
-        output_path = resolve_output_path(filename_prefix, ext)
+        # W3-1：lossless（stream copy）在數學上做不到淡接混合像素——這不是「使用者預期
+        # 可接受」的退階（會產生使用者沒要求的硬切結果），所以及早 raise 而非 clamp/忽略。
+        is_lossless = precision == "lossless (stream copy)"
+        if is_lossless and crossfade_sec > 0:
+            raise ValueError(
+                "[Trim By Ranges] precision=lossless (stream copy) 無法做 crossfade 淡接"
+                "（stream copy 無法混合像素）。請改用 precision=precise (re-encode)，"
+                "或將 crossfade_sec 設為 0。"
+            )
 
         cleanup_tmp = None
         try:
@@ -88,6 +100,18 @@ class MF_TrimByRanges:
                     cleanup_tmp = source_path
                 else:
                     source_path = video_path
+
+            # ProRes 需要 .mov 容器才能 mux 成功 (W1-6)；_build_concat_command 內部另外查一次
+            # codec_id 供 encoder args 用 — 這裡只是為了決定副檔名，不影響下游那份查表。
+            # W3-1：lossless 模式不轉容器，副檔名沿用來源（stream copy 語意上就是「跟來源
+            # 一致」），codec/crf/preset widget 在這個分支被忽略。
+            if is_lossless:
+                ext = _source_container_ext(source_path)
+            else:
+                codec_map = get_available_codecs()
+                codec_id, _pix_fmt = codec_map.get(codec, codec_map["h264 (libx264)"])
+                ext = ".mov" if codec_id == "prores_ks" else ".mp4"
+            output_path = resolve_output_path(filename_prefix, ext)
 
             # R7 P1 fix：連線到 MF_DetectSilence 的 ranges=[] (沒偵到靜音) 不能 fallback 到
             # ranges_json (那是 disconnect 時的手填預設)。用 `is not None` 區分「連了空 list」
@@ -127,12 +151,15 @@ class MF_TrimByRanges:
 
             has_audio = probe_has_audio_stream(source_path)
 
-            cmd = self._build_concat_command(
-                source_path, output_path, keep_ranges, crossfade_sec, has_audio,
-                codec=codec, crf=crf, preset=preset,
-            )
-            if not run_ffmpeg(cmd, tag="Trim By Ranges"):
-                raise RuntimeError("[Trim By Ranges] FFmpeg 失敗，請查看上方 stderr 輸出。")
+            if is_lossless:
+                self._trim_lossless(source_path, output_path, keep_ranges)
+            else:
+                cmd = self._build_concat_command(
+                    source_path, output_path, keep_ranges, crossfade_sec, has_audio,
+                    codec=codec, crf=crf, preset=preset,
+                )
+                if not run_ffmpeg(cmd, tag="Trim By Ranges"):
+                    raise RuntimeError("[Trim By Ranges] FFmpeg 失敗，請查看上方 stderr 輸出。")
         finally:
             if cleanup_tmp:
                 try:
@@ -239,6 +266,51 @@ class MF_TrimByRanges:
             output_path,
         ]
 
+    @staticmethod
+    def _trim_lossless(source_path, output_path, keep_ranges):
+        # Stream copy 只能在 keyframe 上切：`-ss`/`-to` 放在 `-i` 前是 input seek，會對齊到
+        # 前一個 keyframe（非逐幀精確），實際切點時間可能有 GOP 級誤差 —— 這是用 re-encode
+        # 換來近乎零成本切割的已知取捨，print 警告讓使用者知道差異來源。
+        print(
+            "[Trim By Ranges] 注意：precision=lossless 用 stream copy 切段，切點會對齊來源"
+            "前一個 keyframe（非逐幀精確），實際時長可能有 GOP 級誤差。"
+        )
+        ext = os.path.splitext(output_path)[1] or ".mp4"
+        tmpdir = tempfile.mkdtemp(prefix="mf_trim_lossless_")
+        try:
+            seg_paths = []
+            for i, (s, e) in enumerate(keep_ranges):
+                seg_path = os.path.join(tmpdir, f"seg_{i}{ext}")
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", f"{s:.6f}", "-to", f"{e:.6f}",
+                    "-i", source_path,
+                    "-c", "copy", "-avoid_negative_ts", "make_zero",
+                    seg_path,
+                ]
+                if not run_ffmpeg(cmd, tag="Trim By Ranges"):
+                    raise RuntimeError(
+                        f"[Trim By Ranges] lossless 切段失敗（第 {i + 1} 段 "
+                        f"{s:.2f}s-{e:.2f}s），請查看上方 stderr 輸出。"
+                    )
+                seg_paths.append(seg_path)
+
+            # concat demuxer list 檔 — 同 ConcatVideos._concat_demuxer 的 single-quote escape 寫法
+            list_path = os.path.join(tmpdir, "concat_list.txt")
+            with open(list_path, "w", encoding="utf-8") as f:
+                for p in seg_paths:
+                    safe = os.path.abspath(p).replace("'", "'\\''")
+                    f.write(f"file '{safe}'\n")
+
+            concat_cmd = [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", list_path, "-c", "copy", output_path,
+            ]
+            if not run_ffmpeg(concat_cmd, tag="Trim By Ranges"):
+                raise RuntimeError("[Trim By Ranges] lossless 合併片段失敗，請查看上方 stderr 輸出。")
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
     @classmethod
     def IS_CHANGED(s, **kwargs):
         # frames 接了 -> video_path 不會被讀，tensor 本身已參與 ComfyUI 原生 input
@@ -274,6 +346,15 @@ def _normalize_ranges(ranges, duration):
         if e - s > 1e-4:  # 短於 0.1ms 的片段視為 noise
             out.append([s, e])
     return out
+
+
+# W3-1：lossless 模式輸出容器沿用來源；未知（或缺）副檔名退階 .mp4（最泛用容器）。
+_LOSSLESS_KNOWN_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
+
+
+def _source_container_ext(source_path):
+    ext = os.path.splitext(source_path)[1].lower()
+    return ext if ext in _LOSSLESS_KNOWN_EXTS else ".mp4"
 
 
 NODE_CLASS_MAPPINGS = {"MF_TrimByRanges": MF_TrimByRanges}
