@@ -76,7 +76,9 @@ class MF_SaveVideoFrames:
             output_path = resolve_output_path(filename_prefix, ".gif")
             encode_tensor_to_gif(frames, output_path, fps=fps)
             print(f"[Save Video Frames] 輸出成功: {output_path}")
-            return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
+            # R9-1：filename_prefix 逃出 output_dir 時 entry 為 None，ui.images 留空陣列。
+            entry = output_path_to_ui_entry(output_path)
+            return {"ui": {"images": [entry] if entry else []}, "result": (output_path,)}
 
         # 防呆：丟棄退化的 AUDIO dict（length<=1 sample 視為「上游無 audio」的假合成）。
         # 不這樣做的話 ffmpeg 加 -shortest 後整段 frames 被截到 1-sample 的長度。
@@ -115,7 +117,9 @@ class MF_SaveVideoFrames:
                          crf=effective_crf, audio=audio)
 
         print(f"[Save Video Frames] 輸出成功: {output_path}")
-        return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
+        # R9-1：filename_prefix 逃出 output_dir 時 entry 為 None，ui.images 留空陣列。
+        entry = output_path_to_ui_entry(output_path)
+        return {"ui": {"images": [entry] if entry else []}, "result": (output_path,)}
 
     @staticmethod
     def _encode(frames, output_path, fps, codec_id, pix_fmt, preset,

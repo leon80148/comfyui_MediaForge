@@ -77,7 +77,9 @@ class MF_ExtractAudio:
 
         print(f"[Extract Audio] 輸出成功: {output_path}")
         # UI emit：跟 BurnSubtitle / TrimByRanges 同款 canonical 回傳，讓 /history 暴露檔案路徑。
-        return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
+        # R9-1：filename_prefix 逃出 output_dir 時 entry 為 None，ui.images 留空陣列。
+        entry = output_path_to_ui_entry(output_path)
+        return {"ui": {"images": [entry] if entry else []}, "result": (output_path,)}
 
     def _extract_from_path(self, audio_source, format, filename_prefix):
         audio_stream = _first_audio_stream(probe(audio_source))

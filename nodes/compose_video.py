@@ -245,8 +245,10 @@ class MF_ComposeVideo:
             print(f"[Compose Video] 輸出成功({len(ir.ops)} video ops + {len(ir.audio_ops)} audio ops): {output_path}")
 
             # UI metadata emit:讓 /history/<prompt_id> 看到、API 端 /view 可下載
+            # R9-1：filename_prefix 逃出 output_dir 時 entry 為 None，ui.images 留空陣列。
+            entry = output_path_to_ui_entry(output_path)
             return {
-                "ui": {"images": [output_path_to_ui_entry(output_path)]},
+                "ui": {"images": [entry] if entry else []},
                 "result": (output_path, full_script),
             }
         finally:

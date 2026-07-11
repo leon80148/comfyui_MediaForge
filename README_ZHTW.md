@@ -102,6 +102,8 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 所有產出檔案的節點(BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo / ExtractAudio / ConvertChinese) 都同時 emit ComfyUI `ui.images` metadata 跟 STRING path 兩種輸出。API 客戶端不必自己 parse 路徑就能拿到產出檔。
 
+注意：若 `filename_prefix` 解析到 `output/` 之外（舊相容用法，例如 `filename_prefix="../input/cleaned"`），節點仍會正常寫檔、正常回傳路徑，但不會出現在 `/history` 的 `ui.images` 清單中 —— ComfyUI 內建的 `/view` endpoint 只服務 `output/` 底下的檔案，沒有對應的合法 `/view` URL 可以暴露。
+
 ### 1. 送 workflow 上去
 
 ```bash

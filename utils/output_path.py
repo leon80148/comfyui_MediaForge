@@ -141,15 +141,43 @@ def output_path_to_ui_entry(output_path, type="output"):
     """Absolute output path → ComfyUI UI dict entry for /history exposure.
 
     搭配 resolve_output_path()。寫完檔後在 node 的 return 用：
-        return {"ui": {"images": [<entry>]}, "result": (output_path,)}
+        entry = output_path_to_ui_entry(output_path)
+        return {"ui": {"images": [entry] if entry else []}, "result": (output_path,)}
 
     `images` 是 ComfyUI 通用 UI key（SaveImage canonical）— 影片 / 音訊 / 任意檔
     都走這個 key，frontend 跟 API 客戶端用 /view?filename=X&subfolder=Y&type=output
     下載。Windows 上 os.path.relpath 會吐 `\\` separator，所以 normalize 成 `/`
     （ComfyUI /view URL parser 走 POSIX 風）。
+
+    R9-1 fix（2026-07-11）：resolve_output_path() 的舊相容模式（見該函式 R7-1
+    docstring）允許 filename_prefix 解析到 output_dir 之外、只要仍在 ComfyUI base
+    root 內（例如 `../input/cleaned`）。這種情況算出的 subfolder 會帶 `..`
+    （如 `../input`），但 ComfyUI 內建 /view endpoint 有自己的 path-traversal
+    防護、只服務 output_dir 內的檔案——這種 entry 送給 API 客戶端照 README 打
+    /view 只會 404。與其吐一個保證用壞的 dict，這裡在算 relpath 前先確認
+    output_path 的 realpath 是否落在 output_dir 內；不在 → 印一行繁中說明後回
+    None，呼叫端把 ui.images 留空陣列（node 仍正常寫檔、result 仍回傳正確的
+    絕對路徑，只是不會出現在 /history 的 ui 檔案清單）。跨磁碟機代號（Windows）
+    算 commonpath 會 ValueError，同樣視為「不在 output_dir 內」。
     """
     import folder_paths
     output_dir = folder_paths.get_output_directory()
+    real_output_dir = os.path.realpath(output_dir)
+    real_output_path = os.path.realpath(output_path)
+    try:
+        inside_output_dir = (
+            os.path.commonpath([real_output_dir, real_output_path]) == real_output_dir
+        )
+    except ValueError:
+        inside_output_dir = False  # 不同磁碟機代號（Windows）→ 一定不在 output_dir 內
+
+    if not inside_output_dir:
+        print(
+            f"[MediaForge] 注意：輸出位於 output/ 之外（{real_output_path}），"
+            "不會出現在 /history 的 ui 檔案清單（/view 僅能存取 output/ 內檔案）。"
+        )
+        return None
+
     rel = os.path.relpath(output_path, output_dir)
     subfolder, filename = os.path.split(rel)
     return {

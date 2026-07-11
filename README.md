@@ -102,6 +102,8 @@ See [AI Provider Recipes](#ai-provider-recipes) below for copy-paste `base_url` 
 
 All file-producing nodes (BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo / ExtractAudio / ConvertChinese) emit ComfyUI `ui.images` metadata alongside the STRING path output. API clients can discover and download outputs without parsing paths.
 
+Note: if `filename_prefix` resolves outside `output/` (a legacy-compat case, e.g. `filename_prefix="../input/cleaned"`), the node still writes the file and returns its path normally, but it won't appear in `/history`'s `ui.images` list — ComfyUI's built-in `/view` endpoint only serves files under `output/`, so there's no valid `/view` URL to expose.
+
 ### 1. Submit a workflow
 
 ```bash

@@ -211,7 +211,9 @@ class MF_TrimByRanges:
                     pass
 
         print(f"[Trim By Ranges] 輸出成功（{len(keep_ranges)} 個片段，audio={has_audio}）: {output_path}")
-        return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
+        # R9-1：filename_prefix 逃出 output_dir 時 entry 為 None，ui.images 留空陣列。
+        entry = output_path_to_ui_entry(output_path)
+        return {"ui": {"images": [entry] if entry else []}, "result": (output_path,)}
 
     @staticmethod
     def _parse_ranges_json(text):

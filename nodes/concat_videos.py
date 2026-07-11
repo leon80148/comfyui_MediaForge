@@ -135,7 +135,9 @@ class MF_ConcatVideos:
                 )
 
             print(f"[Concat Videos] 輸出成功（{len(paths)} 段）: {output_path}")
-            return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
+            # R9-1：filename_prefix 逃出 output_dir 時 entry 為 None，ui.images 留空陣列。
+            entry = output_path_to_ui_entry(output_path)
+            return {"ui": {"images": [entry] if entry else []}, "result": (output_path,)}
         finally:
             if cleanup_tmp:
                 try:

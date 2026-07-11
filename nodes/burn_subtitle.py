@@ -217,7 +217,9 @@ class MF_BurnSubtitle:
         print(f"[Burn Subtitle] 輸出成功: {output_path}")
         # UI emit:讓 ComfyUI /history/<prompt_id> 把成品檔案路徑暴露給 API 客戶端,
         # `/view?filename=X&subfolder=Y&type=output` 可直接下載。result 保留 tuple、下游 wire 不變。
-        return {"ui": {"images": [output_path_to_ui_entry(output_path)]}, "result": (output_path,)}
+        # R9-1：filename_prefix 逃出 output_dir 時 entry 為 None，ui.images 留空陣列。
+        entry = output_path_to_ui_entry(output_path)
+        return {"ui": {"images": [entry] if entry else []}, "result": (output_path,)}
 
     @classmethod
     def IS_CHANGED(s, **kwargs):
