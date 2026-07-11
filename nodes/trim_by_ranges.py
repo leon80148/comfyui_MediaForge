@@ -311,10 +311,45 @@ class MF_TrimByRanges:
 
     @staticmethod
     def _trim_lossless(source_path, output_path, keep_ranges):
-        # C3+C6：mapping 合約收斂成「主影音 + 字幕」（見下方 -map 0:V ...），
+        # C3+C6：mapping 合約收斂成「主影音 + 字幕」（見下方 -map ...），
         # data/timecode/封面圖軌會被略過——先警告，取代舊版的 silent drop。
+        #
+        # R7-2 [P2] fix：下面的 keyframe 前向對齊只掃 v:0（probe_keyframe_times 用
+        # `-select_streams v:0`），但舊版分段/合併指令的 `-map 0:V` 是「全部主視訊
+        # 流」——多視訊流來源（例如雙 angle mkv）v:1 沒有照 v:0 的 keyframe 對齊，
+        # 切點會落在非 keyframe、解碼壞。改成只 map 第一條主視訊流的顯式 index，
+        # 跟 keyframe 掃描對象一致；其餘主視訊流略過並印警告。找不到 probe 資訊時
+        # （理論上不會發生——trim() 呼叫路徑上已經透過 probe_video_duration 成功
+        # probe 過同一份快取，只有測試直接呼叫本函式且 monkeypatch probe=None 才
+        # 會走到這裡）退回舊版 `0:V` 當 fallback，維持舊行為。
         info = probe(source_path)
+        segment_video_map = "0:V"
+        merge_video_map = "0:V"
         if info:
+            streams = info.get("streams", [])
+            main_video_indices = [
+                s.get("index", i) for i, s in enumerate(streams)
+                if s.get("codec_type") == "video"
+                and (s.get("disposition") or {}).get("attached_pic") != 1
+            ]
+            if not main_video_indices:
+                raise RuntimeError(
+                    f"[Trim By Ranges] 來源找不到可用的主視訊流，lossless 模式無法繼續：{source_path}"
+                    "。請確認來源檔案包含視訊軌（純音訊來源請改用 MF_ExtractAudio）。"
+                )
+            segment_video_map = f"0:{main_video_indices[0]}"
+            # 合併階段讀的是「分段檔」，不是原始來源——分段時已把主視訊流固定放在
+            # -map 的第一個位置，所以每個分段檔自己的 video 一定落在 stream index 0
+            # （跟來源的原始 index 無關，不能沿用 segment_video_map）。
+            merge_video_map = "0:0"
+
+            if len(main_video_indices) > 1:
+                print(
+                    "[Trim By Ranges] 注意：lossless 模式僅保留第一條主視訊流"
+                    f"（v:0 keyframe 對齊限制），已略過其餘 {len(main_video_indices) - 1} 條；"
+                    "需保留多視訊流請改 precision=precise (re-encode)。"
+                )
+
             skipped = unmapped_stream_descriptions(info)
             if skipped:
                 print(
@@ -381,9 +416,10 @@ class MF_TrimByRanges:
                     # C3+C6 fix：`-map 0`（全部 stream）改收斂成「主影音 + 字幕」——
                     # data/timecode stream（GoPro/DJI 的 tmcd/gpmd）塞進 `-c copy`
                     # 會直接 exit 失敗，demuxer/muxer 給不了這類 stream 該有的 codec
-                    # 參數。`0:V` 排除 attached_pic（封面圖）；`?` 讓沒有音軌/字幕軌
-                    # 時不會因為 map 不到而報錯。
-                    "-map", "0:V", "-map", "0:a?", "-map", "0:s?",
+                    # 參數。`?` 讓沒有音軌/字幕軌時不會因為 map 不到而報錯。R7-2 fix：
+                    # segment_video_map 是主視訊流的顯式 index（見上方大段說明），
+                    # 不再用籠統的 `0:V`（= 全部主視訊流）。
+                    "-map", segment_video_map, "-map", "0:a?", "-map", "0:s?",
                     "-c", "copy", "-avoid_negative_ts", "make_zero",
                     seg_path,
                 ]
@@ -407,7 +443,9 @@ class MF_TrimByRanges:
                 # 合併時同樣要 map 才不會在這一步二次丟軌。C3+C6 fix：與分段 cmd
                 # 一致收斂成「主影音 + 字幕」——段檔本來就不含 data/attached_pic
                 # （上一步已經略過），這裡維持同款合約單純是介面一致、無額外副作用。
-                "-i", list_path, "-map", "0:V", "-map", "0:a?", "-map", "0:s?",
+                # R7-2 fix：merge_video_map 對應分段檔自己的 index（見上方大段
+                # 說明，通常是固定的 "0:0"），跟來源的原始 index 無關。
+                "-i", list_path, "-map", merge_video_map, "-map", "0:a?", "-map", "0:s?",
                 "-c", "copy", output_path,
             ]
             if not run_ffmpeg(concat_cmd, tag="Trim By Ranges"):

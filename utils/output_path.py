@@ -29,8 +29,9 @@ def resolve_output_path(filename_prefix, ext):
         filename_prefix: 使用者填的 prefix，可含子目錄如 "MediaForge/looped"。
                          誤填副檔名（如 "looped.mp4"）會被剝掉，避免雙副檔名。
                          `/` 或 `\\` 皆可分子目錄（兩平台語意一致）。可以用 `..`
-                         或絕對路徑跳出 output_dir——會印警告但照常寫入（見下方
-                         C9 說明），不會 raise。
+                         或絕對路徑跳出 output_dir——仍在 ComfyUI 目錄樹內只印警告
+                         照常寫入，跳出 ComfyUI 目錄樹則 raise ValueError（見下方
+                         R7-1 說明）。
 
     Returns:
         絕對路徑：`<output_dir>/<subfolder>/<filename>_<counter:05d><ext>`。
@@ -39,9 +40,20 @@ def resolve_output_path(filename_prefix, ext):
     C9 fix：`..` / 絕對路徑跳出 output_dir 曾經在這裡 raise ValueError（W1-7），但
     這破壞了升級前就存在的合法用法——`filename_prefix="../input/cleaned"` 把輸出
     鏈回 input/ 是常見手法、絕對路徑（如 `D:/exports/clip`）也是使用者的明確意圖，
-    兩者升級後直接壞掉不成比例。auto-counter 的 `_NNNNN` 命名本來就保證不會覆蓋
-    既有檔案，路徑穿越在這裡沒有「覆寫他人資料」的風險，只有「寫到預期外位置」的
-    可見性問題——改成印警告後照常寫入，保留可見性但不犧牲相容性。
+    兩者升級後直接壞掉不成比例。C9 當時把處置改成「印警告後照常寫入」，不論穿越
+    到哪裡都不 raise。
+
+    R7-1 fix（2026-07-11）：C9 的「警告全放行」被 Codex R7 round review 認為形同
+    允許任意路徑寫入（例如 `filename_prefix="../../../../Users/user/Desktop/export"`
+    這種完全脫離 ComfyUI 安裝目錄的目標——分享出去的 workflow JSON 被別人打開
+    執行就會被動寫到對方磁碟任意位置）。裁決折衷成「ComfyUI 根目錄內圍堵」：
+      - 落在 output_dir 內：一如既往，無警告。
+      - 落在 output_dir 外、但仍在 ComfyUI base root 內（保住 C9 想保護的
+        `../input/cleaned` 相容用法）：印警告後照常寫入。
+      - 落在 ComfyUI base root 之外（含任意絕對路徑）：raise ValueError，擋掉
+        Codex 關切的任意寫入。
+    Base root 優先讀 `folder_paths.base_path`（正式 ComfyUI 環境一定有這個屬性，
+    見 ComfyUI/folder_paths.py），拿不到時 fallback 成 output_dir 的上一層目錄。
     """
     import folder_paths
 
@@ -62,10 +74,10 @@ def resolve_output_path(filename_prefix, ext):
 
     # 偵測路徑穿越：`..` 或絕對路徑 subfolder 可能讓 full_output_folder 落在
     # output_dir 之外；用 realpath 解掉 `..` / symlink 後跟 output_dir 比對
-    # commonpath。C9 fix：只警告、不 raise（見上方 docstring）——舊版允許
-    # `filename_prefix="../input/cleaned"` 這種把輸出鏈回 input/ 的常見用法與
-    # 絕對路徑，W1-7 當初直接 raise 會讓這些既有 workflow 升級後全部壞掉；
-    # auto-counter 命名已經保證不覆蓋既有檔案，照舊邏輯 makedirs + 寫入即可。
+    # commonpath。R7-1 fix（見上方 docstring）：三段式處置——output_dir 內無警告；
+    # output_dir 外但仍在 ComfyUI base root 內印警告放行（保住 C9 想保護的
+    # `../input/cleaned` 相容用法）；base root 之外 raise（擋 Codex 關切的任意
+    # 路徑寫入）。
     real_output_dir = os.path.realpath(output_dir)
     real_full_output_folder = os.path.realpath(full_output_folder)
     try:
@@ -74,11 +86,34 @@ def resolve_output_path(filename_prefix, ext):
         )
     except ValueError:
         inside_output_dir = False  # 不同磁碟機代號（Windows）→ 一定不在 output_dir 內
+
     if not inside_output_dir:
+        # base root 優先讀正式 ComfyUI 環境一定會設的 folder_paths.base_path；
+        # 測試用的 stub 沒有這個屬性時 fallback 成 output_dir 的上一層目錄。
+        base_root = getattr(folder_paths, "base_path", None)
+        real_base_root = (
+            os.path.realpath(base_root) if base_root
+            else os.path.dirname(real_output_dir)
+        )
+        try:
+            inside_base_root = (
+                os.path.commonpath([real_base_root, real_full_output_folder]) == real_base_root
+            )
+        except ValueError:
+            inside_base_root = False  # 不同磁碟機代號 → 一定不在 base root 內
+
+        if not inside_base_root:
+            raise ValueError(
+                f"[MediaForge] filename_prefix={filename_prefix!r} 解析到 ComfyUI 目錄樹"
+                f"之外（{real_full_output_folder}），僅允許輸出到 ComfyUI 目錄樹內的路徑"
+                "（防止分享出去的 workflow JSON 被別人打開執行時，任意寫入對方磁碟的其他"
+                "位置）。如需輸出到外部目錄，請先輸出到 output/ 底下，再自行搬移。"
+            )
+
         print(
-            f"[MediaForge] 注意：filename_prefix={filename_prefix!r} 解析到 ComfyUI "
-            f"output 目錄之外（{real_full_output_folder}）。已依舊版相容行為照常"
-            "寫入；auto-counter 檔名保證不會覆蓋既有檔案。"
+            f"[MediaForge] 注意：filename_prefix={filename_prefix!r} 解析到 output 目錄"
+            f"之外、但仍在 ComfyUI 目錄樹內（{real_full_output_folder}）——依舊版相容行為"
+            "寫入；auto-counter 檔名不會覆蓋既有檔案。"
         )
 
     os.makedirs(full_output_folder, exist_ok=True)
