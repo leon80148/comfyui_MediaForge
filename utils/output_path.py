@@ -11,13 +11,20 @@ import os
 import re
 
 
+# R8-2 [P2]：plugin 接受的影片副檔名唯一清單 —— MF_SelectVideo dropdown 掃描、
+# 這裡的 _KNOWN_EXTS、下面 source_container_ext() 的保留清單都共用這個常數，避免
+# 三處各自維護一份清單而 drift（過去 source_container_ext 自己維護一份只有 6 種
+# 的清單，沒涵蓋 MF_SelectVideo 早就接受的 .ts/.mpg/.mpeg，.ts 來源走 concat copy
+# / trim lossless 會被誤 fallback 成 .mp4）。
+VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg", ".ts")
+
 # 使用者可能誤把副檔名打進 filename_prefix（如 "looped.mp4"）；
 # 先剝掉這些已知 ext，下游再加自己想要的副檔名上去
 # F6 [P3]：補 gif（MF_SaveVideoFrames 的 gif 偽 codec）與常見音訊副檔名
 # （wav/mp3/m4a/ogg/flac，ExtractAudio 等音訊輸出節點會用到）。
 _KNOWN_EXTS = (
     ".srt", ".txt", ".vtt", ".ass",
-    ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v",
+    *VIDEO_EXTENSIONS,
     ".gif", ".wav", ".mp3", ".m4a", ".ogg", ".flac",
 )
 
@@ -155,7 +162,10 @@ def output_path_to_ui_entry(output_path, type="output"):
 # F3 [P2]：stream-copy 語意的輸出（lossless trim / concat copy 模式）不 re-encode，
 # 輸出容器必須跟來源一致，否則可能 mux 進不支援來源 codec tag 的容器（例：ProRes
 # 塞進 .mp4 muxer 直接 mux fail，mp4 muxer 沒有 prores tag）。
-_VIDEO_CONTAINER_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
+# R8-2 [P2]：改用 VIDEO_EXTENSIONS（單一事實來源）而非自己維護一份清單 ——
+# 原本的 6 種沒涵蓋 MF_SelectVideo 早就接受的 .ts/.mpg/.mpeg，這三種來源會被誤
+# fallback 成 .mp4（mpegts muxer 對 stream copy 沒問題，不需要退階）。
+_VIDEO_CONTAINER_EXTS = set(VIDEO_EXTENSIONS)
 
 
 def source_container_ext(path):
@@ -163,7 +173,7 @@ def source_container_ext(path):
 
     給 stream-copy 輸出用：`nodes/trim_by_ranges.py` 的 lossless 模式、
     `nodes/concat_videos.py` 的 copy 模式都靠這個決定輸出容器（沿用第一個/來源
-    輸入的副檔名，不看 codec widget）。
+    輸入的副檔名，不看 codec widget）。已知副檔名清單見 VIDEO_EXTENSIONS。
     """
     ext = os.path.splitext(path)[1].lower()
     return ext if ext in _VIDEO_CONTAINER_EXTS else ".mp4"

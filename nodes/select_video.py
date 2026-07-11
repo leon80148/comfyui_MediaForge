@@ -10,14 +10,18 @@ decode 走 MF_LoadVideoFrames（重量級、tensor pipeline）。
 """
 import os
 
+from ..utils.output_path import VIDEO_EXTENSIONS
+
 # `folder_paths` 是 ComfyUI runtime 才有的 module；放 function-level lazy-import
 # 才能在 unit test / non-ComfyUI 環境也安全 load 整個 package（plugin auto-discovery
 # 透過 __init__.py 的 pkgutil.iter_modules walk 每個 nodes/*.py，module-level import
 # folder_paths 會讓整個 package 在 ComfyUI 沒啟動時直接炸）。
 # CLAUDE.md 約定：optional / runtime-only dependency 一律 function-level import。
-
-
-VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg", ".ts")
+# `utils.output_path` module-level 只 import os/re（無 folder_paths），import 它
+# 不受這條規則限制，是安全的。
+# R8-2 [P2]：VIDEO_EXTENSIONS 搬到 utils/output_path.py 當單一事實來源
+# （source_container_ext() 的保留清單也共用它），這裡改 import、保留原名相容
+# 既有用法（下面 _list_input_videos 讀的還是這個名字）。
 
 # ComfyUI dropdown 不能是空 list — 沒檔案時放一個 placeholder string，使用者看到就知道要去 input/ 放檔
 _EMPTY_PLACEHOLDER = "(input/ 目錄沒有影片檔)"

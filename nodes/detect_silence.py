@@ -61,6 +61,12 @@ class MF_DetectSilence:
             cmd = resolve_ffmpeg_cmd([
                 "ffmpeg", "-v", "info",  # silencedetect 訊息走 stderr at info level
                 "-i", source_path,
+                # R8-1 [P2]：多音軌檔 ffmpeg 預設 stream selection 挑聲道數最高的一條
+                # （例如 0:a:1 立體聲主音軌），但收尾用的 duration 是 probe_audio_duration()
+                # 讀的第一條音軌（0:a:0）——兩邊分析的音軌若不同條，收尾判斷就會用錯
+                # duration。顯式鎖定 0:a:0，跟 probe_audio_duration 對齊同一條。AUDIO
+                # dict 模式（temp wav 單軌）不受影響，但加了也無害，統一加。
+                "-map", "0:a:0",
                 "-af", f"silencedetect=noise={noise_db}dB:d={min_duration_sec}",
                 "-vn",
                 "-f", "null", "-",
