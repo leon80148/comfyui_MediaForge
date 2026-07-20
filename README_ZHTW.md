@@ -846,7 +846,7 @@ Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改�
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible`（任意 `/v1/...` HTTP endpoint）/ `faster_whisper_local`（in-process） |
 | `base_url` | `https://api.openai.com/v1` | 尾端 `/` 會自動 strip |
-| `api_key` | `""` | log 只露前 4 字 + `***` |
+| `api_key` | `""` | log 只露前 4 字 + `***`；節點畫面上以 `•` 遮罩顯示，點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
 | `model` | `gpt-4o-mini` | 自由字串。Whisper 認出來不像 STT id 時會自動換預設（例如 `gpt-4o-mini` 被同時餵給 translate；Whisper 退回 `whisper-1`） |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — 只 `faster_whisper_local` 用 |
 
@@ -909,7 +909,7 @@ SRT 文字 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`�
 ### OpenAI（官方）
 
 ```
-provider   = openai
+provider   = openai_compatible
 base_url   = https://api.openai.com/v1
 api_key    = sk-...
 model      = whisper-1         # 給 MF_WhisperTranscribe
@@ -921,7 +921,7 @@ model      = whisper-1         # 給 MF_WhisperTranscribe
 ### Groq（市場最快的 hosted Whisper）
 
 ```
-provider   = openai            # OpenAI 相容 API 介面
+provider   = openai_compatible # OpenAI 相容 API 介面
 base_url   = https://api.groq.com/openai/v1
 api_key    = gsk_...
 model      = whisper-large-v3  # ASR — 同模型家族下比 OpenAI whisper-1 快 ~5–10 倍
@@ -933,7 +933,7 @@ model      = whisper-large-v3  # ASR — 同模型家族下比 OpenAI whisper-1 
 ### faster-whisper（本地，不需要 API key）
 
 ```
-backend    = faster_whisper_local      # 設在 MF_WhisperTranscribe
+provider   = faster_whisper_local      # 設在 MF_WhisperTranscribe
 device     = cuda                      # 或 "cpu", "auto"
 model      = large-v3                  # 首次使用會下載到 HF cache
 ```
@@ -943,7 +943,7 @@ model      = large-v3                  # 首次使用會下載到 HF cache
 ### Ollama / LM Studio（本地 OpenAI 相容）
 
 ```
-provider   = openai
+provider   = openai_compatible
 base_url   = http://localhost:11434/v1     # Ollama
            = http://localhost:1234/v1      # LM Studio
 api_key    = ollama                         # 任意非空字串，不會驗

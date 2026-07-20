@@ -499,7 +499,7 @@ def compile_ir(ir: ComposeIR) -> tuple[str, str, list[str]]:
     Caller 跑完 ffmpeg 必須 unlink 這些路徑。
     """
     if not ir.main_label:
-        raise RuntimeError("[ComposeIR] IR 沒有 main video input — Compose 流程必須從 MF_ComposeStart 開始")
+        raise RuntimeError("[ComposeIR] IR 沒有 main video input — 請確認 MF_ComposeVideo 的 video_path 或 frames 輸入已正確接上")
 
     # 從 IR 帶入的 tmp paths（caller-injected, 例如 ComposeStart 的 tensor temp）
     cleanup_paths: list[str] = list(ir.tmp_paths_to_cleanup)

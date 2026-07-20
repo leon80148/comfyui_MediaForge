@@ -846,7 +846,7 @@ Centralized provider configuration. Outputs an `AI_CONFIG` dict that all AI node
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible` (any `/v1/...` HTTP endpoint) / `faster_whisper_local` (in-process) |
 | `base_url` | `https://api.openai.com/v1` | Trailing slash stripped automatically |
-| `api_key` | `""` | Logged with first 4 chars + `***` mask |
+| `api_key` | `""` | Logged with first 4 chars + `***` mask; node canvas displays it masked with `•` (click to reveal/edit — see `web/ai_config_mask.js`) |
 | `model` | `gpt-4o-mini` | Free-form string. Whisper auto-substitutes if not an STT id (e.g. `gpt-4o-mini` reused for translate; Whisper falls back to `whisper-1`) |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — only used by `faster_whisper_local` |
 
@@ -909,7 +909,7 @@ SRT text → translated SRT (timestamps preserved). Uses `/v1/chat/completions` 
 ### OpenAI (official)
 
 ```
-provider   = openai
+provider   = openai_compatible
 base_url   = https://api.openai.com/v1
 api_key    = sk-...
 model      = whisper-1         # for MF_WhisperTranscribe
@@ -921,7 +921,7 @@ Paid; most reliable. `whisper-1` is the multilingual GA endpoint.
 ### Groq (fastest hosted Whisper)
 
 ```
-provider   = openai            # OpenAI-compatible API surface
+provider   = openai_compatible # OpenAI-compatible API surface
 base_url   = https://api.groq.com/openai/v1
 api_key    = gsk_...
 model      = whisper-large-v3  # ASR — ~5–10× faster than OpenAI whisper-1 for similar quality
@@ -933,7 +933,7 @@ Free tier with rate limits; useful when you need to subtitle a 1-hour podcast in
 ### faster-whisper (local, no API key)
 
 ```
-backend    = faster_whisper_local      # on MF_WhisperTranscribe
+provider   = faster_whisper_local      # on MF_WhisperTranscribe
 device     = cuda                      # or "cpu", "auto"
 model      = large-v3                  # downloaded to HF cache on first use
 ```
@@ -943,7 +943,7 @@ model      = large-v3                  # downloaded to HF cache on first use
 ### Ollama / LM Studio (local OpenAI-compatible)
 
 ```
-provider   = openai
+provider   = openai_compatible
 base_url   = http://localhost:11434/v1     # Ollama
            = http://localhost:1234/v1      # LM Studio
 api_key    = ollama                         # any non-empty string; not validated
