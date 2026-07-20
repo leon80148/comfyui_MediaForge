@@ -164,7 +164,7 @@ The probe runs once per ComfyUI session via `utils/encoder.py:pick_default_codec
 |---|---|---|---|
 | `libx264` | `-crf` | 0–51 | 23 |
 | `libx265` | `-crf` | 0–51 | 28 |
-| `libsvtav1` | `-crf` | 0–63 | 35 |
+| `libsvtav1` | `-crf` | 0–63 native (MediaForge's unified `crf` widget caps at 51 — the unreachable 52–63 tail is lowest-quality territory) | 35 |
 | `h264_nvenc` / `hevc_nvenc` / `av1_nvenc` | `-rc vbr -cq <n> -b:v 0` | 1–51 explicit; `0` = automatic (encoder picks — **not** max quality) | (bitrate-driven unless `cq` set) |
 
 Within each family's explicit range, lower = higher quality / bigger file (NVENC's `cq=0` is the auto sentinel, not "better than 1"). Note where the encoders' *own defaults* sit — x265 and SVT-AV1 scales run numerically higher than x264 for comparable intent — and that NVENC `-cq` does not track `libx264 -crf` unit-for-unit. When switching codec families, treat your old value as a starting point only: encode a short representative clip, compare size/quality, and adjust from there.

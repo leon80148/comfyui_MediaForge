@@ -164,7 +164,7 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 |---|---|---|---|
 | `libx264` | `-crf` | 0–51 | 23 |
 | `libx265` | `-crf` | 0–51 | 28 |
-| `libsvtav1` | `-crf` | 0–63 | 35 |
+| `libsvtav1` | `-crf` | 原生 0–63（MediaForge 統一 `crf` widget 上限 51 — 碰不到的 52–63 段是最低畫質區,實務幾乎用不到） | 35 |
 | `h264_nvenc` / `hevc_nvenc` / `av1_nvenc` | `-rc vbr -cq <n> -b:v 0` | 1–51 為明確 CQ；`0` = automatic（encoder 自決，**不是**最高畫質） | （沒設 `cq` 時走 bitrate 導向） |
 
 在各 family 的明確數值範圍內，越低畫質越高／檔案越大（NVENC 的 `cq=0` 是 auto sentinel、不是「比 1 更好」）。注意各 encoder *自身預設值* 的落點 — x265 與 SVT-AV1 的刻度在同等意圖下數值比 x264 高 — 且 NVENC `-cq` 與 `libx264 -crf` 並非一單位對一單位。換 codec family 時，舊值只能當起點：先用一小段代表性素材試編、比對大小與畫質後再調整。

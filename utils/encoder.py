@@ -139,7 +139,7 @@ def build_encoder_args(codec_id, *, crf=None, bitrate=None, preset=None):
         encoder      flag    range                        encoder default
         libx264      -crf    0-51                         23
         libx265      -crf    0-51                         28
-        libsvtav1    -crf    0-63                         35
+        libsvtav1    -crf    0-63 native(UI widget 上限 51,52-63 最低畫質段碰不到)   35
         *_nvenc      -cq     1-51 (0 = automatic 而非最高畫質)   (未設 cq 時 bitrate 導向)
 
     User-facing 版本在兩份 README 的「CRF-equivalent quality」段（改內容要同步）。
