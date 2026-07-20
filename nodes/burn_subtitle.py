@@ -42,7 +42,8 @@ class MF_BurnSubtitle:
                 "filename_prefix": ("STRING", {"default": "MediaForge/subtitled"}),
                 # === 編碼控制 ===
                 # 跟 SaveVideoFrames / ComposeVideo 共用 encoder catalog;
-                # 預設 codec smart pick(GPU NVENC > libx264) / crf 18 / medium = 視覺無損 + 合理速度。
+                # 預設 codec smart pick(GPU NVENC > libx264) / crf 18 / medium = 高品質起點;
+                # 同數值跨 family 畫質不等(見 utils/encoder.py build_encoder_args docstring)。
                 "codec": (codec_choices, {"default": pick_default_codec()}),
                 "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
                 "preset": (
@@ -76,12 +77,6 @@ class MF_BurnSubtitle:
                 "margin_r": ("INT", {"default": 50, "min": 0, "max": 1000}),
             },
             "optional": {
-                # R4-1:字幕的 dual-input。MF_WhisperTranscribe / MF_TranslateSubtitle 輸出
-                # 的是 SRT 內容字串（不是檔案）— 這個 pin 讓它們直接 wire 進來，內部落地
-                # 暫存檔（.mf_tmp/）後走同一條 subtitles filter。接上時 srt_path 被
-                # web/dual_input_lock.js 隱藏（EXTRA_INPUT_LOCKS）。forceInput：內容是
-                # 上游產物，不該讓使用者在 widget 手打整份 SRT。
-                "srt_text": ("STRING", {"forceInput": True}),
                 # Tensor pipeline (in-memory chain):連線 frames 時 web/dual_input_lock.js 會 hide 上面的 video_path
                 "frames": ("IMAGE",),
                 "tensor_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
@@ -96,6 +91,15 @@ class MF_BurnSubtitle:
                 # 進階:輸出畫格率覆寫;0.0 = 沿用 source fps。FLOAT 是為了支援 cinematic
                 # fps(23.976 / 29.97 / 59.94)— 廣電 / 手機素材常見,INT 會逼使用者四捨五入。
                 "target_fps": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 240.0, "step": 0.1}),
+
+                # R4-1:字幕的 dual-input。MF_WhisperTranscribe / MF_TranslateSubtitle 輸出
+                # 的是 SRT 內容字串（不是檔案）— 這個 pin 讓它們直接 wire 進來，內部落地
+                # 暫存檔（.mf_tmp/）後走同一條 subtitles filter。接上時 srt_path 被
+                # web/dual_input_lock.js 隱藏（EXTRA_INPUT_LOCKS）。forceInput：內容是
+                # 上游產物，不該讓使用者在 widget 手打整份 SRT。
+                # R5-1：必須宣告在所有既有 optional inputs 之後 — ComfyUI workflow link
+                # 以 target slot index 序列化，插在 frames/audio 前會位移舊存檔的接線。
+                "srt_text": ("STRING", {"forceInput": True}),
             },
         }
 
@@ -152,9 +156,12 @@ class MF_BurnSubtitle:
             # temp 路徑會讓 libavfilter 開檔失敗),沒接 → 用 srt_path(上面已驗證存在)。
             if srt_text is not None:
                 fd, srt_path = mkstemp_in_plugin_tmp(suffix=".srt", prefix="mf_burn_srt_")
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(srt_text)
+                # R5-3:先掛 cleanup 再寫 — 寫入中途失敗(磁碟滿等)finally 才看得到路徑
                 cleanup_srt_tmp = srt_path
+                # R5-2:newline="\n" 關掉 Windows 的 \n→\r\n 轉換;上游若已是 CRLF,
+                # 不 normalize 會寫出 \r\r\n 讓 libass 解析失敗
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(srt_text.replace("\r\n", "\n").replace("\r", "\n"))
 
             # Dual-input dispatch:frames 接了 → 寫 temp mp4 (encode_tensor_to_tempfile 已
             # 處理 audio mux);沒接 → 用 video_path,audio dict (若有接) 需在這層額外 mux。

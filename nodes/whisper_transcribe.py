@@ -255,7 +255,9 @@ def _transcribe_openai_compatible(wav_path, cfg, language, model):
             + ("（端點回應 redirect — 基於 key 安全不跟隨，請直接填最終 base_url）"
                if 300 <= resp.status_code < 400 else "")
         )
-    return resp.text
+    # R5-4:不用 resp.text — 端點常回 text/plain 不帶 charset,requests 會退 ISO-8859-1
+    # 把 UTF-8 中文 SRT 解成亂碼。SRT API 合約就是 UTF-8,顯式解;utf-8-sig 順手吃 BOM。
+    return resp.content.decode("utf-8-sig", errors="replace")
 
 
 def _transcribe_faster_whisper(wav_path, cfg, language, model):

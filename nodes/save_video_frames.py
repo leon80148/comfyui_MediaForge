@@ -10,7 +10,7 @@ from ..utils.video_io import encode_tensor_to_gif, encode_tensor_to_video
 
 
 # CRF mode 預設值（範圍依各 codec 不同，UI 以單一旗標展示後內部 clamp）
-# 注意 *_nvenc 走 -cq 但 range 跟 -crf 一樣 0-51；ProRes 不用
+# 注意 *_nvenc 走 -cq(1-51 明確、0 = automatic 非最高畫質,語意與 -crf 不一對一)；ProRes 不用
 CRF_DEFAULTS = {
     "libx264": 18, "libx265": 22, "libsvtav1": 30, "prores_ks": 0,
     "h264_nvenc": 23, "hevc_nvenc": 25, "av1_nvenc": 28,
