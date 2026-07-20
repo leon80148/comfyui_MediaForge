@@ -1,9 +1,20 @@
 [project]
 name = "comfyui-mediaforge"
 description = "Power-user FFmpeg toolkit for ComfyUI. Tensor<->media bridge with broadcast-grade codec control: subtitle burn-in, multi-overlay Compose pipeline, provider-agnostic AI transcribe/translate, NVENC-aware. Depth > breadth."
-version = "0.6.0"
+version = "0.7.0"
 license = { file = "LICENSE" }
-dependencies = []
+requires-python = ">=3.10"
+# Mirrors requirements.txt (ComfyUI Manager installs from there; this keeps
+# registry / pip metadata honest). Heavy optional deps (faster-whisper) stay
+# lazy-imported and deliberately unlisted — see requirements.txt rationale.
+dependencies = [
+    "imageio-ffmpeg>=0.4.9",
+    "static-ffmpeg>=2.5",
+    "opencc-python-reimplemented>=0.1.7",
+    "requests>=2.28",
+    "fontTools>=4.0",
+    "charset-normalizer>=3.0",
+]
 
 [project.urls]
 Repository = "https://github.com/leon80148/comfyui_MediaForge"
