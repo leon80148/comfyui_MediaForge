@@ -158,15 +158,16 @@ The probe runs once per ComfyUI session via `utils/encoder.py:pick_default_codec
 
 **CRF-equivalent quality (`cq`)**: when `crf` maps to an NVENC encoder, `utils/encoder.py:build_encoder_args()` emits `-rc vbr -cq <n> -b:v 0`. The `-b:v 0` matters — without it NVENC still applies its default ~2 Mbps bitrate target on top of `-cq`, capping quality no matter how low you set `crf`.
 
-**Same number ≠ same quality across encoder families.** MediaForge passes your `crf` value through verbatim (no auto-conversion — converting silently would make "re-run with another codec at the same crf" unpredictable). Rough starting points when switching codecs (1080p SDR; calibrate on your own material — encoder generation and content type shift these by a few units):
+**Same number ≠ same quality across encoder families.** MediaForge passes your `crf` value through verbatim (no auto-conversion — converting silently would make "re-run with another codec at the same crf" unpredictable), and there is no universal equal-quality conversion table: the mapping shifts with encoder generation, preset, and content. What *is* fixed per encoder:
 
-| Target | `libx264` crf | `libx265` crf | `libsvtav1` crf | `h264_nvenc` cq | `hevc_nvenc` / `av1_nvenc` cq |
-|---|---|---|---|---|---|
-| Visually lossless | ~18 | ~22 | ~25 | ~16–17 | ~19–20 |
-| High quality (publish) | ~20–23 | ~25–28 | ~30–32 | ~18–21 | ~23–26 |
-| Draft / preview | ~28 | ~32 | ~40 | ~26 | ~30 |
+| Encoder | Rate-control flag emitted | Valid range | Encoder's own default |
+|---|---|---|---|
+| `libx264` | `-crf` | 0–51 | 23 |
+| `libx265` | `-crf` | 0–51 | 28 |
+| `libsvtav1` | `-crf` | 0–63 | 35 |
+| `h264_nvenc` / `hevc_nvenc` / `av1_nvenc` | `-rc vbr -cq <n> -b:v 0` | 0–51 | (bitrate-driven unless `cq` set) |
 
-Scale notes: x265 reaches x264-parity ~4–5 units higher; SVT-AV1 uses a 0–63 range (not 0–51) and sits higher still; NVENC `cq` nominally shares x264's 0–51 scale but delivers slightly less quality per unit on `h264_nvenc` (drop 2–3 units to compensate), while `hevc_nvenc` / `av1_nvenc` track their CPU siblings' scales more closely.
+Lower = higher quality / bigger file in every family. Note where the encoders' *own defaults* sit — x265 and SVT-AV1 scales run numerically higher than x264 for comparable intent — and that NVENC `-cq` does not track `libx264 -crf` unit-for-unit. When switching codec families, treat your old value as a starting point only: encode a short representative clip, compare size/quality, and adjust from there.
 
 To override per-node, just pick from the dropdown — existing workflows that hard-coded `"h264 (libx264)"` keep working (default change only affects newly dragged nodes).
 
@@ -856,7 +857,7 @@ Centralized provider configuration. Outputs an `AI_CONFIG` dict that all AI node
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible` (any `/v1/...` HTTP endpoint) / `faster_whisper_local` (in-process) |
 | `base_url` | `https://api.openai.com/v1` | Trailing slash stripped automatically |
-| `api_key` | `""` | **Recommended: `env:OPENAI_API_KEY`** — the `env:` prefix resolves the named environment variable at runtime, so the secret never enters the workflow JSON (a plaintext key serializes into every exported/shared workflow — the canvas mask cannot protect that path; missing variable → clear error). Logged with first 4 chars + `***` mask; node canvas displays plaintext keys masked with `•` (`env:` references shown as-is; click to reveal/edit — see `web/ai_config_mask.js`) |
+| `api_key` | `""` | **Recommended: `env:OPENAI_API_KEY`** — the `env:` prefix resolves the named environment variable at runtime, so the secret never enters the workflow JSON (a plaintext key serializes into every exported/shared workflow — the canvas mask cannot protect that path; missing variable → clear error). As an exfiltration guard, an `env:`-resolved key is only allowed toward allowlisted hosts (built-in: `api.openai.com` / `api.groq.com` / localhost family) — extend with the `MF_AI_KEY_ALLOWED_HOSTS` env var (comma-separated hostnames, global) or `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>` (per-variable), so a malicious shared workflow can't pair `env:SOME_SECRET` with an attacker endpoint. Logged with first 4 chars + `***` mask; node canvas displays plaintext keys masked with `•` (`env:` references shown as-is; click to reveal/edit — see `web/ai_config_mask.js`) |
 | `model` | `gpt-4o-mini` | Free-form string. Whisper auto-substitutes if not an STT id (e.g. `gpt-4o-mini` reused for translate; Whisper falls back to `whisper-1`) |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — only used by `faster_whisper_local` |
 

@@ -133,19 +133,18 @@ def build_encoder_args(codec_id, *, crf=None, bitrate=None, preset=None):
     - prores_ks:          (caller 自己加 -profile:v；本函式不碰)
 
     P2-7 quality-value 對齊注意：本函式把同一個 `crf` widget 值原樣傳給各家 encoder，
-    但「同數值 ≠ 同畫質」。粗略起始值（1080p SDR；user-facing 對照表在兩份 README 的
-    「CRF-equivalent quality」段，改數值時兩邊要同步）：
+    但「同數值 ≠ 同畫質」，且不存在通用等畫質換算表（隨 encoder 世代 / preset / 內容
+    變動，R2-2 裁決：不放無量測依據的 parity 數字）。固定的客觀事實：
 
-        目標畫質        libx264   libx265   libsvtav1   h264_nvenc   hevc/av1_nvenc
-        視覺無損          ~18       ~22       ~25         ~16-17       ~19-20
-        高品質(發佈)      ~20-23    ~25-28    ~30-32      ~18-21       ~23-26
-        堪用(預覽/草稿)   ~28       ~32       ~40         ~26          ~30
+        encoder      flag    range   encoder default
+        libx264      -crf    0-51    23
+        libx265      -crf    0-51    28
+        libsvtav1    -crf    0-63    35
+        *_nvenc      -cq     0-51    (未設 cq 時 bitrate 導向)
 
-    x265 同畫質數值比 x264 高 ~4-5；SVT-AV1 的 crf 範圍是 0-63（非 0-51）、同畫質數值
-    再高一截；h264_nvenc 同數值畫質略遜 x264（-2~-3 補償），hevc/av1_nvenc 較貼近各自
-    CPU 版刻度——三種 NVENC 不能混用同一個數值直覺。數值是起點、依素材校準。
+    User-facing 版本在兩份 README 的「CRF-equivalent quality」段（改內容要同步）。
     UI 不自動換算（widget 值不動）——自動換算會讓「同 crf 重跑不同 codec」的輸出
-    不可預期，違反 thin-wrapper 原則。
+    不可預期，違反 thin-wrapper 原則；換 family 時使用者以舊值為起點自行校準。
     """
     # Lazy import 避開 utils.encoder ↔ utils.video_io 的 module load 循環
     from .video_io import svtav1_preset_from_name

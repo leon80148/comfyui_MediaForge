@@ -15,9 +15,40 @@ v2.1 ROADMAP Phase 5。`AI_CONFIG` 連線型別在 Phase 5 內仍 `experimental`
 api_key 支援 `env:VARNAME` 間接引用（如 `env:OPENAI_API_KEY`）：config() 執行時
 從環境變數解析真值。這是推薦用法 — widget 裡只存變數名，workflow JSON 匯出 /
 分享 / 雲端同步都不會帶出 secret（明文 key 會原樣序列化進 graph state，canvas
-遮罩擋不了這條路）。
+遮罩遮不了這條路）。
+
+Exfiltration guard（Codex R2-1）：env: 能讀任意 process 環境變數，而 base_url 也
+完全由 workflow 控制 — 惡意分享的 workflow 可以配 `env:AWS_SECRET_ACCESS_KEY` +
+攻擊者 endpoint，讓下游節點把 secret 放進 Authorization header 外送。因此
+env:-resolved key 只允許送往 trusted host：內建清單涵蓋 README recipes（OpenAI /
+Groq）與本機推論（localhost 家族）；其他 host 需由使用者用環境變數擴充 —
+`MF_AI_KEY_ALLOWED_HOSTS`（全域，逗號分隔 hostname）或
+`MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>`（綁定單一變數）。環境變數是 server-side
+設定、workflow JSON 碰不到，所以這條 allowlist 攻擊者無法自帶。明文 key 不受限
+（使用者自己打的 key 送去哪是使用者自己的決定；workflow 夾帶的明文 key 只會
+外洩攻擊者自己的 key）。
 """
 import os
+from urllib.parse import urlparse
+
+
+# env:-resolved keys may only be sent to these hosts (+ user-extended ones);
+# see module docstring for the threat model.
+_BUILTIN_ALLOWED_HOSTS = {
+    "api.openai.com",
+    "api.groq.com",
+    "localhost",
+    "127.0.0.1",
+    "::1",
+}
+
+
+def _allowed_hosts_for(var_name):
+    hosts = set(_BUILTIN_ALLOWED_HOSTS)
+    for env_key in (f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}", "MF_AI_KEY_ALLOWED_HOSTS"):
+        raw = os.environ.get(env_key, "")
+        hosts.update(h.strip().lower() for h in raw.split(",") if h.strip())
+    return hosts
 
 
 class MF_AIConfig:
@@ -60,6 +91,20 @@ class MF_AIConfig:
                     f"（例如 export {var_name}=sk-...），或改填明文 key"
                     "（注意：明文 key 會隨 workflow JSON 匯出，分享前請清空）。"
                 )
+            # Exfiltration guard（見 module docstring）：只在 openai_compatible 檢查
+            # — faster_whisper_local 是 in-process、base_url 根本不會被拿去發請求。
+            if provider == "openai_compatible":
+                host = (urlparse(base_url).hostname or "").lower()
+                if host not in _allowed_hosts_for(var_name):
+                    raise ValueError(
+                        f"[AI Config] env: 解析出的 key 不允許送往 base_url host "
+                        f"{host!r}。env: 間接引用的 key 只能送往信任清單內的 host"
+                        f"（內建：{', '.join(sorted(_BUILTIN_ALLOWED_HOSTS))}），"
+                        "防止惡意 workflow 用 env: 讀走任意環境變數再外送。"
+                        "若這是你自己的 endpoint，請在啟動 ComfyUI 的環境加上 "
+                        f"MF_AI_KEY_ALLOWED_HOSTS={host}（全域）或 "
+                        f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}={host}（只綁這個變數）。"
+                    )
             api_key = resolved
         cfg = {
             "provider": provider,

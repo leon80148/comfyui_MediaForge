@@ -158,15 +158,16 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 
 **CRF-equivalent 畫質（`cq`）**：當 `crf` 對到 NVENC encoder 時，`utils/encoder.py:build_encoder_args()` 會吐 `-rc vbr -cq <n> -b:v 0`。這個 `-b:v 0` 很關鍵 — 沒加的話 NVENC 仍會疊加預設 ~2 Mbps 的 bitrate target 在 `-cq` 之上，不管 `crf` 設多低畫質都被蓋住。
 
-**同數值 ≠ 同畫質（跨 encoder family）。** MediaForge 把你填的 `crf` 值原樣傳給各家 encoder（不自動換算 — 偷換會讓「同 crf 換 codec 重跑」的輸出不可預期）。換 codec 時的粗略起始值（1080p SDR；請依自己素材校準 — encoder 世代與內容型態會偏移數個單位）：
+**同數值 ≠ 同畫質（跨 encoder family）。** MediaForge 把你填的 `crf` 值原樣傳給各家 encoder（不自動換算 — 偷換會讓「同 crf 換 codec 重跑」的輸出不可預期），而且**不存在**通用的等畫質換算表：對映關係隨 encoder 世代、preset、內容型態變動。每個 encoder 固定不變的是：
 
-| 目標 | `libx264` crf | `libx265` crf | `libsvtav1` crf | `h264_nvenc` cq | `hevc_nvenc` / `av1_nvenc` cq |
-|---|---|---|---|---|---|
-| 視覺無損 | ~18 | ~22 | ~25 | ~16–17 | ~19–20 |
-| 高品質（發佈） | ~20–23 | ~25–28 | ~30–32 | ~18–21 | ~23–26 |
-| 草稿／預覽 | ~28 | ~32 | ~40 | ~26 | ~30 |
+| Encoder | 實際送出的 rate-control 參數 | 合法範圍 | Encoder 自己的預設 |
+|---|---|---|---|
+| `libx264` | `-crf` | 0–51 | 23 |
+| `libx265` | `-crf` | 0–51 | 28 |
+| `libsvtav1` | `-crf` | 0–63 | 35 |
+| `h264_nvenc` / `hevc_nvenc` / `av1_nvenc` | `-rc vbr -cq <n> -b:v 0` | 0–51 | （沒設 `cq` 時走 bitrate 導向） |
 
-刻度說明：x265 要比 x264 高 ~4–5 單位才同畫質；SVT-AV1 的範圍是 0–63（非 0–51）、數值再高一截；NVENC `cq` 名義上同 x264 的 0–51 刻度，但 `h264_nvenc` 同數值畫質略遜（往下調 2–3 單位補償），`hevc_nvenc` / `av1_nvenc` 則較貼近各自 CPU 版的刻度。
+所有 family 都是數值越低畫質越高／檔案越大。注意各 encoder *自身預設值* 的落點 — x265 與 SVT-AV1 的刻度在同等意圖下數值比 x264 高 — 且 NVENC `-cq` 與 `libx264 -crf` 並非一單位對一單位。換 codec family 時，舊值只能當起點：先用一小段代表性素材試編、比對大小與畫質後再調整。
 
 要 per-node 覆寫直接在 dropdown 選就好 — 既有 workflow 已存了 codec 值（如 `"h264 (libx264)"`）載入時不受影響，新 default 只影響**新拖出來的節點**。
 
@@ -856,7 +857,7 @@ Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改�
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible`（任意 `/v1/...` HTTP endpoint）/ `faster_whisper_local`（in-process） |
 | `base_url` | `https://api.openai.com/v1` | 尾端 `/` 會自動 strip |
-| `api_key` | `""` | **建議填 `env:OPENAI_API_KEY`** — `env:` 前綴會在執行時解析同名環境變數，secret 不會進 workflow JSON（明文 key 會原樣序列化進每一份匯出／分享的 workflow — 畫面遮罩擋不了這條路；變數不存在會給明確錯誤）。log 只露前 4 字 + `***`；節點畫面上明文 key 以 `•` 遮罩顯示（`env:` 引用直接顯示），點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
+| `api_key` | `""` | **建議填 `env:OPENAI_API_KEY`** — `env:` 前綴會在執行時解析同名環境變數，secret 不會進 workflow JSON（明文 key 會原樣序列化進每一份匯出／分享的 workflow — 畫面遮罩擋不了這條路；變數不存在會給明確錯誤）。防外送保護：`env:` 解析出的 key 只允許送往信任 host（內建：`api.openai.com` / `api.groq.com` / localhost 家族）— 可用環境變數 `MF_AI_KEY_ALLOWED_HOSTS`（全域，逗號分隔 hostname）或 `MF_AI_KEY_ALLOWED_HOSTS_<變數名>`（綁單一變數）擴充，讓惡意分享的 workflow 無法用 `env:任意秘密` 配攻擊者 endpoint 外送。log 只露前 4 字 + `***`；節點畫面上明文 key 以 `•` 遮罩顯示（`env:` 引用直接顯示），點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
 | `model` | `gpt-4o-mini` | 自由字串。Whisper 認出來不像 STT id 時會自動換預設（例如 `gpt-4o-mini` 被同時餵給 translate；Whisper 退回 `whisper-1`） |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — 只 `faster_whisper_local` 用 |
 
