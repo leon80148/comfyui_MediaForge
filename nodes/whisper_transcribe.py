@@ -247,9 +247,9 @@ def _transcribe_openai_compatible(wav_path, cfg, language, model):
             url, headers=headers, files=files, data=data,
             timeout=600, allow_redirects=False,
         )
-    # resp.ok 對 3xx 也是 True — 不跟 redirect 之後必須把 3xx 當錯誤收掉，
-    # 否則會拿空 body 當轉錄結果（silent failure）
-    if resp.is_redirect or resp.is_permanent_redirect or not resp.ok:
+    # 只認 2xx — resp.ok 對所有 <400 都是 True（含 300/304 等非 redirect 型 3xx），
+    # 不跟 redirect 之後任何 3xx 都可能帶空 body，當成功收會變 silent failure（R4-2）
+    if not (200 <= resp.status_code < 300):
         raise RuntimeError(
             f"[Whisper Transcribe] OpenAI-compatible 端點失敗 ({resp.status_code}): {resp.text[:500]}"
             + ("（端點回應 redirect — 基於 key 安全不跟隨，請直接填最終 base_url）"

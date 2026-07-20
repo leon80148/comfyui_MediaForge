@@ -129,8 +129,9 @@ class MF_TranslateSubtitle:
             resp = requests.post(url, headers=headers,
                                  data=json.dumps(payload), timeout=300,
                                  allow_redirects=False)
-            # resp.ok 對 3xx 也是 True — 不跟 redirect 之後必須把 3xx 當錯誤收掉
-            if resp.is_redirect or resp.is_permanent_redirect or not resp.ok:
+            # 只認 2xx — resp.ok 對所有 <400 都是 True（含 300/304 等非 redirect 型
+            # 3xx），不跟 redirect 之後任何 3xx 都可能帶空 body（R4-2）
+            if not (200 <= resp.status_code < 300):
                 raise RuntimeError(
                     f"[Translate Subtitle] chat completion 失敗 ({resp.status_code}): "
                     f"{resp.text[:500]}"

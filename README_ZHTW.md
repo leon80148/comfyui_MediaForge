@@ -94,7 +94,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 | `MF_WhisperTranscribe` | `audio_path = "interview.mp4"` |
 | `MF_AIConfig` (LLM) | `provider = "openai_compatible"`, `base_url = "https://api.openai.com/v1"`, `model = "gpt-4o-mini"` |
 | `MF_TranslateSubtitle` | `target_lang = "繁體中文"` |
-| `MF_BurnSubtitle` | 接 SRT path，設定 ASS 字型、顏色、外框 |
+| `MF_BurnSubtitle` | 把翻譯後 SRT wire 進 `srt_text`，設定 ASS 字型、顏色、外框 |
 
 具體 `base_url` / `model` 組合可直接複貼 — 見下方 [AI Provider Recipes](#ai-provider-recipes)。
 
@@ -148,7 +148,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 
 ### 字幕 / 文字輸出
 
-`MF_ConvertChinese` 寫 `.srt` 或 `.txt`（heuristic：轉換後字串含 `-->` 視為 SRT）。`MF_WhisperTranscribe` / `MF_TranslateSubtitle` 回傳 SRT **字串內容**而非檔案 — 直接 wire 給下游 `MF_BurnSubtitle`，或先過 `MF_ConvertChinese`（填 `filename_prefix`）才會落地成檔。
+`MF_ConvertChinese` 寫 `.srt` 或 `.txt`（heuristic：轉換後字串含 `-->` 視為 SRT）。`MF_WhisperTranscribe` / `MF_TranslateSubtitle` 回傳 SRT **字串內容**而非檔案 — 直接 wire 給 `MF_BurnSubtitle` 的 `srt_text` 輸入（節點內部落地暫存檔），要把 SRT 存成真檔案的話走 `MF_ConvertChinese`（填 `filename_prefix`）。
 
 ## 智慧 GPU codec 預設
 
@@ -165,9 +165,9 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 | `libx264` | `-crf` | 0–51 | 23 |
 | `libx265` | `-crf` | 0–51 | 28 |
 | `libsvtav1` | `-crf` | 0–63 | 35 |
-| `h264_nvenc` / `hevc_nvenc` / `av1_nvenc` | `-rc vbr -cq <n> -b:v 0` | 0–51 | （沒設 `cq` 時走 bitrate 導向） |
+| `h264_nvenc` / `hevc_nvenc` / `av1_nvenc` | `-rc vbr -cq <n> -b:v 0` | 1–51 為明確 CQ；`0` = automatic（encoder 自決，**不是**最高畫質） | （沒設 `cq` 時走 bitrate 導向） |
 
-所有 family 都是數值越低畫質越高／檔案越大。注意各 encoder *自身預設值* 的落點 — x265 與 SVT-AV1 的刻度在同等意圖下數值比 x264 高 — 且 NVENC `-cq` 與 `libx264 -crf` 並非一單位對一單位。換 codec family 時，舊值只能當起點：先用一小段代表性素材試編、比對大小與畫質後再調整。
+在各 family 的明確數值範圍內，越低畫質越高／檔案越大（NVENC 的 `cq=0` 是 auto sentinel、不是「比 1 更好」）。注意各 encoder *自身預設值* 的落點 — x265 與 SVT-AV1 的刻度在同等意圖下數值比 x264 高 — 且 NVENC `-cq` 與 `libx264 -crf` 並非一單位對一單位。換 codec family 時，舊值只能當起點：先用一小段代表性素材試編、比對大小與畫質後再調整。
 
 要 per-node 覆寫直接在 dropdown 選就好 — 既有 workflow 已存了 codec 值（如 `"h264 (libx264)"`）載入時不受影響，新 default 只影響**新拖出來的節點**。
 
@@ -261,6 +261,7 @@ OpenCC 簡繁中文轉換，對純文字或 SRT 檔都通用。字元級對應�
 
 | 輸入 | 型別 | 預設 | 何時用 |
 |---|---|---|---|
+| `srt_text` | STRING（input-only） | — | 來自 `MF_WhisperTranscribe` / `MF_TranslateSubtitle` 的 SRT **內容**字串 — 內部落地 plugin-local 暫存檔；隱藏 `srt_path` |
 | `frames` | IMAGE | — | Wire 來自 VHS / AnimateDiff / LoadVideoFrames；隱藏 `video_path` |
 | `tensor_fps` | FLOAT | `30.0` | 從 `frames` 寫 temp `.mp4` 的 fps |
 | `audio` | AUDIO | — | 外部音訊 pin，預設跟 source 音訊混音 |
@@ -857,7 +858,7 @@ Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改�
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible`（任意 `/v1/...` HTTP endpoint）/ `faster_whisper_local`（in-process） |
 | `base_url` | `https://api.openai.com/v1` | 尾端 `/` 會自動 strip |
-| `api_key` | `""` | **建議填 `env:OPENAI_API_KEY`** — `env:` 前綴會在執行時解析同名環境變數，secret 不會進 workflow JSON（明文 key 會原樣序列化進每一份匯出／分享的 workflow — 畫面遮罩擋不了這條路；變數不存在會給明確錯誤）。防外送保護：`env:` 解析出的 key 只允許送往信任 host（內建：`api.openai.com` / `api.groq.com` / localhost 家族）— 可用環境變數 `MF_AI_KEY_ALLOWED_HOSTS`（全域，逗號分隔 hostname）或 `MF_AI_KEY_ALLOWED_HOSTS_<變數名>`（綁單一變數）擴充，讓惡意分享的 workflow 無法用 `env:任意秘密` 配攻擊者 endpoint 外送。log 只露前 4 字 + `***`；節點畫面上明文 key 以 `•` 遮罩顯示（`env:` 引用直接顯示），點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
+| `api_key` | `""` | **建議填 `env:OPENAI_API_KEY`** — `env:` 前綴會在執行時解析同名環境變數，secret 不會進 workflow JSON（明文 key 會原樣序列化進每一份匯出／分享的 workflow — 畫面遮罩擋不了這條路；變數不存在會給明確錯誤）。防外送保護：`env:` 解析出的 key 只允許送往信任 host（內建：`api.openai.com` / `api.groq.com` / localhost 家族）— 可用環境變數 `MF_AI_KEY_ALLOWED_HOSTS`（全域，逗號分隔 hostname）或 `MF_AI_KEY_ALLOWED_HOSTS_<變數名>`（綁單一變數）擴充，讓惡意分享的 workflow 無法用 `env:任意秘密` 配攻擊者 endpoint 外送。`env:` 解析的 key 對非 loopback host 一律要求 **HTTPS**（明文 HTTP 會暴露 Bearer header）— 只有 `localhost` / `127.0.0.1` / `::1` 可走 `http://`；內網 IP 視同遠端，即使加進 allowlist 也需要 HTTPS（或改用明文 key，兩道防護都不適用）。log 只露前 4 字 + `***`；節點畫面上明文 key 以 `•` 遮罩顯示（`env:` 引用直接顯示），點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
 | `model` | `gpt-4o-mini` | 自由字串。Whisper 認出來不像 STT id 時會自動換預設（例如 `gpt-4o-mini` 被同時餵給 translate；Whisper 退回 `whisper-1`） |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — 只 `faster_whisper_local` 用 |
 
@@ -881,7 +882,7 @@ Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改�
 
 **選用**：`audio`（AUDIO dict）— 接了就蓋過 `audio_path`。Client 端先下採樣到 16 kHz mono 讓各 backend 結果一致。
 
-**輸出**：`srt_text` STRING — 標準 SRT（多段），直接 wire 給 `MF_TranslateSubtitle.srt_text` 或 `MF_BurnSubtitle.srt_path`（要存檔的話先過 `MF_ConvertChinese` 給 `filename_prefix`）。
+**輸出**：`srt_text` STRING — 標準 SRT（多段），直接 wire 給 `MF_TranslateSubtitle.srt_text` 或 `MF_BurnSubtitle.srt_text`（要另外存檔的話走 `MF_ConvertChinese` 給 `filename_prefix`）。
 
 **Backend 語意**（看 `ai_config.provider`）：
 - `openai_compatible` — POST 到 `<base_url>/audio/transcriptions`。支援 OpenAI、Groq、任意 OpenAI-API 相容 server。需要 `pip install requests`。

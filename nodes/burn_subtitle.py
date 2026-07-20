@@ -13,6 +13,7 @@ from ..utils.cache_key import path_fingerprint
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg, probe_has_audio_stream, run_ffmpeg
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
+from ..utils.plugin_tmp import mkstemp_in_plugin_tmp
 from ..utils.video_io import encode_tensor_to_tempfile, write_audio_dict_to_wav
 
 
@@ -75,6 +76,12 @@ class MF_BurnSubtitle:
                 "margin_r": ("INT", {"default": 50, "min": 0, "max": 1000}),
             },
             "optional": {
+                # R4-1:字幕的 dual-input。MF_WhisperTranscribe / MF_TranslateSubtitle 輸出
+                # 的是 SRT 內容字串（不是檔案）— 這個 pin 讓它們直接 wire 進來，內部落地
+                # 暫存檔（.mf_tmp/）後走同一條 subtitles filter。接上時 srt_path 被
+                # web/dual_input_lock.js 隱藏（EXTRA_INPUT_LOCKS）。forceInput：內容是
+                # 上游產物，不該讓使用者在 widget 手打整份 SRT。
+                "srt_text": ("STRING", {"forceInput": True}),
                 # Tensor pipeline (in-memory chain):連線 frames 時 web/dual_input_lock.js 會 hide 上面的 video_path
                 "frames": ("IMAGE",),
                 "tensor_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 240.0, "step": 0.1}),
@@ -103,12 +110,19 @@ class MF_BurnSubtitle:
              font_color_hex, bold, italic, letter_spacing,
              outline_color_hex, outline_width, shadow_depth, border_style, back_color_hex,
              alignment, margin_v, margin_l, margin_r,
-             frames=None, tensor_fps=30.0, audio=None,
+             srt_text=None, frames=None, tensor_fps=30.0, audio=None,
              keep_source_audio=True,
              target_fps=0.0):
         if not ensure_ffmpeg():
             raise RuntimeError("[Burn Subtitle] FFmpeg / FFprobe 未在 PATH 中,請先安裝。")
-        if not os.path.exists(srt_path):
+        # 字幕 dual-input 驗證先做(fail fast);srt_text 的暫存檔落地延後到 try 內,
+        # 讓它跟其他 temp 一樣由 finally 保證清理。
+        if srt_text is not None and not srt_text.strip():
+            raise ValueError(
+                "[Burn Subtitle] srt_text 已連線但內容為空 — 請檢查上游"
+                "(Whisper/Translate)輸出,或改用 srt_path 指定字幕檔。"
+            )
+        if srt_text is None and not os.path.exists(srt_path):
             raise FileNotFoundError(f"[Burn Subtitle] 找不到字幕:{srt_path}")
 
         # 字型解析 — placeholder / 不存在 / family name 偵測都走 helper、共用 ComposeBurnSubtitle
@@ -131,7 +145,17 @@ class MF_BurnSubtitle:
 
         cleanup_tmp = None
         cleanup_audio_tmp = None
+        cleanup_srt_tmp = None
         try:
+            # 字幕 dual-input dispatch(R4-1):srt_text 接了 → 落地 .mf_tmp/ 暫存檔
+            # (同 Compose drawtext textfile 的理由:Windows 非 ASCII username 的系統
+            # temp 路徑會讓 libavfilter 開檔失敗),沒接 → 用 srt_path(上面已驗證存在)。
+            if srt_text is not None:
+                fd, srt_path = mkstemp_in_plugin_tmp(suffix=".srt", prefix="mf_burn_srt_")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(srt_text)
+                cleanup_srt_tmp = srt_path
+
             # Dual-input dispatch:frames 接了 → 寫 temp mp4 (encode_tensor_to_tempfile 已
             # 處理 audio mux);沒接 → 用 video_path,audio dict (若有接) 需在這層額外 mux。
             if frames is not None:
@@ -207,7 +231,7 @@ class MF_BurnSubtitle:
             if not run_ffmpeg(command, tag="Burn Subtitle"):
                 raise RuntimeError("[Burn Subtitle] FFmpeg 燒字幕失敗,請查看上方 stderr 輸出。")
         finally:
-            for tmp in (cleanup_tmp, cleanup_audio_tmp):
+            for tmp in (cleanup_tmp, cleanup_audio_tmp, cleanup_srt_tmp):
                 if tmp:
                     try:
                         os.unlink(tmp)

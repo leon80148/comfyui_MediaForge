@@ -136,11 +136,11 @@ def build_encoder_args(codec_id, *, crf=None, bitrate=None, preset=None):
     但「同數值 ≠ 同畫質」，且不存在通用等畫質換算表（隨 encoder 世代 / preset / 內容
     變動，R2-2 裁決：不放無量測依據的 parity 數字）。固定的客觀事實：
 
-        encoder      flag    range   encoder default
-        libx264      -crf    0-51    23
-        libx265      -crf    0-51    28
-        libsvtav1    -crf    0-63    35
-        *_nvenc      -cq     0-51    (未設 cq 時 bitrate 導向)
+        encoder      flag    range                        encoder default
+        libx264      -crf    0-51                         23
+        libx265      -crf    0-51                         28
+        libsvtav1    -crf    0-63                         35
+        *_nvenc      -cq     1-51 (0 = automatic 而非最高畫質)   (未設 cq 時 bitrate 導向)
 
     User-facing 版本在兩份 README 的「CRF-equivalent quality」段（改內容要同步）。
     UI 不自動換算（widget 值不動）——自動換算會讓「同 crf 重跑不同 codec」的輸出

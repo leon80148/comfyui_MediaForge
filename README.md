@@ -94,7 +94,7 @@ All four effects accumulate and compile to **one** `filter_complex_script` — t
 | `MF_WhisperTranscribe` | `audio_path = "interview.mp4"` |
 | `MF_AIConfig` (LLM) | `provider = "openai_compatible"`, `base_url = "https://api.openai.com/v1"`, `model = "gpt-4o-mini"` |
 | `MF_TranslateSubtitle` | `target_lang = "繁體中文"` |
-| `MF_BurnSubtitle` | picks up SRT path, sets ASS font/color/outline |
+| `MF_BurnSubtitle` | wire translated SRT into `srt_text`, set ASS font/color/outline |
 
 See [AI Provider Recipes](#ai-provider-recipes) below for copy-paste `base_url` / `model` combos.
 
@@ -148,7 +148,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 
 ### Subtitle / text outputs
 
-`MF_ConvertChinese` writes `.srt` or `.txt` (heuristic: presence of `-->` in converted text). `MF_WhisperTranscribe` / `MF_TranslateSubtitle` return SRT **as a string** (not a file) — pass them downstream into `MF_BurnSubtitle` directly, or pipe through `MF_ConvertChinese` with `filename_prefix` set to materialize a file.
+`MF_ConvertChinese` writes `.srt` or `.txt` (heuristic: presence of `-->` in converted text). `MF_WhisperTranscribe` / `MF_TranslateSubtitle` return SRT **as a string** (not a file) — wire it into `MF_BurnSubtitle`'s `srt_text` input (the node materializes a temp file internally), or pipe through `MF_ConvertChinese` with `filename_prefix` set when you want the SRT saved as a real file.
 
 ## Smart GPU codec default
 
@@ -165,9 +165,9 @@ The probe runs once per ComfyUI session via `utils/encoder.py:pick_default_codec
 | `libx264` | `-crf` | 0–51 | 23 |
 | `libx265` | `-crf` | 0–51 | 28 |
 | `libsvtav1` | `-crf` | 0–63 | 35 |
-| `h264_nvenc` / `hevc_nvenc` / `av1_nvenc` | `-rc vbr -cq <n> -b:v 0` | 0–51 | (bitrate-driven unless `cq` set) |
+| `h264_nvenc` / `hevc_nvenc` / `av1_nvenc` | `-rc vbr -cq <n> -b:v 0` | 1–51 explicit; `0` = automatic (encoder picks — **not** max quality) | (bitrate-driven unless `cq` set) |
 
-Lower = higher quality / bigger file in every family. Note where the encoders' *own defaults* sit — x265 and SVT-AV1 scales run numerically higher than x264 for comparable intent — and that NVENC `-cq` does not track `libx264 -crf` unit-for-unit. When switching codec families, treat your old value as a starting point only: encode a short representative clip, compare size/quality, and adjust from there.
+Within each family's explicit range, lower = higher quality / bigger file (NVENC's `cq=0` is the auto sentinel, not "better than 1"). Note where the encoders' *own defaults* sit — x265 and SVT-AV1 scales run numerically higher than x264 for comparable intent — and that NVENC `-cq` does not track `libx264 -crf` unit-for-unit. When switching codec families, treat your old value as a starting point only: encode a short representative clip, compare size/quality, and adjust from there.
 
 To override per-node, just pick from the dropdown — existing workflows that hard-coded `"h264 (libx264)"` keep working (default change only affects newly dragged nodes).
 
@@ -261,6 +261,7 @@ Hard-burn an SRT subtitle file into a video with full ASS style control. Colors 
 
 | Input | Type | Default | When used |
 |---|---|---|---|
+| `srt_text` | STRING (input-only) | — | SRT **content** from `MF_WhisperTranscribe` / `MF_TranslateSubtitle` — written to a plugin-local temp file internally; hides `srt_path` |
 | `frames` | IMAGE | — | Wire from VHS / AnimateDiff / LoadVideoFrames; hides `video_path` |
 | `tensor_fps` | FLOAT | `30.0` | fps of the temp `.mp4` written from `frames` |
 | `audio` | AUDIO | — | External audio pin; merged with source audio by default |
@@ -857,7 +858,7 @@ Centralized provider configuration. Outputs an `AI_CONFIG` dict that all AI node
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible` (any `/v1/...` HTTP endpoint) / `faster_whisper_local` (in-process) |
 | `base_url` | `https://api.openai.com/v1` | Trailing slash stripped automatically |
-| `api_key` | `""` | **Recommended: `env:OPENAI_API_KEY`** — the `env:` prefix resolves the named environment variable at runtime, so the secret never enters the workflow JSON (a plaintext key serializes into every exported/shared workflow — the canvas mask cannot protect that path; missing variable → clear error). As an exfiltration guard, an `env:`-resolved key is only allowed toward allowlisted hosts (built-in: `api.openai.com` / `api.groq.com` / localhost family) — extend with the `MF_AI_KEY_ALLOWED_HOSTS` env var (comma-separated hostnames, global) or `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>` (per-variable), so a malicious shared workflow can't pair `env:SOME_SECRET` with an attacker endpoint. Logged with first 4 chars + `***` mask; node canvas displays plaintext keys masked with `•` (`env:` references shown as-is; click to reveal/edit — see `web/ai_config_mask.js`) |
+| `api_key` | `""` | **Recommended: `env:OPENAI_API_KEY`** — the `env:` prefix resolves the named environment variable at runtime, so the secret never enters the workflow JSON (a plaintext key serializes into every exported/shared workflow — the canvas mask cannot protect that path; missing variable → clear error). As an exfiltration guard, an `env:`-resolved key is only allowed toward allowlisted hosts (built-in: `api.openai.com` / `api.groq.com` / localhost family) — extend with the `MF_AI_KEY_ALLOWED_HOSTS` env var (comma-separated hostnames, global) or `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>` (per-variable), so a malicious shared workflow can't pair `env:SOME_SECRET` with an attacker endpoint. `env:`-resolved keys also require **HTTPS** toward any non-loopback host (plaintext HTTP would expose the Bearer header) — only `localhost` / `127.0.0.1` / `::1` may use `http://`; a private-LAN IP counts as remote, so an allowlisted LAN endpoint still needs HTTPS (or use a plaintext key, which skips both guards). Logged with first 4 chars + `***` mask; node canvas displays plaintext keys masked with `•` (`env:` references shown as-is; click to reveal/edit — see `web/ai_config_mask.js`) |
 | `model` | `gpt-4o-mini` | Free-form string. Whisper auto-substitutes if not an STT id (e.g. `gpt-4o-mini` reused for translate; Whisper falls back to `whisper-1`) |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — only used by `faster_whisper_local` |
 
@@ -881,7 +882,7 @@ Audio file or in-memory `AUDIO` dict → SRT text (string output, not file). Bac
 
 **Optional**: `audio` (AUDIO dict) — overrides `audio_path` when wired. Downsampled to 16 kHz mono on the client side for consistent results across backends.
 
-**Output**: `srt_text` STRING — well-formed SRT (multi-block) ready to wire into `MF_TranslateSubtitle.srt_text` or `MF_BurnSubtitle.srt_path` (via `MF_ConvertChinese` to materialize to a file first, if needed).
+**Output**: `srt_text` STRING — well-formed SRT (multi-block) ready to wire into `MF_TranslateSubtitle.srt_text` or `MF_BurnSubtitle.srt_text` directly (use `MF_ConvertChinese` with `filename_prefix` when you also want the SRT saved as a file).
 
 **Backend semantics** (from `ai_config.provider`):
 - `openai_compatible` — POSTs to `<base_url>/audio/transcriptions`. Works with OpenAI, Groq, any OpenAI-API-compatible server. Requires `pip install requests`.

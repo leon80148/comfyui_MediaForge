@@ -55,6 +55,15 @@ const DUAL_INPUT_NODES = {
     "MF_ExtractAudio":      { trigger_input: "audio", lock_widget: "audio_source" },
 };
 
+// Secondary connection-driven locks for nodes that have a SECOND dual-input pair
+// beyond the main one in DUAL_INPUT_NODES (which the schema-sync test parses as
+// exactly one flat entry per node — hence a separate table instead of nesting).
+// Same shape and semantics as a DUAL_INPUT_NODES entry.
+const EXTRA_INPUT_LOCKS = {
+    // R4-1: srt_text (STRING forceInput, from Whisper/Translate) replaces srt_path.
+    "MF_BurnSubtitle": { trigger_input: "srt_text", lock_widget: "srt_path" },
+};
+
 // node type → array of widget-value conditional rules
 //   trigger : the widget whose value drives visibility
 //   value   : when trigger.value === this, the listed widgets are hidden
@@ -201,28 +210,32 @@ function chainWidgetCallback(widget, extra) {
 app.registerExtension({
     name: "MediaForge.DualInputLock",
     async beforeRegisterNodeDef(nodeType, nodeData, _app) {
-        const config = DUAL_INPUT_NODES[nodeData.name];
+        // A node may have a primary dual-input pair (DUAL_INPUT_NODES) plus secondary
+        // ones (EXTRA_INPUT_LOCKS) — each config is applied independently.
+        const connConfigs = [DUAL_INPUT_NODES[nodeData.name], EXTRA_INPUT_LOCKS[nodeData.name]].filter(Boolean);
         const valueRules = WIDGET_VALUE_LOCKS[nodeData.name];
-        if (!config && !valueRules) return;
+        if (!connConfigs.length && !valueRules) return;
 
-        if (config) {
+        if (connConfigs.length) {
             // Live connect/disconnect events
             chainCallback(nodeType.prototype, "onConnectionsChange", function (type, index, _connected, _link_info) {
                 // LiteGraph.INPUT === 1 ; we only care about input-side changes
                 if (type !== 1) return;
                 const slot = this.inputs?.[index];
-                if (!slot || slot.name !== config.trigger_input) return;
-                applyLockState(this, config);
+                if (!slot) return;
+                for (const config of connConfigs) {
+                    if (slot.name === config.trigger_input) applyLockState(this, config);
+                }
             });
 
             // Fresh node drag-from-menu
             chainCallback(nodeType.prototype, "onNodeCreated", function () {
-                applyLockState(this, config);
+                for (const config of connConfigs) applyLockState(this, config);
             });
 
             // Saved-workflow load — at this point inputs[].link are restored
             chainCallback(nodeType.prototype, "onConfigure", function () {
-                applyLockState(this, config);
+                for (const config of connConfigs) applyLockState(this, config);
             });
         }
 
