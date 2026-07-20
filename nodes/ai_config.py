@@ -34,12 +34,12 @@ from urllib.parse import urlparse
 
 # env:-resolved keys may only be sent to these hosts (+ user-extended ones);
 # see module docstring for the threat model.
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
 _BUILTIN_ALLOWED_HOSTS = {
     "api.openai.com",
     "api.groq.com",
-    "localhost",
-    "127.0.0.1",
-    "::1",
+    *_LOOPBACK_HOSTS,
 }
 
 
@@ -94,7 +94,8 @@ class MF_AIConfig:
             # Exfiltration guard（見 module docstring）：只在 openai_compatible 檢查
             # — faster_whisper_local 是 in-process、base_url 根本不會被拿去發請求。
             if provider == "openai_compatible":
-                host = (urlparse(base_url).hostname or "").lower()
+                parsed = urlparse(base_url)
+                host = (parsed.hostname or "").lower()
                 if host not in _allowed_hosts_for(var_name):
                     raise ValueError(
                         f"[AI Config] env: 解析出的 key 不允許送往 base_url host "
@@ -104,6 +105,16 @@ class MF_AIConfig:
                         "若這是你自己的 endpoint，請在啟動 ComfyUI 的環境加上 "
                         f"MF_AI_KEY_ALLOWED_HOSTS={host}（全域）或 "
                         f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}={host}（只綁這個變數）。"
+                    )
+                # R3-1：host 過了 allowlist 還不夠 — http:// 的 Bearer header 是明文，
+                # 網路攔截者一樣拿得到 key。遠端 host 強制 https；只有 loopback
+                # （封包不出本機）允許 http。
+                if parsed.scheme != "https" and host not in _LOOPBACK_HOSTS:
+                    raise ValueError(
+                        f"[AI Config] env: 間接引用的 key 只能走 https 送往遠端 host"
+                        f"（目前 base_url 是 {parsed.scheme}://{host}），明文 HTTP 會把 "
+                        "Authorization header 暴露給網路攔截者。請把 base_url 改成 "
+                        "https://，或本機推論改用 localhost / 127.0.0.1。"
                     )
             api_key = resolved
         cfg = {

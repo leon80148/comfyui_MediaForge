@@ -90,10 +90,10 @@ All four effects accumulate and compile to **one** `filter_complex_script` — t
 
 | Node | Key inputs |
 |---|---|
-| `MF_AIConfig` (ASR) | `provider = "openai"`, `base_url = "https://api.groq.com/openai/v1"`, `model = "whisper-large-v3"` |
-| `MF_WhisperTranscribe` | `audio_path = "interview.mp4"`, `backend = "openai_compatible"` |
-| `MF_AIConfig` (LLM) | `provider = "openai"`, `base_url = "https://api.openai.com/v1"`, `model = "gpt-4o-mini"` |
-| `MF_TranslateSubtitle` | `target_language = "繁體中文"` |
+| `MF_AIConfig` (ASR) | `provider = "openai_compatible"`, `base_url = "https://api.groq.com/openai/v1"`, `model = "whisper-large-v3"` |
+| `MF_WhisperTranscribe` | `audio_path = "interview.mp4"` |
+| `MF_AIConfig` (LLM) | `provider = "openai_compatible"`, `base_url = "https://api.openai.com/v1"`, `model = "gpt-4o-mini"` |
+| `MF_TranslateSubtitle` | `target_lang = "繁體中文"` |
 | `MF_BurnSubtitle` | picks up SRT path, sets ASS font/color/outline |
 
 See [AI Provider Recipes](#ai-provider-recipes) below for copy-paste `base_url` / `model` combos.
@@ -241,7 +241,7 @@ Hard-burn an SRT subtitle file into a video with full ASS style control. Colors 
 | Source | `srt_path` | `input/sample.srt` | UTF-8 SRT file |
 | Output | `filename_prefix` | `MediaForge/subtitled` | Auto-counter → `output/<prefix>_NNNNN.mp4` |
 | Encode | `codec` | smart (NVENC if available, else libx264) | Same catalog as SaveVideoFrames / ComposeVideo |
-| Encode | `crf` | `18` (0–51) | 0 lossless, 18 visually lossless, 23 standard, 28 acceptable |
+| Encode | `crf` | `18` (0–51) | Lower = higher quality / bigger file. Passed through verbatim per family (`-crf`, or NVENC `-cq`) — scale meaning differs by codec, see [Smart GPU codec default](#smart-gpu-codec-default) |
 | Encode | `preset` | `medium` | `ultrafast` … `veryslow` |
 | Font | `font` | `msjh.ttc` if present, else first in `font/` | Reads `<plugin>/font/*.ttf|.otf|.ttc`; `fontTools` auto-detects the Family Name |
 | Font | `font_size` | `24` (8–150) | px |
@@ -369,7 +369,7 @@ Tensor → encoded video file. The canonical tensor→file producer; pairs with 
 | `fps` | `30.0` | Source fps for the rawvideo pipe — use `LoadVideoFrames.fps` for roundtrip |
 | `codec` | smart default | H.264 / HEVC / AV1 / ProRes / `gif (palette)` + NVENC variants |
 | `encode_mode` | `crf` | `crf` / `bitrate` / `target_size` |
-| `crf` | `18` (0–51) | Used in `crf` mode. 0 lossless, 18 visually lossless, 23 standard, 28 acceptable |
+| `crf` | `18` (0–51) | Used in `crf` mode. Lower = higher quality / bigger file; scale meaning differs by codec family — see [Smart GPU codec default](#smart-gpu-codec-default) |
 | `bitrate_kbps` | `4000` | Used in `bitrate` mode (e.g. `4000` = 4 Mbps) |
 | `target_size_mb` | `8.0` | Used in `target_size` mode — auto-computes bitrate from duration |
 | `preset` | `medium` | `ultrafast` … `veryslow` |

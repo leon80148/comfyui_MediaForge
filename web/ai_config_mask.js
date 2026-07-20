@@ -109,8 +109,17 @@ function maskedWidgetMouse(event, pos, node) {
     const widget = this;
     try {
         canvas.prompt("api_key", widget.value ?? "", (v) => {
+            if (v === widget.value) return;
+            const prev = widget.value;
             widget.value = v;
-            widget.callback?.(widget.value, canvas, node, pos, event);
+            // Mirror LiteGraph's native text-widget commit path: fire the widget
+            // callback AND mark the graph changed — without the version bump +
+            // dirty flags, editing the key wouldn't trigger workflow dirty
+            // tracking / autosave like a plain STRING widget does.
+            try { widget.callback?.(widget.value, canvas, node, pos, event); } catch (e) { console.warn("[MediaForge] ai_config_mask: widget callback threw", e); }
+            try { node.onWidgetChanged?.(widget.name, v, prev, widget); } catch (_e) { /* optional hook */ }
+            if (node.graph && typeof node.graph._version === "number") node.graph._version++;
+            node.setDirtyCanvas?.(true, true);
         }, event);
     } catch (err) {
         console.warn("[MediaForge] ai_config_mask: canvas.prompt failed, falling back to no-op click", err);

@@ -90,10 +90,10 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 | 節點 | 關鍵設定 |
 |---|---|
-| `MF_AIConfig` (ASR) | `provider = "openai"`, `base_url = "https://api.groq.com/openai/v1"`, `model = "whisper-large-v3"` |
-| `MF_WhisperTranscribe` | `audio_path = "interview.mp4"`, `backend = "openai_compatible"` |
-| `MF_AIConfig` (LLM) | `provider = "openai"`, `base_url = "https://api.openai.com/v1"`, `model = "gpt-4o-mini"` |
-| `MF_TranslateSubtitle` | `target_language = "繁體中文"` |
+| `MF_AIConfig` (ASR) | `provider = "openai_compatible"`, `base_url = "https://api.groq.com/openai/v1"`, `model = "whisper-large-v3"` |
+| `MF_WhisperTranscribe` | `audio_path = "interview.mp4"` |
+| `MF_AIConfig` (LLM) | `provider = "openai_compatible"`, `base_url = "https://api.openai.com/v1"`, `model = "gpt-4o-mini"` |
+| `MF_TranslateSubtitle` | `target_lang = "繁體中文"` |
 | `MF_BurnSubtitle` | 接 SRT path，設定 ASS 字型、顏色、外框 |
 
 具體 `base_url` / `model` 組合可直接複貼 — 見下方 [AI Provider Recipes](#ai-provider-recipes)。
@@ -241,7 +241,7 @@ OpenCC 簡繁中文轉換，對純文字或 SRT 檔都通用。字元級對應�
 | 來源 | `srt_path` | `input/sample.srt` | UTF-8 SRT |
 | 輸出 | `filename_prefix` | `MediaForge/subtitled` | Auto-counter → `output/<prefix>_NNNNN.mp4` |
 | 編碼 | `codec` | smart（有 NVENC 用、沒有用 libx264） | 跟 SaveVideoFrames / ComposeVideo 共用 catalog |
-| 編碼 | `crf` | `18` (0–51) | 0 無損、18 視覺無損、23 標準、28 堪用 |
+| 編碼 | `crf` | `18` (0–51) | 越低畫質越高／檔案越大。原樣傳給各 family（`-crf` 或 NVENC `-cq`）— 刻度意義隨 codec 不同，見[智慧 GPU codec 預設](#智慧-gpu-codec-預設) |
 | 編碼 | `preset` | `medium` | `ultrafast` … `veryslow` |
 | 字型 | `font` | `msjh.ttc` 有就用、否則第一個 | 讀 `<plugin>/font/*.ttf|.otf|.ttc`；`fontTools` 自動讀 Family Name |
 | 字型 | `font_size` | `24` (8–150) | px |
@@ -369,7 +369,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 | `fps` | `30.0` | rawvideo pipe 的來源 fps — roundtrip 從 LoadVideoFrames 接過來時用其 `fps` |
 | `codec` | smart 預設 | H.264 / HEVC / AV1 / ProRes / `gif (palette)` + NVENC variants |
 | `encode_mode` | `crf` | `crf` / `bitrate` / `target_size` |
-| `crf` | `18` (0–51) | `crf` mode 用。0 無損、18 視覺無損、23 標準、28 堪用 |
+| `crf` | `18` (0–51) | `crf` mode 用。越低畫質越高／檔案越大；刻度意義隨 codec family 不同，見[智慧 GPU codec 預設](#智慧-gpu-codec-預設) |
 | `bitrate_kbps` | `4000` | `bitrate` mode 用（4000 = 4 Mbps） |
 | `target_size_mb` | `8.0` | `target_size` mode 用 — 從 duration 反算 bitrate |
 | `preset` | `medium` | `ultrafast` … `veryslow` |

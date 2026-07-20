@@ -241,10 +241,19 @@ def _transcribe_openai_compatible(wav_path, cfg, language, model):
             "response_format": "srt",
             "language": language,
         }
-        resp = requests.post(url, headers=headers, files=files, data=data, timeout=600)
-    if not resp.ok:
+        # allow_redirects=False：redirect 目的地不在 AIConfig 的 host allowlist
+        # 保護範圍內，跟著跳轉可能把 Bearer key 帶去未驗證的 host（R3-1）
+        resp = requests.post(
+            url, headers=headers, files=files, data=data,
+            timeout=600, allow_redirects=False,
+        )
+    # resp.ok 對 3xx 也是 True — 不跟 redirect 之後必須把 3xx 當錯誤收掉，
+    # 否則會拿空 body 當轉錄結果（silent failure）
+    if resp.is_redirect or resp.is_permanent_redirect or not resp.ok:
         raise RuntimeError(
             f"[Whisper Transcribe] OpenAI-compatible 端點失敗 ({resp.status_code}): {resp.text[:500]}"
+            + ("（端點回應 redirect — 基於 key 安全不跟隨，請直接填最終 base_url）"
+               if 300 <= resp.status_code < 400 else "")
         )
     return resp.text
 
