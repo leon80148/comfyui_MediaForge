@@ -156,7 +156,17 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 
 Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec()`），檢查 `ffmpeg -encoders` 有沒有 `h264_nvenc`。NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）只在可用時加進 dropdown；`av1_nvenc` 需要 Ada Lovelace（RTX 4000+）。
 
-**CRF-equivalent 畫質（`cq`）**：當 `crf` 對到 NVENC encoder 時，`utils/encoder.py:build_encoder_args()` 會吐 `-rc vbr -cq <n> -b:v 0`。這個 `-b:v 0` 很關鍵 — 沒加的話 NVENC 仍會疊加預設 ~2 Mbps 的 bitrate target 在 `-cq` 之上，不管 `crf` 設多低畫質都被蓋住。`-cq` 跟 `-crf` 共用同一組 0–51 數值範圍與大致相同的畫質語意（18 ≈ 視覺無損、23 ≈ 標準），所以同一顆節點在 CPU codec 跟 NVENC 之間切換時，既有 `crf` 值可以直接沿用。
+**CRF-equivalent 畫質（`cq`）**：當 `crf` 對到 NVENC encoder 時，`utils/encoder.py:build_encoder_args()` 會吐 `-rc vbr -cq <n> -b:v 0`。這個 `-b:v 0` 很關鍵 — 沒加的話 NVENC 仍會疊加預設 ~2 Mbps 的 bitrate target 在 `-cq` 之上，不管 `crf` 設多低畫質都被蓋住。
+
+**同數值 ≠ 同畫質（跨 encoder family）。** MediaForge 把你填的 `crf` 值原樣傳給各家 encoder（不自動換算 — 偷換會讓「同 crf 換 codec 重跑」的輸出不可預期）。換 codec 時的粗略起始值（1080p SDR；請依自己素材校準 — encoder 世代與內容型態會偏移數個單位）：
+
+| 目標 | `libx264` crf | `libx265` crf | `libsvtav1` crf | `h264_nvenc` cq | `hevc_nvenc` / `av1_nvenc` cq |
+|---|---|---|---|---|---|
+| 視覺無損 | ~18 | ~22 | ~25 | ~16–17 | ~19–20 |
+| 高品質（發佈） | ~20–23 | ~25–28 | ~30–32 | ~18–21 | ~23–26 |
+| 草稿／預覽 | ~28 | ~32 | ~40 | ~26 | ~30 |
+
+刻度說明：x265 要比 x264 高 ~4–5 單位才同畫質；SVT-AV1 的範圍是 0–63（非 0–51）、數值再高一截；NVENC `cq` 名義上同 x264 的 0–51 刻度，但 `h264_nvenc` 同數值畫質略遜（往下調 2–3 單位補償），`hevc_nvenc` / `av1_nvenc` 則較貼近各自 CPU 版的刻度。
 
 要 per-node 覆寫直接在 dropdown 選就好 — 既有 workflow 已存了 codec 值（如 `"h264 (libx264)"`）載入時不受影響，新 default 只影響**新拖出來的節點**。
 
@@ -846,7 +856,7 @@ Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改�
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible`（任意 `/v1/...` HTTP endpoint）/ `faster_whisper_local`（in-process） |
 | `base_url` | `https://api.openai.com/v1` | 尾端 `/` 會自動 strip |
-| `api_key` | `""` | log 只露前 4 字 + `***`；節點畫面上以 `•` 遮罩顯示，點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
+| `api_key` | `""` | **建議填 `env:OPENAI_API_KEY`** — `env:` 前綴會在執行時解析同名環境變數，secret 不會進 workflow JSON（明文 key 會原樣序列化進每一份匯出／分享的 workflow — 畫面遮罩擋不了這條路；變數不存在會給明確錯誤）。log 只露前 4 字 + `***`；節點畫面上明文 key 以 `•` 遮罩顯示（`env:` 引用直接顯示），點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
 | `model` | `gpt-4o-mini` | 自由字串。Whisper 認出來不像 STT id 時會自動換預設（例如 `gpt-4o-mini` 被同時餵給 translate；Whisper 退回 `whisper-1`） |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — 只 `faster_whisper_local` 用 |
 
@@ -959,7 +969,7 @@ model      = llama3.2                       # 你本地 pull 過的任何 model
 - **SILENCE_RANGES**: `list[[float, float]]` — `[start_sec, end_sec]` 配對
 - **MF_COMPOSE_OPS**：`list[dict]` — 純 op-spec dict（`{"type": "drawtext" | "overlay" | "watermark" | "subtitle", "params": {...}, "image_path"?: ...}`），由 `MF_ComposeOverlayText` / `MF_ComposeOverlayImage` / `MF_ComposeWatermark` / `MF_ComposeBurnSubtitle` append。Compose v2 的視訊 chain 連線型別。
 - **MF_COMPOSE_AUDIO_OPS**：`list[dict]` — 音訊 chain 版本（`{"type": "volume" | "amix" | "afade" | "loudnorm", "params": {...}}`），由 `MF_ComposeVolume` / `MF_ComposeAudioMix` / `MF_ComposeAudioFade` / `MF_ComposeNormalize` append。`MF_ComposeVideo` 在 compile 時透過 `utils/compose_ops.py` dispatch 把兩條 chain 解析進內部的 `ComposeIR` dataclass（`utils/compose_ir.py`）— IR 本身已經不是跨節點的連線型別（那是 Compose v1 的 `MF_COMPOSE`，隨 `ComposeStart`/`ComposeFinalize` 一起除役）。
-- **AI_CONFIG**: `dict`，keys 為 `provider / base_url / api_key / model / device / extra`。Experimental。
+- **AI_CONFIG**: `dict`，keys 為 `provider / base_url / api_key / model / device`（`api_key` 是解析後的值 — `env:` 間接引用由 `MF_AIConfig` 在 dict 離開節點前展開）。Experimental。
 
 ## Architecture
 
@@ -967,7 +977,7 @@ model      = llama3.2                       # 你本地 pull 過的任何 model
 comfyui_MediaForge/
 ├── __init__.py              # pkgutil 自動發現 nodes/ — 丟檔進去就出現
 ├── pyproject.toml
-├── requirements.txt         # 故意留空 — 選用相依走 lazy import
+├── requirements.txt         # ffmpeg binary fallback + 輕量純 Python 相依；大型選用相依仍走 lazy import
 ├── nodes/                   # 一節點一檔，類別命名 MF_<Verb><Noun>
 │   ├── ai_config.py            # MF_AIConfig
 │   ├── burn_subtitle.py        # MF_BurnSubtitle  — 使用 font/ 子目錄

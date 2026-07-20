@@ -156,7 +156,17 @@ All encode-capable nodes (BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos
 
 The probe runs once per ComfyUI session via `utils/encoder.py:pick_default_codec()`, which checks `ffmpeg -encoders` for `h264_nvenc` presence. NVENC variants (`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`) all appear in the dropdown when available; `av1_nvenc` requires Ada Lovelace (RTX 4000+).
 
-**CRF-equivalent quality (`cq`)**: when `crf` maps to an NVENC encoder, `utils/encoder.py:build_encoder_args()` emits `-rc vbr -cq <n> -b:v 0`. The `-b:v 0` matters — without it NVENC still applies its default ~2 Mbps bitrate target on top of `-cq`, capping quality no matter how low you set `crf`. `-cq` and `-crf` share the same 0–51 numeric range and rough visual-quality meaning (18 ≈ visually lossless, 23 ≈ standard), so existing `crf` values carry over sensibly when switching a node between a CPU and NVENC codec.
+**CRF-equivalent quality (`cq`)**: when `crf` maps to an NVENC encoder, `utils/encoder.py:build_encoder_args()` emits `-rc vbr -cq <n> -b:v 0`. The `-b:v 0` matters — without it NVENC still applies its default ~2 Mbps bitrate target on top of `-cq`, capping quality no matter how low you set `crf`.
+
+**Same number ≠ same quality across encoder families.** MediaForge passes your `crf` value through verbatim (no auto-conversion — converting silently would make "re-run with another codec at the same crf" unpredictable). Rough starting points when switching codecs (1080p SDR; calibrate on your own material — encoder generation and content type shift these by a few units):
+
+| Target | `libx264` crf | `libx265` crf | `libsvtav1` crf | `h264_nvenc` cq | `hevc_nvenc` / `av1_nvenc` cq |
+|---|---|---|---|---|---|
+| Visually lossless | ~18 | ~22 | ~25 | ~16–17 | ~19–20 |
+| High quality (publish) | ~20–23 | ~25–28 | ~30–32 | ~18–21 | ~23–26 |
+| Draft / preview | ~28 | ~32 | ~40 | ~26 | ~30 |
+
+Scale notes: x265 reaches x264-parity ~4–5 units higher; SVT-AV1 uses a 0–63 range (not 0–51) and sits higher still; NVENC `cq` nominally shares x264's 0–51 scale but delivers slightly less quality per unit on `h264_nvenc` (drop 2–3 units to compensate), while `hevc_nvenc` / `av1_nvenc` track their CPU siblings' scales more closely.
 
 To override per-node, just pick from the dropdown — existing workflows that hard-coded `"h264 (libx264)"` keep working (default change only affects newly dragged nodes).
 
@@ -846,7 +856,7 @@ Centralized provider configuration. Outputs an `AI_CONFIG` dict that all AI node
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible` (any `/v1/...` HTTP endpoint) / `faster_whisper_local` (in-process) |
 | `base_url` | `https://api.openai.com/v1` | Trailing slash stripped automatically |
-| `api_key` | `""` | Logged with first 4 chars + `***` mask; node canvas displays it masked with `•` (click to reveal/edit — see `web/ai_config_mask.js`) |
+| `api_key` | `""` | **Recommended: `env:OPENAI_API_KEY`** — the `env:` prefix resolves the named environment variable at runtime, so the secret never enters the workflow JSON (a plaintext key serializes into every exported/shared workflow — the canvas mask cannot protect that path; missing variable → clear error). Logged with first 4 chars + `***` mask; node canvas displays plaintext keys masked with `•` (`env:` references shown as-is; click to reveal/edit — see `web/ai_config_mask.js`) |
 | `model` | `gpt-4o-mini` | Free-form string. Whisper auto-substitutes if not an STT id (e.g. `gpt-4o-mini` reused for translate; Whisper falls back to `whisper-1`) |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — only used by `faster_whisper_local` |
 
@@ -959,7 +969,7 @@ For **translate only** — Ollama / LM Studio don't expose Whisper. Pair with `f
 - **SILENCE_RANGES**: `list[[float, float]]` — `[start_sec, end_sec]` pairs
 - **MF_COMPOSE_OPS**: `list[dict]` — plain op-spec dicts (`{"type": "drawtext" | "overlay" | "watermark" | "subtitle", "params": {...}, "image_path"?: ...}`) appended by `MF_ComposeOverlayText` / `MF_ComposeOverlayImage` / `MF_ComposeWatermark` / `MF_ComposeBurnSubtitle`. Compose v2's video-chain wire type.
 - **MF_COMPOSE_AUDIO_OPS**: `list[dict]` — same idea for the audio chain (`{"type": "volume" | "amix" | "afade" | "loudnorm", "params": {...}}`), appended by `MF_ComposeVolume` / `MF_ComposeAudioMix` / `MF_ComposeAudioFade` / `MF_ComposeNormalize`. `MF_ComposeVideo` resolves both chains into the internal `ComposeIR` dataclass (`utils/compose_ir.py`) via `utils/compose_ops.py` dispatch at compile time — the IR itself is no longer a cross-node wire type (that was Compose v1's `MF_COMPOSE`, retired with `ComposeStart`/`ComposeFinalize`).
-- **AI_CONFIG**: `dict` with keys `provider / base_url / api_key / model / device / extra`. Experimental.
+- **AI_CONFIG**: `dict` with keys `provider / base_url / api_key / model / device` (`api_key` arrives resolved — `env:` indirection is expanded by `MF_AIConfig` before the dict leaves the node). Experimental.
 
 ## Architecture
 
@@ -967,7 +977,7 @@ For **translate only** — Ollama / LM Studio don't expose Whisper. Pair with `f
 comfyui_MediaForge/
 ├── __init__.py              # pkgutil auto-discover nodes/ — drop a file in, it shows up
 ├── pyproject.toml
-├── requirements.txt         # intentionally empty — optional deps lazy-imported
+├── requirements.txt         # ffmpeg-binary fallbacks + small pure-Python deps; heavy optional deps stay lazy-imported
 ├── nodes/                   # one file per node, MF_<Verb><Noun>
 │   ├── ai_config.py            # MF_AIConfig
 │   ├── burn_subtitle.py        # MF_BurnSubtitle  — uses font/ subdir

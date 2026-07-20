@@ -13,9 +13,19 @@
 //
 // Defensive by design: every LiteGraph API surface touched here (widget
 // internals, canvas.prompt, ctx drawing primitives) is feature-detected and
-// wrapped in try/catch. If anything is missing or throws, we bail out and
-// leave the widget in its original plaintext form — a broken mask must never
-// break the node itself.
+// wrapped in try/catch — including the draw method itself, whose failure path
+// renders bullets without chrome, never the raw value. A broken mask must
+// never break the node itself.
+//
+// Residual fail-open path (deliberate): if install itself fails (widget
+// renamed, LiteGraph contract gone), LiteGraph falls back to its own plaintext
+// text widget — we have no rendering hook left to fail closed with. Two
+// mitigations bound that risk: tests/test_frontend_schema_sync.py pins the
+// node/widget names this file references, and the recommended `env:VARNAME`
+// indirection (resolved Python-side in nodes/ai_config.py) keeps the real
+// secret out of the widget — and out of serialized workflow JSON — entirely.
+// `env:`-prefixed values are shown unmasked on purpose: they're variable
+// names, not secrets, and seeing them confirms which variable is wired up.
 
 import { app } from "../../scripts/app.js";
 
@@ -41,32 +51,52 @@ function chainCallback(object, property, callback) {
 // Best-effort mimic of LiteGraph's built-in text widget chrome (rounded box +
 // label + value) so the masked widget doesn't look out of place next to
 // unmodified widgets on the same node.
+function maskedDisplayValue(value) {
+    if (!value) return "";
+    const s = String(value);
+    // env:VARNAME is an indirection, not a secret — show it so the user can
+    // confirm which variable is wired up (the real key never enters the widget).
+    if (s.startsWith("env:")) return s;
+    return MASK_CHAR.repeat(Math.min(s.length, 24));
+}
+
 function drawMaskedWidget(ctx, node, widget_width, y, H) {
-    const margin = 15;
-    const outline_color = LiteGraph.WIDGET_OUTLINE_COLOR || "#666";
-    const bg_color = LiteGraph.WIDGET_BGCOLOR || "#222";
-    const text_color = LiteGraph.WIDGET_TEXT_COLOR || "#ddd";
-    const secondary_text_color = LiteGraph.WIDGET_SECONDARY_TEXT_COLOR || "#999";
+    const masked = maskedDisplayValue(this.value);
+    try {
+        const LG = typeof LiteGraph !== "undefined" ? LiteGraph : {};
+        const margin = 15;
+        const outline_color = LG.WIDGET_OUTLINE_COLOR || "#666";
+        const bg_color = LG.WIDGET_BGCOLOR || "#222";
+        const text_color = LG.WIDGET_TEXT_COLOR || "#ddd";
+        const secondary_text_color = LG.WIDGET_SECONDARY_TEXT_COLOR || "#999";
 
-    ctx.textAlign = "left";
-    ctx.strokeStyle = outline_color;
-    ctx.fillStyle = bg_color;
-    ctx.beginPath();
-    if (ctx.roundRect) {
-        ctx.roundRect(margin, y, widget_width - margin * 2, H, H * 0.5);
-    } else {
-        ctx.rect(margin, y, widget_width - margin * 2, H);
+        ctx.textAlign = "left";
+        ctx.strokeStyle = outline_color;
+        ctx.fillStyle = bg_color;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+            ctx.roundRect(margin, y, widget_width - margin * 2, H, H * 0.5);
+        } else {
+            ctx.rect(margin, y, widget_width - margin * 2, H);
+        }
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = secondary_text_color;
+        ctx.fillText(this.label || this.name, margin + 5, y + H * 0.7);
+
+        ctx.fillStyle = text_color;
+        ctx.textAlign = "right";
+        ctx.fillText(masked, widget_width - margin - 5, y + H * 0.7);
+    } catch (err) {
+        // Fail closed at render time: bullets without chrome, never the raw
+        // value, and never a rethrow that would abort the whole canvas pass.
+        try {
+            ctx.textAlign = "left";
+            ctx.fillStyle = "#ddd";
+            ctx.fillText(`${this.name}: ${masked}`, 20, y + H * 0.7);
+        } catch (_ignored) { /* ctx itself broken — draw nothing */ }
     }
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = secondary_text_color;
-    ctx.fillText(this.label || this.name, margin + 5, y + H * 0.7);
-
-    const masked = this.value ? MASK_CHAR.repeat(Math.min(String(this.value).length, 24)) : "";
-    ctx.fillStyle = text_color;
-    ctx.textAlign = "right";
-    ctx.fillText(masked, widget_width - margin - 5, y + H * 0.7);
 }
 
 // Mirrors LiteGraph's text-widget mouse handling: click opens the same
