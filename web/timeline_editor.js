@@ -155,6 +155,10 @@ class TimelineEditor {
             getMinHeight: () => EDITOR_HEIGHT,
             getHeight: () => EDITOR_HEIGHT,
         });
+        // options.serialize only keeps it out of the API prompt; the workflow's widgets_values
+        // checks the widget's own flag, and an extra slot would misalign old saves once Edit
+        // Timeline gains another widget (C2).
+        this.widget.serialize = false;
         this.setJsonVisible(false);
         for (const name of ["fps", "grid", "mode"]) chainWidget(this.w[name], () => this.render());
         chainWidget(this.w.video, () => this.loadSource());
