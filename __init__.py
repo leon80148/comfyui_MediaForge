@@ -23,6 +23,13 @@ for _, _module_name, _ in pkgutil.iter_modules(nodes.__path__):
     NODE_CLASS_MAPPINGS.update(getattr(_module, "NODE_CLASS_MAPPINGS", {}))
     NODE_DISPLAY_NAME_MAPPINGS.update(getattr(_module, "NODE_DISPLAY_NAME_MAPPINGS", {}))
 
+# 時間軸編輯器的 probe / proxy route；沒有 ComfyUI server（例如單元測試）時略過，節點不受影響
+try:
+    from .utils.timeline_routes import register_timeline_routes
+    register_timeline_routes()
+except Exception as e:
+    print(f"[MediaForge] timeline routes 未註冊（節點不受影響）：{e}")
+
 # C5：plugin 載入時掃一次 `.mf_tmp/`，回收跨 ComfyUI 執行存活、已超過時效（預設
 # 24h）的殘留檔案（例如 MF_ComposeAudioMix AUDIO dict materialize 出的 BGM WAV
 # ——不再由 ComposeVideo 主動 unlink，見 utils/compose_ops.py 的說明）。
