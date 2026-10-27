@@ -90,8 +90,8 @@ def probe_source(path):
     """ffprobe（帶白名單與 timeout）→ 時間軸需要的來源 metadata；欄位未知時為 None。"""
     cmd = resolve_ffmpeg_cmd(
         ["ffprobe", "-v", "error"] + ffmpeg_input_args(path)
-        + ["-show_entries", "stream=codec_type,avg_frame_rate,r_frame_rate,nb_frames,start_time,width,height"
-           ":format=duration", "-of", "json"]
+        + ["-show_entries", "stream=codec_type,codec_name,avg_frame_rate,r_frame_rate,nb_frames,start_time,width,height,"
+           "sample_aspect_ratio,sample_rate,channels:stream_side_data=rotation:format=duration,start_time", "-of", "json"]
     )
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_SEC, check=False)
@@ -106,14 +106,26 @@ def probe_source(path):
     if video is None:
         raise RuntimeError(f"[Timeline] 來源沒有影像串流：{os.path.basename(path)}")
     nb_frames = video.get("nb_frames")
+    rotation = next((int(float(d["rotation"])) for d in video.get("side_data_list", []) if "rotation" in d), 0) % 360
+    width, height = int(video.get("width") or 0), int(video.get("height") or 0)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
     return {
         "fps": _rate(video.get("avg_frame_rate")) or _rate(video.get("r_frame_rate")),
         "frame_count": int(nb_frames) if str(nb_frames or "").isdigit() else None,
         "source_start_us": _micros(video.get("start_time")),
         "duration_us": _micros(info.get("format", {}).get("duration")),
-        "width": int(video.get("width") or 0),
-        "height": int(video.get("height") or 0),
-        "has_audio": any(s.get("codec_type") == "audio" for s in streams),
+        # FFmpeg 的 -ss 以檔案起點（format start_time）為 0，時間軸卻錨在第一個 video 幀
+        "format_start_us": _micros(info.get("format", {}).get("start_time")),
+        "width": width,
+        "height": height,
+        # FFmpeg 解碼時預設自動轉正，所以實際輸出的畫面尺寸要依旋轉角對調
+        "display_size": (height, width) if rotation in (90, 270) else (width, height),
+        "rotation_deg": rotation,
+        "sar": _rate((video.get("sample_aspect_ratio") or "1:1").replace(":", "/")) or [1, 1],
+        "video_codec": video.get("codec_name", ""),
+        "has_audio": audio is not None,
+        "audio_sample_rate": int(audio["sample_rate"]) if audio and audio.get("sample_rate") else None,
+        "audio_channels": int(audio["channels"]) if audio and audio.get("channels") else None,
     }
 
 
