@@ -39,7 +39,7 @@ export const S = {
     total: (frames, seconds) => `總長 ${frames} 幀（${seconds.toFixed(2)} 秒）`,
     valid: "時間軸合法",
     invalid: (where, why) => `無法執行：${where} — ${why}`,
-    jsonBroken: "timeline_data 不是合法 JSON；已暫停圖形編輯，請在下方文字框修正。",
+    jsonBroken: "timeline_data 不是合法的 JSON 或欄位不符；已暫停圖形編輯，請在下方文字框修正出錯的位置",
     snapNote: "已吸附到最近的合法值",
     noLegal: "這個位置沒有合法的值，已回復",
     loading: "讀取來源中…",

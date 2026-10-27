@@ -12,7 +12,8 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import {
-    FPS_PRESETS, H3_GRID, autoFill, canonicalize, carrySpec, crossfadeLimit, editCut, editGenerate, phaseMs, validate,
+    FPS_PRESETS, H3_GRID, autoFill, canonicalize, carrySpec, crossfadeLimit, editCut, editGenerate, phaseMs, schemaError,
+    validate,
 } from "./timeline_grid.js";
 import { S } from "./timeline_strings.js";
 
@@ -162,6 +163,8 @@ class TimelineEditor {
         this.setJsonVisible(false);
         for (const name of ["fps", "grid", "mode"]) chainWidget(this.w[name], () => this.render());
         chainWidget(this.w.video, () => this.loadSource());
+        // While broken, the raw JSON box is the editing surface; pick the timeline back up once it is fixed.
+        chainWidget(this.w.timeline_data, () => this.broken && this.hydrate());
         this.resizeObserver.observe(this.scroller);
         if (node.size[0] < MIN_NODE_WIDTH) node.setSize([MIN_NODE_WIDTH, node.size[1]]);
         this.hydrate();
@@ -180,12 +183,16 @@ class TimelineEditor {
     }
 
     hydrate() {
+        // Malformed JSON stays as typed (never canonicalized and re-saved); the editor pauses
+        // and shows the first failing location until the text is fixed.
         try {
-            this.data = canonicalize(JSON.parse(this.w.timeline_data.value));
-            this.broken = !Array.isArray(this.data.segments) || this.data.segments.length === 0;
+            const parsed = JSON.parse(this.w.timeline_data.value);
+            this.brokenAt = schemaError(parsed);
+            if (this.brokenAt === null) this.data = canonicalize(parsed);
         } catch {
-            this.broken = true;
+            this.brokenAt = "timeline_data";
         }
+        this.broken = this.brokenAt !== null;
         this.setJsonVisible(this.broken);
         this.render();
     }
@@ -262,13 +269,14 @@ class TimelineEditor {
     render() {
         if (this.broken) {
             this.status.className = "mf-tl-status bad";
-            this.status.textContent = S.jsonBroken;
+            this.status.textContent = `${S.jsonBroken}（${this.brokenAt}）`;
             this.form.replaceChildren();
+            for (const b of [this.addButton, this.deleteButton, this.fillButton, this.importButton]) b.disabled = true;
             return;
         }
         const st = this.settings();
         this.result = validate(this.data, st.mode, st.fpsKey, st.grid, st.sourceFrames, st.hasSource);
-        this.addButton.disabled = false;
+        this.addButton.disabled = this.fillButton.disabled = this.importButton.disabled = false;
         this.deleteButton.disabled = this.data.segments.length <= 1;
         this.fillButton.style.display = st.mode === "generate" ? "" : "none";
         this.importButton.style.display = st.mode === "cut" ? "" : "none";

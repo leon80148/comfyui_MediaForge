@@ -96,6 +96,46 @@ function isInt(v) {
     return typeof v === "number" && Number.isSafeInteger(v);
 }
 
+function hasOnlyKeys(v, allowed) {
+    return v !== null && typeof v === "object" && !Array.isArray(v) && Object.keys(v).every((k) => allowed.includes(k));
+}
+
+// Structural rules of parse_timeline_data, in the same order, so the first failing location
+// matches. canonicalize() would otherwise drop unknown fields / wrong types and the editor
+// would show (and later save) a timeline that Python rejects. Two gaps remain because
+// JSON.parse cannot see them: duplicate keys and integral floats such as 5.0.
+export function schemaError(data) {
+    if (!hasOnlyKeys(data, ["version", "source", "segments"])) return "timeline_data";
+    if (data.version !== 1) return "version";
+    const source = data.source === undefined ? {} : data.source;
+    if (!hasOnlyKeys(source, ["origin_frame"])) return "source";
+    if (source.origin_frame !== undefined && !isInt(source.origin_frame)) return "source.origin_frame";
+    const segs = data.segments;
+    if (!Array.isArray(segs) || segs.length === 0 || segs.length > MAX_SEGMENTS) return "segments";
+    for (let i = 0; i < segs.length; i++) {
+        const loc = `segments[${i}]`;
+        const s = segs[i];
+        if (!hasOnlyKeys(s, ["start", "end", "prompt", "seam_in"])) return loc;
+        for (const key of ["start", "end"]) {
+            if (!isInt(s[key]) || s[key] < 0) return `${loc}.${key}`;
+        }
+        if (s.prompt !== undefined && typeof s.prompt !== "string") return `${loc}.prompt`;
+        if (s.seam_in === undefined) continue;
+        const seam = s.seam_in;
+        if (!hasOnlyKeys(seam, ["kind", "frames", "audio_curve"])) return `${loc}.seam_in`;
+        if (seam.kind !== "cut" && seam.kind !== "crossfade") return `${loc}.seam_in.kind`;
+        if (seam.kind === "cut") {
+            if (Object.keys(seam).length !== 1) return `${loc}.seam_in`;
+            continue;
+        }
+        if (seam.audio_curve !== undefined && !["auto", "linear", "equal_power"].includes(seam.audio_curve)) {
+            return `${loc}.seam_in.audio_curve`;
+        }
+        if (!isInt(seam.frames) || seam.frames < 1) return `${loc}.seam_in.frames`;
+    }
+    return null;
+}
+
 // Same check order as the Python validators, so the first reported location matches.
 export function validate(data, mode, fpsKey, grid, sourceFrames = null, hasSource = false) {
     const fps = FPS_PRESETS[fpsKey];
