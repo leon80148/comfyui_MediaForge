@@ -14,7 +14,12 @@ NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
 for _, _module_name, _ in pkgutil.iter_modules(nodes.__path__):
-    _module = importlib.import_module(f".nodes.{_module_name}", __package__)
+    # 一個節點模組 import 失敗只少那幾個節點，不能讓整個插件 IMPORT FAILED
+    try:
+        _module = importlib.import_module(f".nodes.{_module_name}", __package__)
+    except Exception as e:
+        print(f"[MediaForge] 節點模組 {_module_name} 載入失敗：{e}")
+        continue
     NODE_CLASS_MAPPINGS.update(getattr(_module, "NODE_CLASS_MAPPINGS", {}))
     NODE_DISPLAY_NAME_MAPPINGS.update(getattr(_module, "NODE_DISPLAY_NAME_MAPPINGS", {}))
 
