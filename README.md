@@ -182,7 +182,7 @@ The official Wan 2.2 high / low `KSamplerAdvanced` chain does not preserve the c
 ### Memory and disk
 
 - Append decodes one segment at a time (or takes `frames`), removes the overlap, applies crossfades, and spills lossless FFV1 video + float32 WAV parts (≈ 0.5 MB per frame at 1344×768) to the plugin's `.mf_tmp/seg_*` folder. It checks estimated RAM before decoding (`E_RAM`) and free disk before spilling (`E_DISK`) — estimates, not guarantees.
-- Assemble does the single lossy encode (codec / crf / preset like other MediaForge encoders; ProRes → `.mov`), writes BT.709 tags, checks the exact frame and sample count, and is the only output node among the six. Its optional `audio` replaces the whole soundtrack (padded / trimmed to the video length).
+- Assemble does the single lossy encode (codec / crf / preset like other MediaForge encoders; ProRes → `.mov`), writes BT.709 tags, cuts the soundtrack to exactly the video's sample count before the AAC encode, then verifies the written frame count, the audio track and the color tags. It is the only output node among the six. Its optional `audio` replaces the whole soundtrack (padded / trimmed to the video length).
 - Audio clock: the first segment fixes sample rate and channels (`E_AUDIO_LAYOUT` otherwise). H3 decoded audio is ≈ 8.3 ms shorter per segment and the next segment fills it — only real gaps and the final tail are padded (`W_AUDIO_PAD`).
 - Spill parts are released when the cached state is dropped; stale session folders older than 24 h whose owner process is gone are swept at startup.
 - This reduces decoded-frame memory; it does not guarantee constant total memory or seamless joins.

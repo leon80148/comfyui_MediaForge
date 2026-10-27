@@ -182,7 +182,7 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框：
 ### 記憶體與磁碟
 
 - Append 逐段解碼（或直接吃 `frames`）、去掉重疊、做 crossfade，把無損 FFV1 視訊與 float32 WAV 分段檔（1344×768 約每幀 0.5 MB）暫存到 plugin 的 `.mf_tmp/seg_*` 目錄。解碼前預估 RAM（`E_RAM`）、落盤前檢查剩餘磁碟（`E_DISK`）—— 都是估算，不是保證。
-- Assemble 做唯一一次有損編碼（codec / crf / preset 同其他 MediaForge 編碼節點；ProRes → `.mov`），寫入 BT.709 標記、核對精確的幀數與 sample 數，是六個節點中唯一的 output node。選用的 `audio` 會整條取代音軌（自動補靜音 / 截斷到影片長度）。
+- Assemble 做唯一一次有損編碼（codec / crf / preset 同其他 MediaForge 編碼節點；ProRes → `.mov`），寫入 BT.709 標記；AAC 編碼前把音軌精確截成影片長度對應的 sample 數，編碼後核對寫出的幀數、音軌與色彩標記。是六個節點中唯一的 output node。選用的 `audio` 會整條取代音軌（自動補靜音 / 截斷到影片長度）。
 - 音訊時鐘：第一段決定取樣率與聲道（之後不一致 → `E_AUDIO_LAYOUT`）。H3 解碼出的音訊每段約短 8.3 ms，由下一段補上 —— 只有真正的缺口與片尾會補靜音（`W_AUDIO_PAD`）。
 - 快取住的 state 被釋放時，其分段暫存檔會一併刪除；啟動時會清掉超過 24 小時、且所屬程序已不存在的 session 目錄。
 - 這能減少解碼畫面佔用的記憶體，但不保證總記憶體固定或接縫無痕。
