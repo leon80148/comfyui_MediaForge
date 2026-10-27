@@ -49,7 +49,7 @@ class MF_EditTimeline:
         source = None if video == NO_SOURCE else describe_source(video)
         plan = compile_plan(data, mode, fps, grid, source)
         if source is not None and source["source_start_us"] is None:
-            print(format_message("⏱️ Edit Timeline", "W_SOURCE_TIME_UNKNOWN"))
+            print(format_message("Edit Timeline", "W_SOURCE_TIME_UNKNOWN"))
         return (plan, cut_ranges_seconds(plan), json.dumps(plan, ensure_ascii=False),
                 len(plan["segments"]), plan["total_frames"])
 

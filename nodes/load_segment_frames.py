@@ -16,7 +16,7 @@ from ..utils.timeline_plan import sample_index
 from ..utils.timeline_source import ffmpeg_input_args, opaque_fingerprint, probe_source, resolve_timeline_source
 from ..utils.video_io import MAX_DECODE_BYTES
 
-NODE_LABEL = "📽️ Load Segment Frames"
+NODE_LABEL = "Load Segment Frames"
 RESIZE_MODES = ("none", "fit", "fill", "stretch")
 MAX_AUDIO_RATE = 384000
 MAX_AUDIO_CHANNELS = 32
@@ -86,7 +86,7 @@ class MF_LoadSegmentFrames:
     def load(self, segment, resize, width, height, shortfall):
         window = segment.get("source_window") if isinstance(segment, dict) else None
         if window is None:
-            raise ValueError(f"[{NODE_LABEL}] 本段沒有來源影片；請在 ⏱️ Edit Timeline 選擇 video。")
+            raise ValueError(f"[{NODE_LABEL}] 本段沒有來源影片；請在 Edit Timeline 選擇 video。")
         path = resolve_timeline_source(window["source_ref"])
         if opaque_fingerprint(path) != window["source_fingerprint"]:
             raise TimelineError(NODE_LABEL, "E_SOURCE_CHANGED")
@@ -123,7 +123,7 @@ class MF_LoadSegmentFrames:
             need = total - silent_head
             # 取樣率 / 聲道數來自檔案本身，惡意或損毀的 metadata 不能撐爆記憶體
             if not (0 < sr <= MAX_AUDIO_RATE and 0 < channels <= MAX_AUDIO_CHANNELS) or total * channels * 4 > MAX_DECODE_BYTES:
-                raise ValueError(f"[{NODE_LABEL}] 來源音訊規格異常（{sr} Hz × {channels} ch），拒絕解碼。")
+                raise ValueError(f"[{NODE_LABEL}] 來源音訊規格異常（{sr} Hz × {channels} ch），拒絕解碼。請改用其他來源或先重新轉檔。")
             waveform = _decode_audio(path, seek, need, sr, channels) if need > 0 else torch.zeros(1, channels, 0)
             # seek 超過來源尾端時 FFmpeg 可能一個樣本都不輸出，apad 無從補起
             waveform = torch.cat([torch.zeros(1, channels, silent_head), waveform,

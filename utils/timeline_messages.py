@@ -1,7 +1,8 @@
 """Timeline 節點的使用者訊息目錄。
 
 每則訊息有穩定 key（README Troubleshooting 與測試都以 key 對應，不比對整句），
-格式統一為 `[<節點顯示名>] <KEY>：<訊息>`；段號對使用者從 1 起算。
+格式統一為 `[<節點名稱>] <KEY>：<訊息>`，節點名稱不含 emoji——cp950 / cp1252 主控台編不出
+emoji，print() 會直接丟 UnicodeEncodeError，讓「警告後繼續」變成節點失敗。段號對使用者從 1 起算。
 """
 
 MESSAGES = {
@@ -15,7 +16,7 @@ MESSAGES = {
     "E_SPILL_MISSING": "分段暫存檔已不存在。請重跑整個迴圈，再組裝。",
     "E_RAM": "本段估計需 {gib:.2f} GiB RAM，超過預檢門檻。請縮短段長或降低解析度。",
     "E_DISK": "暫存空間不足，需至少 {gib:.2f} GiB。請釋出空間後重試。",
-    "E_SOURCE_CHANGED": "來源影片已變更，請重新執行 ⏱️ Edit Timeline。",
+    "E_SOURCE_CHANGED": "來源影片已變更，請重新執行 Edit Timeline。",
     "E_SOURCE_SHORTFALL": "來源影片不足以涵蓋第 {segment} 段。請改用 hold_last / black 或調整時間框。",
     "E_TOKENS": "latent 時間長度不符：預期 {expected}，收到 {actual}。請檢查 grid、VACE reference 與 guide 接線。",
     "E_H3_FPS": "H3 grid 僅支援 24 fps。請將 fps 設為 24。",

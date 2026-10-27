@@ -10,7 +10,7 @@ from fractions import Fraction
 
 from .timeline_messages import TimelineError
 
-NODE_LABEL = "⏱️ Edit Timeline"
+NODE_LABEL = "Edit Timeline"
 
 FPS_PRESETS = {
     "16": (16, 1), "24": (24, 1), "25": (25, 1), "30": (30, 1),
@@ -301,7 +301,7 @@ def segment_spec(plan, index):
     segments = plan["segments"]
     count = len(segments)
     if not 0 <= index < count:
-        raise TimelineError("🎯 Select Segment", "E_SEGMENT_INDEX", count=count, index=index)
+        raise TimelineError("Select Segment", "E_SEGMENT_INDEX", count=count, index=index)
     seg = segments[index]
     grid = plan["effective_grid"]
     generate = plan["mode"] == "generate"

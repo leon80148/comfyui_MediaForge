@@ -26,7 +26,7 @@ class MF_SelectSegment:
 
     def select(self, segment_plan, segment_index):
         if not isinstance(segment_plan, dict) or segment_plan.get("type") != "MF_SEGMENT_PLAN":
-            raise ValueError("[🎯 Select Segment] segment_plan 必須來自 ⏱️ Edit Timeline")
+            raise ValueError("[Select Segment] segment_plan 必須來自 Edit Timeline，請檢查接線")
         spec = segment_spec(segment_plan, segment_index)
         num, den = spec["fps"]
         return (spec, spec["prompt"], spec["length"], spec["start"] * den / num, spec["count"])
