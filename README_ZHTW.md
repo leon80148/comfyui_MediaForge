@@ -1274,7 +1274,7 @@ model      = llama3.2                       # 你本地 pull 過的任何 model
 - **MF_SEGMENT_PLAN**：`MF_EditTimeline` 輸出的版本化、不可變計畫 dict —— `plan_id` / `execution_id`、mode、fps、grid、來源參照、分段、`total_frames`。不含絕對路徑。
 - **MF_SEGMENT**：`MF_SelectSegment` 輸出的版本化、不可變單段規格 —— 段號 / 段數、start / end / length、重疊、續接大小、接縫、來源區間、prompt。Load Segment Frames、Extend Latent、Append Segment 共用。
 - **MF_SEGMENT_STATE**：不可變 dict；每次 `MF_AppendSegment` 都回傳新的一份（session、暫存目錄、已提交的幀 / samples、待 crossfade 的尾端、續接用的 latent 尾端）。它在程序內持有分段暫存檔，所以不能序列化進 workflow。
-- **LATENT `mf_carry`**：`MF_ExtendLatent` 在輸出的 LATENT dict 加上 `{execution_id, segment_index, carry_spec_id, streams_carried}`；core sampler 會保留它。Append 把它當一致性提示（consistent / absent / mismatch），不是來源證明。
+- **LATENT `mf_carry`**：`MF_ExtendLatent` 在輸出的 LATENT dict 加上 `{execution_id, segment_index, carry_spec_id, streams_carried, carry_dtypes}`；core sampler 會保留它。Append 把它當一致性提示（consistent / absent / mismatch），不是來源證明；`carry_dtypes`（續接區寫入時的 dtype，例如 `bfloat16`）是 `E_CARRY_DRIFT` 比對的基準。
 
 ## Architecture
 

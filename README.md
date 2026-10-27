@@ -1274,7 +1274,7 @@ For **translate only** — Ollama / LM Studio don't expose Whisper. Pair with `f
 - **MF_SEGMENT_PLAN**: versioned, immutable plan dict from `MF_EditTimeline` — `plan_id` / `execution_id`, mode, fps, grid, source reference, segments, `total_frames`. No absolute paths.
 - **MF_SEGMENT**: versioned, immutable per-segment spec from `MF_SelectSegment` — index / count, start / end / length, overlaps, carry sizes, seams, source window, prompt. Shared by Load Segment Frames, Extend Latent and Append Segment.
 - **MF_SEGMENT_STATE**: immutable dict; every `MF_AppendSegment` returns a new one (session, spill folder, committed frames / samples, pending crossfade tail, carried latent tail). It owns the spill parts in-process, so it can't be serialized into a workflow.
-- **LATENT `mf_carry`**: `MF_ExtendLatent` adds `{execution_id, segment_index, carry_spec_id, streams_carried}` to its output LATENT dict; core samplers keep it. Append reads it as a consistency hint (consistent / absent / mismatch), not as proof of origin.
+- **LATENT `mf_carry`**: `MF_ExtendLatent` adds `{execution_id, segment_index, carry_spec_id, streams_carried, carry_dtypes}` to its output LATENT dict; core samplers keep it. Append reads it as a consistency hint (consistent / absent / mismatch), not as proof of origin, and uses `carry_dtypes` (the dtype the carry was written in, e.g. `bfloat16`) as the baseline of its `E_CARRY_DRIFT` check.
 
 ## Architecture
 

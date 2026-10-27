@@ -46,7 +46,7 @@ def extract_carry_tail(samples, segment):
     return tail
 
 
-def carry_drift(latent, carry, streams_carried, label):
+def carry_drift(latent, carry, marker, label):
     """取樣後的 latent 在 noise_mask == 0（完全保留）的續接位置，與 carry tail 的最大絕對差。
 
     兩段式 KSamplerAdvanced 的第二段以第一段帶殘留雜訊的輸出當保留內容，續接區會被雜訊取代——
@@ -59,14 +59,17 @@ def carry_drift(latent, carry, streams_carried, label):
     drift = 0.0
     for name, index, time_dim in (("video", 0, 2), ("audio", 1, -1)):
         tail = carry.get(name)
-        if name not in streams_carried or tail is None or index >= len(streams) or masks[index] is None:
+        if name not in marker["streams_carried"] or tail is None or index >= len(streams) or masks[index] is None:
             continue
+        stream = streams[index]
         k = tail.shape[time_dim]
-        head = streams[index].narrow(time_dim, 0, k).float()
-        keep = _checked_mask(masks[index], streams[index].shape, name, label).narrow(time_dim, 0, k) == 0
-        keep = keep.to(head.device).expand(head.shape)
+        head = stream.narrow(time_dim, 0, k).float()
+        # Extend 寫入時已轉成 target 的 dtype（例如 bfloat16）：基準要用同樣量化後的值
+        ref = tail.to(getattr(torch, marker["carry_dtypes"][name])).to(head.device, torch.float32)
+        keep = _checked_mask(masks[index], stream.shape, name, label).expand(stream.shape).narrow(time_dim, 0, k) == 0
+        keep = keep.to(head.device)
         if keep.any():
-            drift = max(drift, float((head - tail.to(head.device, torch.float32)).abs()[keep].max()))
+            drift = max(drift, float((head - ref).abs()[keep].max()))
     return drift
 
 
@@ -205,7 +208,7 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
 
     spec = segment["carry_in"]
     out = dict(target_latent)
-    carried, details, source, provenance = [], {}, None, None
+    carried, dtypes, details, source, provenance = [], {}, {}, None, None
     if spec is not None:
         source = "state" if state is not None else "previous_latent" if previous_latent is not None else None
         if source is None or (state is not None and state["carry"] is None):
@@ -236,6 +239,7 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
             if conflicts and on_conflict == "error":
                 raise TimelineError(EXTEND_LABEL, "E_MASK_CONFLICT")
             new_streams[i] = _write_head(stream, dim, tail)
+            dtypes[name] = str(stream.dtype).removeprefix("torch.")
             # H3 先把 mask 量化成 ceil(m·256)/256 再換算逐 token timestep；其他模型直接用原值
             effective = torch.ceil(weights * 256.0) / 256.0 if grid == H3_GRID else weights
             details[name] = {"source_range": [offset, offset + k], "target_range": [0, k], "tokens": k,
@@ -250,7 +254,8 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
         out["noise_mask"] = type(samples)(new_masks) if nested else new_masks[0]
 
     out["mf_carry"] = {"execution_id": segment["execution_id"], "segment_index": segment["index"],
-                       "carry_spec_id": segment["carry_out_id"], "streams_carried": list(carried)}
+                       "carry_spec_id": segment["carry_out_id"], "streams_carried": list(carried),
+                       "carry_dtypes": dtypes}
     changed = ("samples", "noise_mask", "mf_carry") if carried else ("mf_carry",)
     report = {
         "version": 1,
