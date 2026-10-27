@@ -250,9 +250,22 @@ def _evict(directory):
 
 async def _ffmpeg_version(runtime):
     if runtime["ffmpeg"] is None:
-        _, out, _ = await run_process(resolve_ffmpeg_cmd(["ffmpeg", "-version"]), PROBE_TIMEOUT)
-        runtime["ffmpeg"] = out.decode("utf-8", errors="replace").splitlines()[0] if out else "unknown"
+        async with runtime["probe"]:
+            if runtime["ffmpeg"] is None:
+                _, out, _ = await run_process(resolve_ffmpeg_cmd(["ffmpeg", "-version"]), PROBE_TIMEOUT)
+                runtime["ffmpeg"] = out.decode("utf-8", errors="replace").splitlines()[0] if out else "unknown"
     return runtime["ffmpeg"]
+
+
+def _manifest_info(target):
+    """快取命中只讀 sidecar manifest，不啟動 ffprobe——否則大量命中請求能繞過並行上限。"""
+    try:
+        with open(target[:-4] + ".json", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        return None
+    info = manifest.get("info") if manifest.get("preset") == PRESET else None
+    return info if os.path.exists(target) and isinstance(info, dict) else None
 
 
 def proxy_command(source, target):
@@ -283,13 +296,15 @@ async def _build_proxy(runtime, source, target):
                 raise RouteError(415, "unsupported_media", "無法為這個檔案建立預覽。")
             if os.path.getsize(partial) >= MAX_PROXY_BYTES:
                 raise RouteError(413, "too_large", "預覽檔超過大小上限。")
-            info = await _probe(partial)
+            probed = await _probe(partial)
             os.replace(partial, target)
         finally:
             if os.path.exists(partial):
                 os.unlink(partial)
+    info = {"display_size": list(probed["display_size"]), "fps": probed["fps"],
+            "duration_us": probed["duration_us"], "source_start_us": probed["source_start_us"]}
     with open(target[:-4] + ".json", "w", encoding="utf-8") as f:
-        json.dump({"preset": PRESET}, f)
+        json.dump({"preset": PRESET, "info": info}, f)
     return info
 
 
@@ -302,10 +317,10 @@ async def handle_proxy(raw, headers, scheme, host):
     runtime = _runtime()
     key = hashlib.sha256(f"{path_fingerprint(path)}|{PRESET}|{await _ffmpeg_version(runtime)}".encode("utf-8")).hexdigest()
     target = os.path.join(proxy_dir(), key + ".mp4")
-    cache_hit = os.path.exists(target) and os.path.exists(target[:-4] + ".json")
+    info = _manifest_info(target)
+    cache_hit = info is not None
     if cache_hit:
         os.utime(target)
-        info = await _probe(target)
     else:
         # 同一個 key 只跑一個 FFmpeg；最後一個等待者離開才取消
         job = runtime["jobs"].get(key)
