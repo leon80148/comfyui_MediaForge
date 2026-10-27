@@ -198,6 +198,9 @@ class TimelineEditor {
     }
 
     commit(next, notice = "") {
+        // Every edit path ends here; a panel or form left over from before the JSON broke must not
+        // overwrite the text the user is fixing.
+        if (this.broken) return;
         const tracker = changeTracker();
         tracker?.beforeChange?.();
         try {
@@ -271,6 +274,9 @@ class TimelineEditor {
             this.status.className = "mf-tl-status bad";
             this.status.textContent = `${S.jsonBroken}（${this.brokenAt}）`;
             this.form.replaceChildren();
+            this.panel.replaceChildren();
+            this.panelKind = null;
+            this.drag = this.draft = null;
             for (const b of [this.addButton, this.deleteButton, this.fillButton, this.importButton]) b.disabled = true;
             return;
         }
