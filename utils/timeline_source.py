@@ -86,31 +86,50 @@ def _micros(text):
         return None
 
 
-def probe_source(path):
-    """ffprobe（帶白名單與 timeout）→ 時間軸需要的來源 metadata；欄位未知時為 None。"""
-    cmd = resolve_ffmpeg_cmd(
+def _timing(video):
+    avg, real = _rate(video.get("avg_frame_rate")), _rate(video.get("r_frame_rate"))
+    if avg is None or real is None:
+        return "unknown"
+    return "cfr" if avg == real else "vfr"
+
+
+def probe_command(path):
+    return resolve_ffmpeg_cmd(
         ["ffprobe", "-v", "error"] + ffmpeg_input_args(path)
         + ["-show_entries", "stream=codec_type,codec_name,avg_frame_rate,r_frame_rate,nb_frames,start_time,width,height,"
            "sample_aspect_ratio,sample_rate,channels:stream_side_data=rotation:format=duration,start_time", "-of", "json"]
     )
+
+
+def probe_source(path):
+    """ffprobe（帶白名單與 timeout）→ 時間軸需要的來源 metadata；欄位未知時為 None。"""
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_SEC, check=False)
+        proc = subprocess.run(probe_command(path), capture_output=True, timeout=PROBE_TIMEOUT_SEC, check=False)
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"[Timeline] ffprobe 逾時（>{PROBE_TIMEOUT_SEC}s）：{os.path.basename(path)}") from e
     if proc.returncode != 0:
         tail = "\n".join(proc.stderr.decode("utf-8", errors="replace").strip().splitlines()[-5:])
         raise RuntimeError(f"[Timeline] 無法讀取來源影片（格式不在允許清單或檔案損毀）：\n{tail}")
-    info = json.loads(proc.stdout.decode("utf-8", errors="replace") or "{}")
+    info = parse_probe_output(proc.stdout)
+    if info is None:
+        raise RuntimeError(f"[Timeline] 來源沒有影像串流：{os.path.basename(path)}")
+    return info
+
+
+def parse_probe_output(stdout):
+    """ffprobe JSON → metadata dict；沒有 video stream 回 None（route 與節點共用）。"""
+    info = json.loads(stdout.decode("utf-8", errors="replace") or "{}")
     streams = info.get("streams", [])
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     if video is None:
-        raise RuntimeError(f"[Timeline] 來源沒有影像串流：{os.path.basename(path)}")
+        return None
     nb_frames = video.get("nb_frames")
     rotation = next((int(float(d["rotation"])) for d in video.get("side_data_list", []) if "rotation" in d), 0) % 360
     width, height = int(video.get("width") or 0), int(video.get("height") or 0)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
     return {
         "fps": _rate(video.get("avg_frame_rate")) or _rate(video.get("r_frame_rate")),
+        "timing": _timing(video),
         "frame_count": int(nb_frames) if str(nb_frames or "").isdigit() else None,
         "source_start_us": _micros(video.get("start_time")),
         "duration_us": _micros(info.get("format", {}).get("duration")),

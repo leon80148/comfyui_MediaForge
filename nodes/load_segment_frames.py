@@ -18,6 +18,8 @@ from ..utils.video_io import MAX_DECODE_BYTES
 
 NODE_LABEL = "📽️ Load Segment Frames"
 RESIZE_MODES = ("none", "fit", "fill", "stretch")
+MAX_AUDIO_RATE = 384000
+MAX_AUDIO_CHANNELS = 32
 SHORTFALL_MODES = ("error", "hold_last", "black")
 
 
@@ -119,6 +121,9 @@ class MF_LoadSegmentFrames:
             total = sample_index(start + length, sr, fps) - sample_index(start, sr, fps)
             silent_head = sample_index(first, sr, fps) - sample_index(start, sr, fps)
             need = total - silent_head
+            # 取樣率 / 聲道數來自檔案本身，惡意或損毀的 metadata 不能撐爆記憶體
+            if not (0 < sr <= MAX_AUDIO_RATE and 0 < channels <= MAX_AUDIO_CHANNELS) or total * channels * 4 > MAX_DECODE_BYTES:
+                raise ValueError(f"[{NODE_LABEL}] 來源音訊規格異常（{sr} Hz × {channels} ch），拒絕解碼。")
             waveform = _decode_audio(path, seek, need, sr, channels) if need > 0 else torch.zeros(1, channels, 0)
             # seek 超過來源尾端時 FFmpeg 可能一個樣本都不輸出，apad 無從補起
             waveform = torch.cat([torch.zeros(1, channels, silent_head), waveform,
