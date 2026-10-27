@@ -55,11 +55,11 @@ def _decode_video(path, seek, count, fps, size, scale):
     return torch.from_numpy(arr.copy()).float() / 255.0
 
 
-def _decode_audio(path, seek, count, sample_rate, channels):
-    # 輸入端 -ss 依 video 關鍵幀跳：音訊可能晚一個封包才開始，第一個關鍵幀之前的音訊甚至整段讀不到；
-    # raw PCM 又沒有時間戳。所以往前多解一段（接近開頭就乾脆從檔頭讀），aresample 依 PTS 補齊
-    # 空白（音軌晚於起點時也靠它），再以 sample 數精確裁掉前段
-    pre = min(seek, AUDIO_PREROLL)
+def _decode_audio(path, seek, video_start, count, sample_rate, channels):
+    # 輸入端 -ss 跳到「不晚於目標的 video 關鍵幀」所在的 cluster：音訊可能晚一個封包才開始，第一個
+    # video 幀之前的音訊則整段讀不到；raw PCM 又沒有時間戳。所以往前多解一段——pre-roll 會落到第一個
+    # video 幀之前時就從檔頭讀——aresample 依 PTS 補齊空白（音軌晚於起點時也靠它），再以 sample 數精確裁掉前段
+    pre = seek if seek - AUDIO_PREROLL < video_start else AUDIO_PREROLL
     af = (f"aresample=async=1:first_pts=0,atrim=start_sample={round(pre * sample_rate)},asetpts=PTS-STARTPTS,"
           f"apad=whole_len={count},atrim=end_sample={count}")
     head = ["-ss", f"{float(seek - pre):.9f}"] if seek > pre else []
@@ -132,7 +132,7 @@ class MF_LoadSegmentFrames:
             # 取樣率 / 聲道數來自檔案本身，惡意或損毀的 metadata 不能撐爆記憶體
             if not (0 < sr <= MAX_AUDIO_RATE and 0 < channels <= MAX_AUDIO_CHANNELS) or total * channels * 4 > MAX_DECODE_BYTES:
                 raise ValueError(f"[{NODE_LABEL}] 來源音訊規格異常（{sr} Hz × {channels} ch），拒絕解碼。請改用其他來源或先重新轉檔。")
-            waveform = _decode_audio(path, seek, need, sr, channels) if need > 0 else torch.zeros(1, channels, 0)
+            waveform = _decode_audio(path, seek, offset, need, sr, channels) if need > 0 else torch.zeros(1, channels, 0)
             # seek 超過來源尾端時 FFmpeg 可能一個樣本都不輸出，apad 無從補起
             waveform = torch.cat([torch.zeros(1, channels, silent_head), waveform,
                                   torch.zeros(1, channels, need - waveform.shape[-1])], dim=-1)
