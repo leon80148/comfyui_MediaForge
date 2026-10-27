@@ -124,6 +124,9 @@ const WIDGET_VALUE_LOCKS = {
         { trigger: "mask", value: "linear", hide: ["video_taper_tokens", "audio_taper_tokens"] },
         { trigger: "carry_audio", value: false, hide: ["audio_taper_tokens"] },
     ],
+    "MF_AssembleSegments": [
+        { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
+    ],
 };
 
 // Wrap an existing prototype method (or assign if missing) so multiple

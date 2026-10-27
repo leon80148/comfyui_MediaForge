@@ -7,7 +7,9 @@ docstring），compose_ir.py 專注 IR compile、不該是這種跨 node 共用 
 utils/compose_ir.py 仍 re-export `_mkstemp_in_plugin_tmp` / `_PLUGIN_TMP_DIR`
 維持既有 import path 相容（見該檔案）。
 """
+import json
 import os
+import shutil
 import tempfile
 import time
 
@@ -51,6 +53,10 @@ def sweep_stale_plugin_tmp(max_age_hours=24.0):
     呼叫本函式一次，把太舊（預設 >24h，早已不可能被任何後續 cache-hit 引用）的
     殘留檔案清掉，避免 `.mf_tmp/` 無限長大。
 
+    Timeline 的 `seg_<uuid>/` session 目錄（utils/segment_spill.py）另外處理：同一個
+    ComfyUI 程序可能長時間持有快取住的 state，所以只在「超過時效且 owner.json 記錄的
+    程序已不存在」時才整個移除。
+
     Best-effort：單一檔案的 stat/unlink 失敗（競態刪除、權限問題）不中斷整個
     掃描，也不 raise——這只是背景維護、不該擋 plugin 載入或影響使用者工作流。
     """
@@ -64,6 +70,23 @@ def sweep_stale_plugin_tmp(max_age_hours=24.0):
             if os.path.isfile(path) and os.stat(path).st_mtime < cutoff:
                 os.unlink(path)
                 removed += 1
+            elif (name.startswith("seg_") and os.path.isdir(path)
+                  and os.stat(path).st_mtime < cutoff and not _owner_alive(path)):
+                shutil.rmtree(path)
+                removed += 1
         except OSError:
             pass
     return removed
+
+
+def _owner_alive(session_dir):
+    """owner.json 的 PID 仍在執行、且啟動時間相符（PID 可能已被其他程序重用）。"""
+    import psutil
+    try:
+        with open(os.path.join(session_dir, "owner.json"), encoding="utf-8") as f:
+            owner = json.load(f)
+        return abs(psutil.Process(owner["pid"]).create_time() - owner["create_time"]) < 1.0
+    except psutil.AccessDenied:
+        return True
+    except (OSError, ValueError, KeyError, TypeError, psutil.Error):
+        return False
