@@ -1,0 +1,787 @@
+{
+  "id": "f1433a44-045d-4378-bdc7-b52681be552a",
+  "revision": 0,
+  "last_node_id": 8,
+  "last_link_id": 11,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MF_EditTimeline",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        760,
+        660
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "video",
+          "name": "video",
+          "type": "COMBO",
+          "widget": {
+            "name": "video"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "fps",
+          "name": "fps",
+          "type": "COMBO",
+          "widget": {
+            "name": "fps"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "grid",
+          "name": "grid",
+          "type": "COMBO",
+          "widget": {
+            "name": "grid"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mode",
+          "name": "mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "timeline_data",
+          "name": "timeline_data",
+          "type": "STRING",
+          "widget": {
+            "name": "timeline_data"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "segment_plan",
+          "name": "segment_plan",
+          "type": "MF_SEGMENT_PLAN",
+          "links": [
+            2
+          ]
+        },
+        {
+          "localized_name": "ranges",
+          "name": "ranges",
+          "type": "SILENCE_RANGES",
+          "links": null
+        },
+        {
+          "localized_name": "plan_json",
+          "name": "plan_json",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "localized_name": "segment_count",
+          "name": "segment_count",
+          "type": "INT",
+          "links": [
+            1
+          ]
+        },
+        {
+          "localized_name": "total_frames",
+          "name": "total_frames",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_EditTimeline"
+      },
+      "widgets_values": [
+        "(none)",
+        "24",
+        "h3_5+17n",
+        "cut",
+        "{\"version\": 1, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 48, \"prompt\": \"\"}, {\"start\": 96, \"end\": 144, \"prompt\": \"\"}, {\"start\": 168, \"end\": 216, \"prompt\": \"\"}]}"
+      ],
+      "widgets_values_named": {
+        "video": "w5_source.mp4",
+        "fps": "24",
+        "grid": "h3_5+17n",
+        "mode": "cut",
+        "timeline_data": "{\"version\": 1, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 48, \"prompt\": \"\"}, {\"start\": 96, \"end\": 144, \"prompt\": \"\"}, {\"start\": 168, \"end\": 216, \"prompt\": \"\"}]}"
+      }
+    },
+    {
+      "id": 2,
+      "type": "StartLoop",
+      "pos": [
+        850,
+        0
+      ],
+      "size": [
+        320,
+        234
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "parent_iteration",
+          "name": "parent_iteration",
+          "shape": 7,
+          "type": "INT",
+          "link": null
+        },
+        {
+          "localized_name": "initial_iteration_value",
+          "name": "initial_iteration_value",
+          "shape": 7,
+          "type": "*",
+          "link": null
+        },
+        {
+          "localized_name": "模式",
+          "name": "mode",
+          "type": "COMFY_DYNAMICCOMBO_V3",
+          "widget": {
+            "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "start_iteration_index",
+          "name": "mode.start_iteration_index",
+          "type": "INT",
+          "widget": {
+            "name": "mode.start_iteration_index"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "max_iteration",
+          "name": "mode.max_iteration",
+          "type": "INT",
+          "widget": {
+            "name": "mode.max_iteration"
+          },
+          "link": 1
+        },
+        {
+          "localized_name": "step",
+          "name": "mode.step",
+          "type": "INT",
+          "widget": {
+            "name": "mode.step"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "cache_iterations",
+          "name": "cache_iterations",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "cache_iterations"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "iteration_index",
+          "name": "iteration_index",
+          "type": "INT",
+          "links": [
+            3
+          ]
+        },
+        {
+          "localized_name": "is_first",
+          "name": "is_first",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "localized_name": "is_last",
+          "name": "is_last",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "localized_name": "list_item",
+          "name": "list_item",
+          "type": "*",
+          "links": null
+        },
+        {
+          "localized_name": "current_iteration_value",
+          "name": "current_iteration_value",
+          "type": "*",
+          "links": [
+            6
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "StartLoop"
+      },
+      "widgets_values": [
+        "For",
+        0,
+        4,
+        1,
+        true
+      ],
+      "widgets_values_named": {
+        "mode": "For",
+        "mode.start_iteration_index": 0,
+        "mode.max_iteration": 4,
+        "mode.step": 1,
+        "cache_iterations": true
+      }
+    },
+    {
+      "id": 3,
+      "type": "MF_SelectSegment",
+      "pos": [
+        1260,
+        0
+      ],
+      "size": [
+        320,
+        138
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "segment_plan",
+          "name": "segment_plan",
+          "type": "MF_SEGMENT_PLAN",
+          "link": 2
+        },
+        {
+          "localized_name": "segment_index",
+          "name": "segment_index",
+          "type": "INT",
+          "widget": {
+            "name": "segment_index"
+          },
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "segment",
+          "name": "segment",
+          "type": "MF_SEGMENT",
+          "links": [
+            4,
+            5
+          ]
+        },
+        {
+          "localized_name": "prompt",
+          "name": "prompt",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "localized_name": "length",
+          "name": "length",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "localized_name": "start_sec",
+          "name": "start_sec",
+          "type": "FLOAT",
+          "links": null
+        },
+        {
+          "localized_name": "segment_count",
+          "name": "segment_count",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_SelectSegment"
+      },
+      "widgets_values": [
+        0
+      ],
+      "widgets_values_named": {
+        "segment_index": 0
+      }
+    },
+    {
+      "id": 4,
+      "type": "MF_LoadSegmentFrames",
+      "pos": [
+        1670,
+        0
+      ],
+      "size": [
+        320,
+        122
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "segment",
+          "name": "segment",
+          "type": "MF_SEGMENT",
+          "link": 4
+        },
+        {
+          "localized_name": "resize",
+          "name": "resize",
+          "type": "COMBO",
+          "widget": {
+            "name": "resize"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "width",
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "height",
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "shortfall",
+          "name": "shortfall",
+          "type": "COMBO",
+          "widget": {
+            "name": "shortfall"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "frames",
+          "name": "frames",
+          "type": "IMAGE",
+          "links": [
+            7
+          ]
+        },
+        {
+          "localized_name": "audio",
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            8
+          ]
+        },
+        {
+          "localized_name": "frame_count",
+          "name": "frame_count",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_LoadSegmentFrames"
+      },
+      "widgets_values": [
+        "none",
+        1344,
+        768,
+        "error"
+      ],
+      "widgets_values_named": {
+        "resize": "none",
+        "width": 1344,
+        "height": 768,
+        "shortfall": "error"
+      }
+    },
+    {
+      "id": 5,
+      "type": "MF_AppendSegment",
+      "pos": [
+        2080,
+        0
+      ],
+      "size": [
+        320,
+        146
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "segment",
+          "name": "segment",
+          "type": "MF_SEGMENT",
+          "link": 5
+        },
+        {
+          "localized_name": "state",
+          "name": "state",
+          "shape": 7,
+          "type": "MF_SEGMENT_STATE",
+          "link": 6
+        },
+        {
+          "localized_name": "latent",
+          "name": "latent",
+          "shape": 7,
+          "type": "LATENT",
+          "link": null
+        },
+        {
+          "localized_name": "vae",
+          "name": "vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": null
+        },
+        {
+          "localized_name": "audio_vae",
+          "name": "audio_vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": null
+        },
+        {
+          "localized_name": "frames",
+          "name": "frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 7
+        },
+        {
+          "localized_name": "audio",
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "state",
+          "name": "state",
+          "type": "MF_SEGMENT_STATE",
+          "links": [
+            9,
+            10
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_AppendSegment"
+      }
+    },
+    {
+      "id": 6,
+      "type": "EndLoop",
+      "pos": [
+        2490,
+        0
+      ],
+      "size": [
+        320,
+        98
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "output_value",
+          "name": "output_value",
+          "shape": 7,
+          "type": "*",
+          "link": 9
+        },
+        {
+          "localized_name": "next_iteration_value",
+          "name": "next_iteration_value",
+          "shape": 7,
+          "type": "*",
+          "link": 10
+        },
+        {
+          "localized_name": "termination0",
+          "name": "terminations.termination0",
+          "shape": 7,
+          "type": "*",
+          "link": null
+        },
+        {
+          "localized_name": "累積",
+          "name": "accumulate",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "accumulate"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "輸出",
+          "name": "outputs",
+          "shape": 6,
+          "type": "MF_SEGMENT_STATE",
+          "links": [
+            11
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EndLoop"
+      },
+      "widgets_values": [
+        false
+      ],
+      "widgets_values_named": {
+        "accumulate": false
+      }
+    },
+    {
+      "id": 7,
+      "type": "MF_AssembleSegments",
+      "pos": [
+        2900,
+        0
+      ],
+      "size": [
+        320,
+        150
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "state",
+          "name": "state",
+          "type": "MF_SEGMENT_STATE",
+          "link": 11
+        },
+        {
+          "localized_name": "audio",
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "localized_name": "filename_prefix",
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": {
+            "name": "filename_prefix"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "codec",
+          "name": "codec",
+          "type": "COMBO",
+          "widget": {
+            "name": "codec"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "crf",
+          "name": "crf",
+          "type": "INT",
+          "widget": {
+            "name": "crf"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "preset",
+          "name": "preset",
+          "type": "COMBO",
+          "widget": {
+            "name": "preset"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "final_video_path",
+          "name": "final_video_path",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "localized_name": "report",
+          "name": "report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_AssembleSegments"
+      },
+      "widgets_values": [
+        "MediaForge/timeline_cut",
+        "h264 (libx264)",
+        18,
+        "medium"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "MediaForge/timeline_cut",
+        "codec": "h264 (libx264)",
+        "crf": 18,
+        "preset": "medium"
+      }
+    },
+    {
+      "id": 8,
+      "type": "MarkdownNote",
+      "pos": [
+        -760,
+        0
+      ],
+      "size": [
+        700,
+        640
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## MediaForge Timeline — cut and reassemble a source video (no model)\n\n1. Choose a video from `input/` in ⏱️ Edit Timeline (mode `cut`), then drag the ranges you want to keep in the timeline editor.\n2. Queue. Each range is loaded by 📽️ Load Segment Frames (frames + audio), appended in order and encoded once by 🧵 Assemble Segments.\n\nUse `resize` in Load Segment Frames to change the output size. Works the same way inside or outside a loop.\n\n---\n1. 在 Edit Timeline（mode `cut`）選 `input/` 裡的影片，在時間軸上拖出要保留的區段。\n2. 執行。每段由 Load Segment Frames 讀出畫面與音訊、依序 Append，最後由 Assemble Segments 一次編碼。\n\n要改輸出尺寸請用 Load Segment Frames 的 `resize`。"
+      ],
+      "widgets_values_named": {
+        "text": "## MediaForge Timeline — cut and reassemble a source video (no model)\n\n1. Choose a video from `input/` in ⏱️ Edit Timeline (mode `cut`), then drag the ranges you want to keep in the timeline editor.\n2. Queue. Each range is loaded by 📽️ Load Segment Frames (frames + audio), appended in order and encoded once by 🧵 Assemble Segments.\n\nUse `resize` in Load Segment Frames to change the output size. Works the same way inside or outside a loop.\n\n---\n1. 在 Edit Timeline（mode `cut`）選 `input/` 裡的影片，在時間軸上拖出要保留的區段。\n2. 執行。每段由 Load Segment Frames 讀出畫面與音訊、依序 Append，最後由 Assemble Segments 一次編碼。\n\n要改輸出尺寸請用 Load Segment Frames 的 `resize`。"
+      },
+      "color": "#432",
+      "bgcolor": "#653"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      3,
+      2,
+      4,
+      "INT"
+    ],
+    [
+      2,
+      1,
+      0,
+      3,
+      0,
+      "MF_SEGMENT_PLAN"
+    ],
+    [
+      3,
+      2,
+      0,
+      3,
+      1,
+      "INT"
+    ],
+    [
+      4,
+      3,
+      0,
+      4,
+      0,
+      "MF_SEGMENT"
+    ],
+    [
+      5,
+      3,
+      0,
+      5,
+      0,
+      "MF_SEGMENT"
+    ],
+    [
+      6,
+      2,
+      4,
+      5,
+      1,
+      "MF_SEGMENT_STATE"
+    ],
+    [
+      7,
+      4,
+      0,
+      5,
+      5,
+      "IMAGE"
+    ],
+    [
+      8,
+      4,
+      1,
+      5,
+      6,
+      "AUDIO"
+    ],
+    [
+      9,
+      5,
+      0,
+      6,
+      0,
+      "MF_SEGMENT_STATE"
+    ],
+    [
+      10,
+      5,
+      0,
+      6,
+      1,
+      "MF_SEGMENT_STATE"
+    ],
+    [
+      11,
+      6,
+      0,
+      7,
+      0,
+      "MF_SEGMENT_STATE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

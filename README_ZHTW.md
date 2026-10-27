@@ -4,13 +4,13 @@
 
 > **給進階使用者的 ComfyUI FFmpeg 工具集。** Tensor↔影音橋接，帶廣播級編碼控制。深度 > 廣度。
 
-FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 probe、tensor-native 影格 I/O、靜音偵測、多片段拼接、單次編碼多層 overlay 的 Compose pipeline，以及 provider-agnostic 的 AI 字幕／翻譯。**所有節點都是 FFmpeg 的薄包裝，不混 GPU / AI 模型推論**。AI 節點靠 `MF_AIConfig` 連線傳遞 provider 設定，一處切換即可整批換 backend。
+FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 probe、tensor-native 影格 I/O、靜音偵測、多片段拼接、單次編碼多層 overlay 的 Compose pipeline、provider-agnostic 的 AI 字幕／翻譯，以及把長片拆成重疊分段生成的時間軸。**影音節點都是 FFmpeg 的薄包裝**；Timeline 節點不載入模型、不取樣、不做 model patch——只改寫你傳入的 `LATENT`、用你接上的 `VAE` 解碼，再交給 FFmpeg 編碼。AI 節點靠 `MF_AIConfig` 連線傳遞 provider 設定，一處切換即可整批換 backend。
 
 📖 **[English README →](README.md)**
 
 ## 亮點
 
-- 🎞️ **24 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）
+- 🎞️ **30 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）
 - 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + tensor_fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
 - 🚀 **智慧 GPU codec 預設** — 偵測到 NVENC 自動用 `h264_nvenc`，沒 GPU 的機器自動 fallback `libx264`。不必手動切、不會在沒卡的環境壞掉
 - 📡 **API-ready 輸出** — 每個產出檔案的節點都同時 emit ComfyUI `ui.images` metadata，`/history/<prompt_id>` 直接看到輸出檔名，`/view?filename=X&subfolder=Y&type=output` 可下載（見 [Using via API](#using-via-api)）
@@ -18,30 +18,32 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 - 🧪 **廣播級編碼控制** — H.264 / HEVC / AV1 / ProRes，支援 CRF / bitrate / target-size 三種編碼模式；NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）由 `ffmpeg -encoders` probe 自動加入 dropdown
 - 🎚️ **單次編碼、多層 overlay 的 Compose pipeline** — `filter_complex` graph 編譯器，N 層 overlay 仍只走一次 re-encode
 - 🤖 **Provider-agnostic AI** — `MF_AIConfig` 讓 Whisper / Translate 在 OpenAI / Groq / Ollama / 本地 backend 之間一處切換
+- 🧵 **時間軸與長片** — 在視覺化編輯器規劃互相重疊的分段，把每段 latent 尾端續接到下一段，逐段解碼並暫存到磁碟，最後只編碼一次。MiniMax H3 AV 支援；LTX-2 / Wan 2.2 為實驗性（見[時間軸與長片](#時間軸與長片)）
 - 🪶 **零硬性 Python 相依** — 只要 PATH 有 `ffmpeg` + `ffprobe`。`requests` / `faster-whisper` 用到才 lazy import
 - 🔁 **Tensor-native** — `IMAGE [B,H,W,C] float32` 跟 ComfyUI canonical 的 `AUDIO` dict；rawvideo roundtrip PSNR > 38 dB
 
 ## 目錄
 
 1. [Quick Start](#quick-start)
-2. [Using via API（API 工作流）](#using-via-api)
-3. [智慧 GPU codec 預設](#智慧-gpu-codec-預設)
-4. [為什麼選這個 plugin（vs VideoHelperSuite）](#為什麼選這個-pluginvs-videohelpersuite)
-5. [節點清單（24）](#節點清單24)
-6. [AI Provider Recipes](#ai-provider-recipes)
-7. [Hidden Contracts（內部型別契約）](#hidden-contracts內部型別契約)
-8. [Architecture](#architecture)
-9. [系統需求](#系統需求)
-10. [安裝](#安裝)
-11. [疑難排解](#疑難排解)
-12. [常見問題](#常見問題)
-13. [測試](#測試)
-14. [Roadmap](#roadmap)
-15. [License & 致謝](#license)
+2. [時間軸與長片（Timeline & Long Video）](#時間軸與長片)
+3. [Using via API（API 工作流）](#using-via-api)
+4. [智慧 GPU codec 預設](#智慧-gpu-codec-預設)
+5. [為什麼選這個 plugin（vs VideoHelperSuite）](#為什麼選這個-pluginvs-videohelpersuite)
+6. [節點清單（30）](#節點清單30)
+7. [AI Provider Recipes](#ai-provider-recipes)
+8. [Hidden Contracts（內部型別契約）](#hidden-contracts內部型別契約)
+9. [Architecture](#architecture)
+10. [系統需求](#系統需求)
+11. [安裝](#安裝)
+12. [疑難排解](#疑難排解)
+13. [常見問題](#常見問題)
+14. [測試](#測試)
+15. [Roadmap](#roadmap)
+16. [License & 致謝](#license)
 
 ## Quick Start
 
-三個逐漸複雜的最小 workflow。每個都以節點鏈描述 — 在 ComfyUI 裡照圖接線即可。
+四個逐漸複雜的最小 workflow。每個都以節點鏈描述 — 在 ComfyUI 裡照圖接線即可。
 
 ### 1. 自動裁靜默（3 個節點，最簡單）
 
@@ -98,9 +100,111 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 具體 `base_url` / `model` 組合可直接複貼 — 見下方 [AI Provider Recipes](#ai-provider-recipes)。
 
+### 4. H3 長片迴圈（5 個 MediaForge 節點 + core Start / End Loop）
+
+把長片拆成互相重疊的 107 幀分段生成，最後只編碼一次。開啟 `example_workflows/timeline_h3_av_loop.json`（ComfyUI 的範本瀏覽器會列出），換成你自己的模型檔；或照下列步驟手動接線：
+
+1. `⏱️ Edit Timeline` — `fps = 24`、`grid = h3_5+17n`、`mode = generate`；三段 `[0,107)`、`[85,192)`、`[153,260)`，每段各寫一個 prompt。
+2. Core `Start Loop` — mode 選 `For`、`start_iteration_index = 0`、`max_iteration` ← Edit Timeline 的 `segment_count`。
+3. `🎯 Select Segment` — `segment_index` ← Start Loop 的 `iteration_index`；把它的 `prompt` 與 `length` 接到產生 conditioning 與空 latent 的 core H3 節點（例如 `MiniMaxH3ImageToVideo`）。
+4. `🧬 Extend Latent` — `target_latent` 接該空 latent、`mask = hard`、`carry_audio = True`、`state` ← Start Loop 的 `current_iteration_value`；輸出的 `latent` 接你的 sampler。
+5. `➕ Append Segment` — 接取樣後的 `latent` + video `vae` + `audio_vae`，`state` ← Start Loop 的 `current_iteration_value`；輸出的 `state` 同時接 End Loop 的 `next_iteration_value` **與** `output_value`（`accumulate = False`）。
+6. `🧵 Assemble Segments` — `state` ← End Loop 的 `outputs` → 一支 `.mp4`（260 幀、32 kHz 音訊）。
+
+接線細節、其他模型與編輯器說明：見[時間軸與長片](#時間軸與長片)。
+
+## 時間軸與長片
+
+> 將長片拆成互相重疊的短段。Latent 是模型使用的壓縮表示；Extend 把上一段尾端放進下一段開頭，用遮罩指定保留與重新生成的程度。你的 sampler 負責生成；Append 逐段解碼、去重並暫存到磁碟，Assemble 最後編碼成影片。這能減少同時保留的解碼畫面，但不保證接縫無痕或總記憶體固定。
+
+六個節點：`⏱️ Edit Timeline` 規劃分段、`🎯 Select Segment` 每輪取出一段、`🧬 Extend Latent` 把上一段尾端寫進新段的 latent、`➕ Append Segment` 解碼並暫存、`🧵 Assemble Segments` 編碼成品。需要參考素材或不經模型直接組裝時，`📽️ Load Segment Frames` 讀出來源影片對應區間的畫面與音訊。模型載入、文字編碼與 sampler 仍是你自己的 core 節點。
+
+### 迴圈接線
+
+```
+Start Loop（mode For：start_iteration_index 0，max_iteration ← Edit Timeline.segment_count）
+  ├─ iteration_index ─────────► Select Segment.segment_index
+  └─ current_iteration_value ─► Extend Latent.state + Append Segment.state   （首輪為 None）
+Append Segment.state ─► End Loop.next_iteration_value + End Loop.output_value   （accumulate = False）
+End Loop.outputs ─► Assemble Segments.state
+```
+
+- `Start Loop` / `End Loop` 是 ComfyUI core 節點（`utilities/looping`）。迴圈本體是 Select Segment → 你的 conditioning / 空 latent 節點 → Extend Latent → 你的 sampler → Append Segment。
+- Start Loop 的 `cache_iterations`（advanced）：`True` 時若只改 Assemble 設定，未變動的分段可直接重用；`False` 每輪都重算。
+- 迴圈本體內的 preview 或其他副作用節點必須也接到 End Loop 的 `terminations`，否則 core 會以「Loop body is not closed」拒絕整個 prompt。
+- 不用迴圈、直接線性串接也可以：每段各一組 Select / Extend / sampler / Append，每個 Append 的 `state` 接到下一段 Extend 與 Append 的 `state`（或把前一段取樣後的 latent 接到 Extend 的 `previous_latent`）。
+
+### 範例 workflow
+
+ComfyUI 會在範本瀏覽器列出 plugin 的 `example_workflows/` 目錄。模型欄位是 `SELECT_*` 佔位值 —— 請換成你自己的檔案。codec 為 `h264 (libx264)`。
+
+| 檔案 | 內容 |
+|---|---|
+| `timeline_h3_av_loop.json` | 三段 MiniMax H3 AV 迴圈，含音訊續接 |
+| `timeline_ltx2_video_carry.json` | 兩段 LTX-2，只續接 video，單段式 sampler |
+| `timeline_wan22_experimental.json` | 兩段 Wan 2.2，high / low sampler 加上 re-Extend 修正 |
+| `timeline_frames_assembly.json` | 不用模型：來源影片 → Load Segment Frames → Append → Assemble |
+
+### 時間軸編輯器
+
+Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框：
+
+- 拖曳分段邊界。`generate` 模式：右邊界改段長、左邊界改與前段的重疊，後續各段跟著平移（ripple），邊界會吸附到該 grid 的合法值；`cut` 模式：邊界以整數幀在相鄰兩段之間移動。
+- 接縫：每段的 incoming seam 可選 `cut` 或 `crossfade`（淡化幀數 + 音訊曲線）。
+- 自動分段（段數、段長、重疊）；`cut` 模式可匯入 🎞️ Detect Scenes 的 `ranges_json`。
+- 預覽選定的來源影片；瀏覽器無法播放的 codec 會改用小尺寸、無聲的 H.264 proxy。
+- 上傳的檔案存到 `input/mediaforge_timeline/`。
+- `timeline_data` JSON 是唯一會被存檔與送出執行的狀態；編輯器的檢視狀態（縮放、選取的段、播放頭）存在節點 properties，不會進入 prompt。
+- 編輯器載入失敗時會改顯示原始 JSON widget，仍可直接編輯。
+- 介面文字為繁體中文；節點名稱、widget 名稱與 enum 值保留英文。
+
+編輯器使用兩條本機 route：`POST /mediaforge/timeline/probe` 與 `POST /mediaforge/timeline/proxy`。只接受同源請求、只讀 ComfyUI `input/` 內的檔案、回應不含絕對路徑；上限為單檔 8 GiB、30 分鐘、每邊 8192 px、120 fps。Proxy 快取在 ComfyUI temp 目錄下的 `mediaforge_timeline_proxy`（4 GiB / 128 筆 / 24 h，LRU）。不連網。跟 core 自己的 route 一樣**沒有認證**、信任 `Host` header（不宣稱能防 DNS rebinding）—— LAN 不可信時請在網路層限制存取。
+
+### 相容性
+
+驗證環境：ComfyUI core 0.42.5、frontend 1.55.18（Nodes 2.0 與 classic）、RTX 5090 —— 這是測試環境，不是最低版本需求。
+
+| 模型 / 路徑 | 狀態 | 實測紀錄 |
+|---|---|---|
+| MiniMax H3 AV — `grid = h3_5+17n`、24 fps、batch 1 | **支援** | 三段各 107 幀、重疊 22 與 39 → 260 幀、32 kHz 音訊 346,667 samples（最後 267 samples 為補齊）。續接的 latent token 經 sampler 後完全保留（最大差 ≤ 5e-7，denoise 0.5 亦同）。832×480 實測接縫縮圖 MAE ≈ 1（0–255 刻度）。`carry_audio = True` 僅限 H3 |
+| LTX-2 AV — `grid = causal_8n+1`、25 fps | 實驗性（需開 `experimental_causal`） | 只續接 video；音訊用 core `LTXVAudioVAEDecode` 解碼（輸出 24 kHz）後接 Append 的 `audio`。2 × 97 幀、重疊 17 → 177 幀；續接的 video token 完全保留。單段式 sampler（`SamplerCustomAdvanced`） |
+| Wan 2.2 T2V 14B — `grid = causal_4n+1`、16 fps | 實驗性（需開 `experimental_causal`） | 官方 high / low 兩段式 `KSamplerAdvanced` 需要[兩段式取樣器](#兩段式取樣器)的修正。2 × 81 幀、重疊 9 → 153 幀；Assemble 外接 48 kHz 音訊 → 459,000 samples |
+| 不用模型（frames 路徑） | 可用 | Load Segment Frames → Append 的 `frames` / `audio` → Assemble，搭配 Start / End Loop，在 core 四種快取模式（classic / lru / none / ram_pressure 預設）都通過 |
+
+拒絕執行（直接報錯停止）：VACE reference 額外 token、未裁除的 guide、batch > 1、layout 與計畫不符的 latent、非 H3 latent 的音訊續接。
+
+「支援」不代表會檢查 conditioning 衝突、保證角色一致或接縫無痕。
+
+### 兩段式取樣器
+
+官方 Wan 2.2 high / low `KSamplerAdvanced` 兩段式串接不會保留續接區：第二段把第一段殘留的雜訊當成保留內容（實測偏差 61.3，每個接縫後的畫面變成雜訊）。修法：在第二個 sampler 前再接一個 `🧬 Extend Latent` —— `target_latent` 接第一個 sampler 的輸出，`segment`、`state` 與其他設定相同，`on_conflict = carry_wins`。實測偏差降為 9.5e-7。沒做這個修正時，Append 會以 `E_CARRY_DRIFT` 停止。
+
+### 記憶體與磁碟
+
+- Append 逐段解碼（或直接吃 `frames`）、去掉重疊、做 crossfade，把無損 FFV1 視訊與 float32 WAV 分段檔（1344×768 約每幀 0.5 MB）暫存到 plugin 的 `.mf_tmp/seg_*` 目錄。解碼前預估 RAM（`E_RAM`）、落盤前檢查剩餘磁碟（`E_DISK`）—— 都是估算，不是保證。
+- Assemble 做唯一一次有損編碼（codec / crf / preset 同其他 MediaForge 編碼節點；ProRes → `.mov`），寫入 BT.709 標記、核對精確的幀數與 sample 數，是六個節點中唯一的 output node。選用的 `audio` 會整條取代音軌（自動補靜音 / 截斷到影片長度）。
+- 音訊時鐘：第一段決定取樣率與聲道（之後不一致 → `E_AUDIO_LAYOUT`）。H3 解碼出的音訊每段約短 8.3 ms，由下一段補上 —— 只有真正的缺口與片尾會補靜音（`W_AUDIO_PAD`）。
+- 快取住的 state 被釋放時，其分段暫存檔會一併刪除；啟動時會清掉超過 24 小時、且所屬程序已不存在的 session 目錄。
+- 這能減少解碼畫面佔用的記憶體，但不保證總記憶體固定或接縫無痕。
+
+### 從 Timeline Director 遷移
+
+不提供 workflow / preset 自動轉換 —— 依概念重建：
+
+| Timeline Director 概念 | MediaForge 重建方式 |
+|---|---|
+| Material Planner | Edit Timeline（單一來源，不含素材庫） |
+| Select / Prepare Loop Segment | Select Segment + Extend Latent |
+| Plan Encoder | Load Segment Frames + core 模型專屬 conditioning |
+| Initialize / Accumulate / Finish Loop | core Start Loop + Append Segment + End Loop + Assemble Segments |
+| Finite / Low-Memory Sampler | 你自己的 sampler + 上述迴圈；Assemble 已經寫檔，不需要再接 SaveVideo |
+| Drift-Control / Soft AV | 無等價實作；`hard` / `taper` / `linear` 遮罩不宣稱相同效果 |
+| SelfLift / Omni / presets | 不提供也不匯入；沿用獨立 workflow、手動重建 |
+| 原音鎖定 | Assemble 的 `audio` 是最終音軌整條替換，不提供口型 conditioning |
+
 ## Using via API
 
-所有產出檔案的節點(BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo / ExtractAudio / ConvertChinese) 都同時 emit ComfyUI `ui.images` metadata 跟 STRING path 兩種輸出。API 客戶端不必自己 parse 路徑就能拿到產出檔。
+所有產出檔案的節點(BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo / ExtractAudio / ConvertChinese / AssembleSegments) 都同時 emit ComfyUI `ui.images` metadata 跟 STRING path 兩種輸出。API 客戶端不必自己 parse 路徑就能拿到產出檔。
 
 注意：若 `filename_prefix` 解析到 `output/` 之外（舊相容用法，例如 `filename_prefix="../input/cleaned"`），節點仍會正常寫檔、正常回傳路徑，但不會出現在 `/history` 的 `ui.images` 清單中 —— ComfyUI 內建的 `/view` endpoint 只服務 `output/` 底下的檔案，沒有對應的合法 `/view` URL 可以暴露。
 
@@ -150,9 +254,49 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 
 `MF_ConvertChinese` 寫 `.srt` 或 `.txt`（heuristic：轉換後字串含 `-->` 視為 SRT）。`MF_WhisperTranscribe` / `MF_TranslateSubtitle` 回傳 SRT **字串內容**而非檔案 — 直接 wire 給 `MF_BurnSubtitle` 的 `srt_text` 輸入（節點內部落地暫存檔），要把 SRT 存成真檔案的話走 `MF_ConvertChinese`（填 `filename_prefix`）。
 
+### 時間軸 prompt
+
+`MF_EditTimeline` 的 `timeline_data` 是 JSON **字串** input；`video` / `fps` / `grid` / `mode` 是各自獨立的 input（`fps` 是 combo 字串，例如 `"24"` 或 `"30000/1001"`；`generate` 不選來源時 `video` 填 `"(none)"`）。`plan_json` 是衍生輸出 —— 永遠不是 input，也不能貼回 `timeline_data`。
+
+| 欄位 | 規則 |
+|---|---|
+| `version` | 整數 `1` |
+| `source.origin_frame` | 來源時間原點，預設 `0` |
+| `segments` | 1–256 段 |
+| `start` / `end` | 整數幀，`end` 不包含；須通過 `mode` / `grid` 驗證 |
+| `prompt` | 字串，預設空；不自動繼承全域 prompt |
+| `seam_in.kind` | `cut` / `crossfade`；`crossfade` 需合法的 `frames` |
+| `seam_in.audio_curve` | `auto` / `linear` / `equal_power` |
+
+未知欄位、重複鍵、拿布林值當整數、非有限數值一律拒絕（`E_TIMELINE_JSON`）。
+
+Core Start Loop 的 API 格式：`"mode": "For", "mode.start_iteration_index": 0, "mode.max_iteration": [<edit_timeline_id>, 3], "mode.step": 1, "cache_iterations": false` —— `mode.max_iteration` 連到 Edit Timeline 的 `segment_count`（輸出 index 3）。Start Loop 的 `iteration_index` 是輸出 0、`current_iteration_value` 是輸出 4；End Loop 的 `outputs` 是輸出 0。
+
+完整、不用模型的 prompt（frames 路徑）：
+
+```json
+{
+  "1": {"class_type": "MF_EditTimeline", "inputs": {"video": "clip.mp4", "fps": "24", "grid": "free", "mode": "generate",
+        "timeline_data": "{\"version\": 1, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 40, \"prompt\": \"a\"}, {\"start\": 30, \"end\": 70, \"prompt\": \"b\", \"seam_in\": {\"kind\": \"crossfade\", \"frames\": 4}}]}"}},
+  "2": {"class_type": "StartLoop", "inputs": {"mode": "For", "mode.start_iteration_index": 0,
+        "mode.max_iteration": ["1", 3], "mode.step": 1, "cache_iterations": false}},
+  "3": {"class_type": "MF_SelectSegment", "inputs": {"segment_plan": ["1", 0], "segment_index": ["2", 0]}},
+  "4": {"class_type": "MF_LoadSegmentFrames", "inputs": {"segment": ["3", 0], "resize": "none",
+        "width": 1344, "height": 768, "shortfall": "error"}},
+  "5": {"class_type": "MF_AppendSegment", "inputs": {"segment": ["3", 0], "state": ["2", 4],
+        "frames": ["4", 0], "audio": ["4", 1]}},
+  "6": {"class_type": "EndLoop", "inputs": {"accumulate": false, "output_value": ["5", 0],
+        "next_iteration_value": ["5", 0]}},
+  "7": {"class_type": "MF_AssembleSegments", "inputs": {"state": ["6", 0], "filename_prefix": "MediaForge/timeline",
+        "codec": "h264 (libx264)", "crf": 18, "preset": "medium"}}
+}
+```
+
+`clip.mp4` 是 `input/` 底下的檔案。Assemble 跟其他產檔節點一樣 emit `ui.images`，`/history` 會列出它的輸出檔。
+
 ## 智慧 GPU codec 預設
 
-所有 encode 能力節點(BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo) 的 `codec` dropdown 預設值在啟動時動態挑:偵測到 ffmpeg 支援 NVENC 就用 **`h264 NVIDIA GPU (h264_nvenc)`**,沒有就 fallback **`h264 (libx264)`** — CPU-only 機器不會壞、不必每次手動切。
+所有 encode 能力節點(BurnSubtitle / LoopVideo / TrimByRanges / ConcatVideos / SaveVideoFrames / ComposeVideo / AssembleSegments) 的 `codec` dropdown 預設值在啟動時動態挑:偵測到 ffmpeg 支援 NVENC 就用 **`h264 NVIDIA GPU (h264_nvenc)`**,沒有就 fallback **`h264 (libx264)`** — CPU-only 機器不會壞、不必每次手動切。
 
 Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec()`），檢查 `ffmpeg -encoders` 有沒有 `h264_nvenc`。NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）只在可用時加進 dropdown；`av1_nvenc` 需要 Ada Lovelace（RTX 4000+）。
 
@@ -192,7 +336,7 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 
 **結論**：兩個都裝。VHS 用於快速 IMAGE batch workflow；MediaForge 用於廣播級編碼、檔案級操作、Compose pipeline、AI 字幕。
 
-## 節點清單（24）
+## 節點清單（30）
 
 每個節點區段都遵循同一個模板：**用途 → 適用情境 → 必填欄位 → 選用輸入 → 輸出 → 範例**。Widget 表掃過去就能找到要調的旋鈕，範例則給典型接線方式。
 
@@ -449,6 +593,129 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 **輸出**：`final_video_path` STRING。
 
 **說明**：`transcode` mode 沒音軌的輸入自動補 `anullsrc` 靜音；`copy` mode 只要 preflight（見上）比對出任何差異就 hard fail — 跨 source 拼接前先用 `MF_SaveVideoFrames` normalize。`copy` mode 輸出的副檔名沿用**第一個輸入**的容器（不是看 `codec` widget，`copy` mode 完全忽略它）——例如兩個 ProRes `.mov` 輸入會產出 `.mov`，不是 `.mp4`（`.mp4` muxer 沒有 ProRes tag，硬塞會 mux 失敗）。
+
+---
+
+#### ⏱️ Edit Timeline (`MF_EditTimeline`)
+
+在同一條時間軸上把長片規劃成分段，輸出其他 Timeline 節點共用的計畫。可在內嵌的[時間軸編輯器](#時間軸編輯器)編輯，也可直接送 `timeline_data` JSON（[時間軸 prompt](#時間軸-prompt)）；每次執行都會重新嚴格驗證 JSON。
+
+**適用情境**：所有 Timeline workflow 的第一個節點 —— `generate` 規劃要由模型生成的分段；`cut` 選取來源區間、不續接 latent。
+
+| Widget | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `video` | dropdown | `(none)` | `input/` 下的參考來源影片。`generate` 可不選、`cut` 必選 |
+| `fps` | dropdown | `24` | 時間軸幀率（有理數）：`16` / `24` / `25` / `30` / `24000/1001` / `30000/1001` / `48` / `50` / `60000/1001` / `60`。H3 必須 `24` |
+| `grid` | dropdown | `h3_5+17n` | 決定合法段長與重疊（見下表）；不選擇也不載入模型。`mode = cut` 時隱藏（cut 不使用） |
+| `mode` | dropdown | `generate` | `generate` 規劃生成段；`cut` 選取來源區間，不續接 latent |
+| `timeline_data` | STRING (multiline) | `{"version": 1, "source": {"origin_frame": 0}, "segments": [{"start": 0, "end": 107, "prompt": ""}]}` | 以 JSON 字串表示的計畫。視覺化編輯器正常運作時隱藏；編輯器載入失敗時顯示且可編輯 |
+
+| `grid` | 合法段長（幀） | 合法重疊（幀） | 續接 |
+|---|---|---|---|
+| `h3_5+17n` | 5 + 17n | 0 或 5 + 17j | video（開 `carry_audio` 時含 audio）；fps 必須 `24` |
+| `causal_4n+1` | 1 + 4n | 0 或 1 + 4j | video；需開 `experimental_causal` |
+| `causal_8n+1` | 1 + 8n | 0 或 1 + 8j | video；需開 `experimental_causal` |
+| `free` | 任意 ≥ 1 | 任意 | 無 —— 重疊只做裁切 |
+
+`generate`：首段從 0 開始；start 與 end 都嚴格遞增、段與段之間不留白，所以每個重疊都比相鄰兩段短；`crossfade` 接縫的幀數須在 1 … min(重疊, 前段輸出長度)。`cut`：必須選 `video`；各段依序排列、互不重疊（可相接）、不超出來源範圍，接縫只能 `cut`。
+
+**輸出**：
+
+| 輸出 | 型別 | 說明 |
+|---|---|---|
+| `segment_plan` | MF_SEGMENT_PLAN | 接 Select Segment |
+| `ranges` | SILENCE_RANGES | `cut`：選取的來源區間（秒，與 `MF_DetectScenes` 同慣例，可接 `MF_TrimByRanges`）；`generate`：空 list |
+| `plan_json` | STRING | 驗證後計畫的 JSON，供檢視 —— 永遠不是 input |
+| `segment_count` | INT | 接 Start Loop 的 `max_iteration` |
+| `total_frames` | INT | 輸出總幀數 |
+
+**說明**：`IS_CHANGED` 以選定 `video` 的檔案指紋判斷，換檔會重新規劃。讀不到來源起始時間時印出 `W_SOURCE_TIME_UNKNOWN`。
+
+**範例**：H3 —— `fps = 24`、`grid = h3_5+17n`，分段 `[0,107)`、`[85,192)`、`[153,260)`（重疊 22 與 39，都是 5 + 17j）→ `segment_count = 3`、`total_frames = 260`。
+
+---
+
+#### 🎯 Select Segment (`MF_SelectSegment`)
+
+從計畫取出一段。輸出的 `segment` 是 Load Segment Frames、Extend Latent、Append Segment 共用的規格 —— fps、重疊與續接大小只在這裡算一次。
+
+**適用情境**：迴圈每輪一次，或線性串接時每段一次。
+
+| Widget | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `segment_index` | INT | `0` (0–255, step 1) | 0 起算；迴圈中接 Start Loop 的 `iteration_index`。超出範圍 → `E_SEGMENT_INDEX` |
+
+**輸入**：`segment_plan`（MF_SEGMENT_PLAN），來自 Edit Timeline。
+
+**輸出**：`segment`（MF_SEGMENT）、`prompt` STRING（本段 prompt，接你的文字編碼節點）、`length` INT（幀數，接你的空 latent 節點）、`start_sec` FLOAT（時間軸秒數）、`segment_count` INT。
+
+---
+
+#### 📽️ Load Segment Frames (`MF_LoadSegmentFrames`)
+
+解碼計畫來源影片落在某一段內的畫面與音訊，並重取樣到時間軸 fps（來源 fps 相同時逐幀精確，不同時取最近幀）。
+
+**適用情境**：給模型的參考素材（例如 video-to-video conditioning），或不經模型直接組裝時的畫面本身（`timeline_frames_assembly.json`）。需要在 Edit Timeline 選了 `video`。
+
+| Widget | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `resize` | dropdown | `none` | `none` 原尺寸；`fit` 等比縮放留邊；`fill` 等比縮放裁切；`stretch` 拉伸 |
+| `width` | INT | `1344` (2–7680, step 2) | `resize = none` 時隱藏 |
+| `height` | INT | `768` (2–4320, step 2) | `resize = none` 時隱藏 |
+| `shortfall` | dropdown | `error` | 來源不足以涵蓋本段時：`error`（`E_SOURCE_SHORTFALL`）、`hold_last`（延用最近一幀 —— 完全沒有畫面時不能延用）、`black`（補黑） |
+
+**輸入**：`segment`（MF_SEGMENT）。
+
+**輸出**：`frames` IMAGE、`audio` AUDIO（來源沒有音軌時為 `None`；段落超出來源的部分補靜音）、`frame_count` INT。
+
+**說明**：每次執行都重新解析來源路徑並比對指紋；Edit Timeline 執行後來源被換掉 → `E_SOURCE_CHANGED`。
+
+---
+
+#### ➕ Append Segment (`MF_AppendSegment`)
+
+接收完成的一段，用你的 VAE 解碼（或直接吃 `frames`），去掉與前段的重疊、套用 incoming crossfade，並把無損分段檔暫存到磁碟。回傳新的 state；輸入的 state 不會被修改。
+
+**適用情境**：接在 sampler 之後，每段一次。
+
+沒有 widget —— 只有 socket：
+
+| 輸入 | 型別 | 說明 |
+|---|---|---|
+| `segment` | MF_SEGMENT | 必填；來自 Select Segment |
+| `state` *(選用)* | MF_SEGMENT_STATE | 前一段的 state；第一段留空（迴圈中接 Start Loop 的 `current_iteration_value`） |
+| `latent` *(選用)* | LATENT | 本段取樣結果；也是下一段續接的來源 |
+| `vae` *(選用)* | VAE | 解碼 latent 的畫面；沒接 `frames` 時必接 |
+| `audio_vae` *(選用)* | VAE | 解碼同一個 AV latent 的音訊 stream |
+| `frames` *(選用)* | IMAGE | 直接提供本段畫面，不經 VAE |
+| `audio` *(選用)* | AUDIO | 本段音訊 |
+
+**規則**：`frames` 與 `vae` / `audio_vae` 互斥（接 `frames` 時 `latent` 可保留作續接來源）；沒接 `frames` 時 `latent` 與 `vae` 都必接；`audio` 與 `audio_vae` 擇一；下一段要從本段續接時必須接 `latent`。
+
+**輸出**：`state`（MF_SEGMENT_STATE）→ End Loop 的 `next_iteration_value` + `output_value`，或線性串接時下一段的 Extend / Append。
+
+**檢查**：分段順序與計畫（`E_SEQUENCE`、`E_PLAN`）；latent 上的續接標記（缺少 → `W_PROVENANCE`，不符 → `E_PROVENANCE`）；續接區是否被 sampler 改變（`E_CARRY_DRIFT`）；RAM / 磁碟預估（`E_RAM`、`E_DISK`）；各段解析度與音訊格式一致（`E_AUDIO_LAYOUT`）。`audio_curve = auto` 的 crossfade：音訊由 `audio_vae` 從同一個續接的 H3 latent 解碼時用 `linear`，其他情況用 `equal_power`。
+
+---
+
+#### 🧵 Assemble Segments (`MF_AssembleSegments`)
+
+把暫存的分段檔編碼成最終影片 —— Timeline 流程中唯一一次有損編碼 —— 也是流程的 output node。
+
+**適用情境**：接在 End Loop 之後（`outputs` 接 `state`），或線性串接的最後一個 Append 之後。
+
+| Widget | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `filename_prefix` | STRING | `MediaForge/timeline` | → `output/<prefix>_NNNNN.mp4`（ProRes 為 `.mov`） |
+| `codec` | dropdown | smart（有 NVENC 用、沒有用 libx264） | 跟其他編碼節點共用 catalog |
+| `crf` | INT | `18` (0–51) | `prores (prores_ks)` 時隱藏。刻度意義隨 codec 不同，見[智慧 GPU codec 預設](#智慧-gpu-codec-預設) |
+| `preset` | dropdown | `medium` | `ultrafast` … `veryslow`。`prores (prores_ks)` 時隱藏 |
+
+**輸入**：`state`（MF_SEGMENT_STATE，必填）；`audio`（AUDIO，選用）—— 整條取代最終音軌，自動補靜音 / 截斷到影片長度。
+
+**輸出**：`final_video_path` STRING；`report` STRING（JSON：幀數、fps、尺寸、色彩假設、音訊來源 / 取樣率 / samples、補靜音數、各接縫診斷）。emit `ui.images` 給 `/history`。
+
+**說明**：假設 BT.709（full-range RGB → limited-range YUV）並寫入對應標記；核對幀數，有內部音軌時也核對精確 sample 數；分段檔被刪除（例如清掉 `.mf_tmp/`，或被快取逐出）→ `E_SPILL_MISSING`，請重跑迴圈。這裡不刪分段檔，因為快取住的 state 可能還會被重用。
 
 ---
 
@@ -844,9 +1111,9 @@ EBU R128 / streaming 級響度標準化（走 `loudnorm` 單 pass）。
 3. 把 overlay chain 的最後輸出(原本是 `MF_COMPOSE` IR) 接到 `MF_ComposeVideo` 的新 `overlays` pin(類型現在是 `MF_COMPOSE_OPS`、chain 結構相同)。
 4. 如果原本另外用 `MF_BurnSubtitle` 二次 encode 字幕、改用 `MF_ComposeBurnSubtitle` 串進 chain、可以併進單次 encode 省一輪。
 
-### `MediaForge/AI` — provider-agnostic
+### `MediaForge/AI` — Latent 工具與 provider-agnostic AI 服務
 
-Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改，直到 Whisper / Translate 在所有 provider recipe 都 e2e 驗證完才會凍結。
+Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改，直到 Whisper / Translate 在所有 provider recipe 都 e2e 驗證完才會凍結。`🧬 Extend Latent`（本分類最後一個）是 Timeline 用的 latent 工具 —— 不吃 `AI_CONFIG`，也不發任何網路請求。
 
 #### ⚙️ AI Config (`MF_AIConfig`)
 
@@ -914,6 +1181,38 @@ SRT 文字 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`�
 
 **推薦模型**：`gpt-4o-mini`（快又便宜、batch 30 內 OK）；`gpt-4o` / `llama-3.3-70b-versatile`（長段或專業詞彙更穩、可吃 batch 50+）。
 
+---
+
+#### 🧬 Extend Latent (`MF_ExtendLatent`)
+
+把前一段 latent 的尾端複製到本段空 latent 的開頭，並設定 `noise_mask`，讓 sampler 保留（或部分重新生成）這一區。只做 tensor 運算 —— 不載入模型、不取樣。
+
+**適用情境**：每一段都接在你的空 latent 節點與 sampler 之間。第一段（沒有與前段重疊）直接通過、不做續接。
+
+| Widget | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `mask` | dropdown | `hard` | `hard` 保留全部續接 token；`taper` 放寬續接區尾端；`linear` 逐步放寬（最後一個續接 token 可完全去噪；只續接 1 個 token 時例外保留） |
+| `carry_audio` | BOOLEAN | `False` | 僅 H3 音訊續接（其他 latent → `E_AUDIO_CARRY`）；關閉時不改音訊 latent／遮罩 |
+| `video_taper_tokens` *(選用)* | INT | `2` (0–1000000, step 1) | `taper` 時 video 續接區尾端放寬的 token 數，不得超過續接 token 數。`mask = hard` 或 `linear` 時隱藏 |
+| `audio_taper_tokens` *(選用)* | INT | `2` (0–1000000, step 1) | audio 版本，規則同上。`mask = hard` 或 `linear` 時隱藏，`carry_audio` 關閉時也隱藏 |
+| `experimental_causal` *(選用)* | BOOLEAN | `False` | 啟用因果 grid（Wan / LTX）的續接；接縫可能不連續。關閉時在這些 grid 上續接 → `E_CAUSAL` |
+| `on_conflict` *(選用)* | dropdown | `error` | `error`：既有遮罩與續接區衝突時停止（`E_MASK_CONFLICT`）；`carry_wins`：覆寫續接區的 samples 與 mask |
+
+**Socket**：
+
+| 輸入 | 型別 | 說明 |
+|---|---|---|
+| `target_latent` | LATENT | 必填。本段的空 latent，形狀需已是最終尺寸；時間長度必須等於本段 token 數（否則 `E_TOKENS`） |
+| `segment` | MF_SEGMENT | 必填；來自 Select Segment |
+| `state` *(選用)* | MF_SEGMENT_STATE | 前一段 Append 的 `state`（迴圈：Start Loop 的 `current_iteration_value`）；與 `previous_latent` 擇一 |
+| `previous_latent` *(選用)* | LATENT | 前一段取樣後的 latent（線性串接）；與 `state` 擇一 |
+
+**輸出**：`latent` LATENT（→ 你的 sampler）；`report` STRING（JSON：複製區間、token 數、要求與實際生效的遮罩值、衝突、provenance、警告）。
+
+**說明**：輸出的 latent 帶有 `mf_carry` 標記，Append 會檢查它。不檢查 conditioning（prompt、keyframe、reference）—— `report` 固定寫 `conditioning_check: "unavailable"`。有重疊的段卻 `state` 與 `previous_latent` 都沒接 → `E_CARRY_SOURCE`。
+
+**範例**：H3 迴圈 —— `mask = hard`、`carry_audio = True`、`state` ← Start Loop 的 `current_iteration_value`。Wan 2.2 high / low 見[兩段式取樣器](#兩段式取樣器)。
+
 ## AI Provider Recipes
 
 `MF_AIConfig` 輸出的 dict 由所有 AI 節點消費。同一個 `provider` / `base_url` / `api_key` / `model` 介面 — 只是值換。可直接複貼的組合：
@@ -972,6 +1271,10 @@ model      = llama3.2                       # 你本地 pull 過的任何 model
 - **MF_COMPOSE_OPS**：`list[dict]` — 純 op-spec dict（`{"type": "drawtext" | "overlay" | "watermark" | "subtitle", "params": {...}, "image_path"?: ...}`），由 `MF_ComposeOverlayText` / `MF_ComposeOverlayImage` / `MF_ComposeWatermark` / `MF_ComposeBurnSubtitle` append。Compose v2 的視訊 chain 連線型別。
 - **MF_COMPOSE_AUDIO_OPS**：`list[dict]` — 音訊 chain 版本（`{"type": "volume" | "amix" | "afade" | "loudnorm", "params": {...}}`），由 `MF_ComposeVolume` / `MF_ComposeAudioMix` / `MF_ComposeAudioFade` / `MF_ComposeNormalize` append。`MF_ComposeVideo` 在 compile 時透過 `utils/compose_ops.py` dispatch 把兩條 chain 解析進內部的 `ComposeIR` dataclass（`utils/compose_ir.py`）— IR 本身已經不是跨節點的連線型別（那是 Compose v1 的 `MF_COMPOSE`，隨 `ComposeStart`/`ComposeFinalize` 一起除役）。
 - **AI_CONFIG**: `dict`，keys 為 `provider / base_url / api_key / model / device`（`api_key` 是解析後的值 — `env:` 間接引用由 `MF_AIConfig` 在 dict 離開節點前展開）。Experimental。
+- **MF_SEGMENT_PLAN**：`MF_EditTimeline` 輸出的版本化、不可變計畫 dict —— `plan_id` / `execution_id`、mode、fps、grid、來源參照、分段、`total_frames`。不含絕對路徑。
+- **MF_SEGMENT**：`MF_SelectSegment` 輸出的版本化、不可變單段規格 —— 段號 / 段數、start / end / length、重疊、續接大小、接縫、來源區間、prompt。Load Segment Frames、Extend Latent、Append Segment 共用。
+- **MF_SEGMENT_STATE**：不可變 dict；每次 `MF_AppendSegment` 都回傳新的一份（session、暫存目錄、已提交的幀 / samples、待 crossfade 的尾端、續接用的 latent 尾端）。它在程序內持有分段暫存檔，所以不能序列化進 workflow。
+- **LATENT `mf_carry`**：`MF_ExtendLatent` 在輸出的 LATENT dict 加上 `{execution_id, segment_index, carry_spec_id, streams_carried}`；core sampler 會保留它。Append 把它當一致性提示（consistent / absent / mismatch），不是來源證明。
 
 ## Architecture
 
@@ -982,6 +1285,8 @@ comfyui_MediaForge/
 ├── requirements.txt         # ffmpeg binary fallback + 輕量純 Python 相依；大型選用相依仍走 lazy import
 ├── nodes/                   # 一節點一檔，類別命名 MF_<Verb><Noun>
 │   ├── ai_config.py            # MF_AIConfig
+│   ├── append_segment.py       # MF_AppendSegment  — Timeline：解碼、去重疊、暫存到 .mf_tmp/
+│   ├── assemble_segments.py    # MF_AssembleSegments  — Timeline：最終編碼（OUTPUT_NODE）
 │   ├── burn_subtitle.py        # MF_BurnSubtitle  — 使用 font/ 子目錄
 │   ├── compose_video.py        # MF_ComposeVideo  — Compose v2 終點(取代 Start+Finalize)
 │   ├── compose_overlay_text.py # MF_ComposeOverlayText
@@ -996,11 +1301,15 @@ comfyui_MediaForge/
 │   ├── convert_chinese.py      # MF_ConvertChinese  — OpenCC 簡繁轉換
 │   ├── detect_scenes.py        # MF_DetectScenes  — MediaForge/Analysis
 │   ├── detect_silence.py       # MF_DetectSilence
+│   ├── edit_timeline.py        # MF_EditTimeline  — Timeline 計畫（+ web/timeline_editor.js）
+│   ├── extend_latent.py        # MF_ExtendLatent  — Timeline latent 尾端續接（MediaForge/AI）
 │   ├── extract_audio.py        # MF_ExtractAudio  — MediaForge/Audio（Phase 6 第一個節點）
+│   ├── load_segment_frames.py  # MF_LoadSegmentFrames  — Timeline：逐段讀來源畫面 / 音訊
 │   ├── load_video_frames.py    # MF_LoadVideoFrames
 │   ├── loop_video.py           # MF_LoopVideo
 │   ├── probe_media.py          # MF_ProbeMedia
 │   ├── save_video_frames.py    # MF_SaveVideoFrames
+│   ├── select_segment.py       # MF_SelectSegment  — Timeline：每輪取出一段規格
 │   ├── select_video.py         # MF_SelectVideo  — input/ 影片 dropdown picker
 │   ├── translate_subtitle.py   # MF_TranslateSubtitle
 │   ├── trim_by_ranges.py       # MF_TrimByRanges
@@ -1013,23 +1322,35 @@ comfyui_MediaForge/
 │   ├── compose_ops.py       # MF_COMPOSE_OPS / AUDIO_OPS dispatch + watermark resolver
 │   ├── encoder.py           # codec catalog + NVENC probe + pick_default_codec + build_encoder_args
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
+│   ├── latent_carry.py      # Timeline：latent stream 拆分、尾端擷取、續接遮罩、provenance
 │   ├── output_path.py       # resolve_output_path + output_path_to_ui_entry (API metadata helper)
+│   ├── segment_spill.py     # Timeline：不可變 state、FFV1 / WAV 分段暫存、crossfade、最終編碼
+│   ├── timeline_messages.py # Timeline：訊息目錄（穩定的 E_* / W_* key）
+│   ├── timeline_plan.py     # Timeline：時基、grid、timeline_data 驗證、分段規格
+│   ├── timeline_routes.py   # Timeline：編輯器用的 /mediaforge/timeline/probe + /proxy route
+│   ├── timeline_source.py   # Timeline：input/ 來源解析、安全的 FFmpeg 輸入旗標、檔案指紋
 │   └── video_io.py          # rawvideo pipe ↔ IMAGE/AUDIO + encode_tensor_to_tempfile
 ├── font/                    # 丟 .ttf / .otf 進來給 MF_BurnSubtitle 的 font_file dropdown
+├── example_workflows/       # Timeline 範例 workflow（會出現在 ComfyUI 範本瀏覽器）
 ├── web/
-│   └── dual_input_lock.js   # 前端 extension：依 dual-input 模式隱藏不適用 widget
-│                            #   - lock_widget / hidden_when_connected: tensor 模式隱藏
-│                            #   - linked_widgets: path 模式隱藏
+│   ├── dual_input_lock.js   # 前端 extension：依 dual-input 模式隱藏不適用 widget
+│   │                        #   - lock_widget / hidden_when_connected: tensor 模式隱藏
+│   │                        #   - linked_widgets: path 模式隱藏
+│   ├── timeline_editor.js   # Edit Timeline 視覺化編輯器（DOM widget）
+│   ├── timeline_grid.js     # grid / 驗證規則，與 utils/timeline_plan.py 對拍
+│   └── timeline_strings.js  # 編輯器介面文字（繁體中文）
 └── tests/                   # 開發者本地 pytest suite — gitignored，不隨公開 repo 發佈（見「測試」章節）
     ├── test_compose_ir.py        # IR spike case（Phase 4 prerequisite）
     ├── test_compose_e2e.py       # real-ffmpeg e2e
     ├── test_video_io_roundtrip.py# PSNR > 38 dB rawvideo roundtrip
+    ├── test_timeline_*.py        # Timeline 計畫 / 節點 / route / 真 core 快取（T09）
+    ├── js/timeline_grid.test.mjs # grid 規則對共用 golden vectors（node --test）
     └── test_codex_r*_fixes.py    # 各輪 codex review 留下的回歸測試
 ```
 
 **加新節點**：丟一個 `nodes/<verb>_<noun>.py`，內含 `MF_<Verb><Noun>` 類別 + `NODE_CLASS_MAPPINGS` / `NODE_DISPLAY_NAME_MAPPINGS`。Aggregator 會自動撿到 — 重啟 ComfyUI 即可。
 
-> ⚠️ **要知道的 silent failure**：module-level import 錯誤會讓節點**靜靜地**不出現在 menu。新節點沒出現的第一步檢查：`python -c "from custom_nodes.comfyui_MediaForge.nodes.<your_file> import *"` 看真正的 traceback。選用相依（`requests`、`faster-whisper`、`yt-dlp`）**必須** lazy import 在 FUNCTION method 裡，不能放 module top。
+> ⚠️ **Import 失敗**：`__init__.py` 逐一 import 每個節點 module —— import 失敗的 module 會被跳過，console 印出 `[MediaForge] 節點模組 <name> 載入失敗：<錯誤>`，其他節點照常註冊。要看完整 traceback：`python -c "from custom_nodes.comfyui_MediaForge.nodes.<your_file> import *"`。選用相依（`requests`、`faster-whisper`、`yt-dlp`）**必須** lazy import 在 FUNCTION method 裡，不能放 module top。
 
 ## 系統需求
 
@@ -1037,6 +1358,7 @@ comfyui_MediaForge/
 - Python ≥ 3.10
 - **PATH 上要有 FFmpeg + FFprobe**
 - 選用：`requests`（任何打 HTTP AI provider 的節點）、`faster-whisper`（本地 Whisper backend） — 第一次用到才會 lazy import
+- Timeline 節點：不需額外 pip 套件（`psutil`、`torch`、`numpy` 隨 ComfyUI 安裝）；測試環境為 ComfyUI core 0.42.5 / frontend 1.55.18 —— 不是最低版本需求（見[相容性](#相容性)）
 
 FFmpeg 安裝：
 - **Windows**：https://www.gyan.dev/ffmpeg/builds/（essentials build） — 解壓後把 `bin/` 加進 PATH
@@ -1072,7 +1394,7 @@ pip install faster-whisper    # 只給 backend="faster_whisper_local" 用
 
 | 症狀 | 可能原因 | 修法 |
 |---|---|---|
-| 重啟後 menu 找不到節點 | Module-level import 錯（ComfyUI 會吞掉訊息） | `python -c "from custom_nodes.comfyui_MediaForge.nodes.<file> import *"` 把真正的 traceback 逼出來 |
+| 重啟後 menu 找不到節點 | Module-level import 錯 —— console 會印 `[MediaForge] 節點模組 <name> 載入失敗：…`，其他節點照常載入 | `python -c "from custom_nodes.comfyui_MediaForge.nodes.<file> import *"` 看完整 traceback |
 | `RuntimeError: ffmpeg ... failed` | FFmpeg exit code 非 0 | 往上滑 — raise 前面已經印了 FFmpeg stderr 最後 30 行 |
 | FFmpeg 在 filter 階段抱怨路徑裡的 `:`（Windows） | 路徑沒 escape 就進 filter graph | 我們會自動走 `escape_filter_path()` — 只有自製節點繞過它才會中招 |
 | 檔名含 `[ ] ' , ;` 等 filter 特殊字元，字幕/drawtext/overlay 節點出錯 | 跟 `:` 同一個根因 — 這些字元在 filtergraph 語法裡也有特殊意義 | 同樣自動處理：`escape_filter_path()` 現在做完整的兩層 FFmpeg escape（`: ' \ [ ] , ;`），不只 colon。只影響 filter graph 內的路徑（`subtitles=`、`textfile=` 等）— 純 `-i` 參數本來就不需要 escape |
@@ -1082,13 +1404,43 @@ pip install faster-whisper    # 只給 backend="faster_whisper_local" 用
 | 翻譯輸出行數對不上原文 | 小 LLM 把編號批次搞混了 | 換大模型（`gpt-4o`、`llama-3.3-70b-versatile`）；prompt 已加行號對齊，但小模型超過 50 行還是會漏 |
 | `reverse` filter 在長片爆記憶體 | `reverse` 會把整段串流載入 RAM | 目前是硬上限；先裁短或自己 split-and-stitch |
 
+### 時間軸訊息
+
+Timeline 節點的訊息格式為 `[<節點名稱>] <KEY>：<訊息>`，以下依 key 索引。
+
+| Key | 節點 | 訊息 | 修法 |
+|---|---|---|---|
+| `E_TIMELINE_JSON` | Edit Timeline | 時間軸 JSON 無效：{reason}。請修正 {location}。 | 修正訊息指出的欄位（格式見[時間軸 prompt](#時間軸-prompt)）；編輯器會在該段標出同一個錯誤 |
+| `E_H3_FPS` | Edit Timeline | H3 grid 僅支援 24 fps。請將 fps 設為 24。 | 設 `fps = 24`，或改用其他 `grid` |
+| `W_SOURCE_TIME_UNKNOWN` | Edit Timeline | 無法取得來源的起始時間，暫以 0 計算；預覽與來源時間可能略有偏移。 | 僅警告，執行會繼續 |
+| `E_SEGMENT_INDEX` | Select Segment | segment_index 超出範圍：計畫共 {count} 段（0 起算），收到 {index}。 | Start Loop 的 `max_iteration` 接 Edit Timeline 的 `segment_count` |
+| `E_SOURCE_CHANGED` | Load Segment Frames | 來源影片已變更，請重新執行 Edit Timeline。 | 重新 queue，讓 Edit Timeline 重讀檔案 |
+| `E_SOURCE_SHORTFALL` | Load Segment Frames | 來源影片不足以涵蓋第 {segment} 段。請改用 hold_last / black 或調整時間框。 | `shortfall` 改 `hold_last` / `black`，或把該段移回來源範圍內 |
+| `E_TOKENS` | Extend Latent | latent 時間長度不符：預期 {expected}，收到 {actual}。請檢查 grid、VACE reference 與 guide 接線。 | 用 Select Segment 的 `length` 建空 latent、`grid` 與模型相符；`target_latent` 不能含 VACE reference 或 guide token |
+| `E_AUDIO_CARRY` | Extend Latent | 此 latent 不支援音訊續接。請關閉 carry_audio。 | 關閉 `carry_audio`（僅限 H3）；LTX-2 改把解碼後的音訊接 Append 的 `audio` |
+| `E_CARRY_SOURCE` | Extend Latent | 本段需要續接資料。請連接 state 或 previous_latent（擇一）。 | 迴圈：Start Loop 的 `current_iteration_value` → `state`；線性串接：前一段取樣後的 latent → `previous_latent` |
+| `E_CAUSAL` | Extend Latent | 此續接模式仍在實驗階段。確認後開啟 experimental_causal。 | 開啟 `experimental_causal`（因果 grid：Wan / LTX） |
+| `E_MASK_CONFLICT` | Extend Latent | 續接區與既有遮罩衝突。請調整接線，或選擇 carry_wins。 | 設 `on_conflict = carry_wins`，或移除另一個遮罩 |
+| `E_PROVENANCE` | Extend Latent / Append Segment | 續接標記與本段不符（{field}）。請檢查分段接線。 | 同一輪的節點都要接同一個 Select Segment 輸出；latent 必須來自本段的 Extend → sampler |
+| `W_PROVENANCE` | Extend Latent / Append Segment | 缺少續接標記；將繼續執行。請檢查分段與 guide 接線。 | 確認進入 Append 的 latent（或 `previous_latent`）有經過 Extend Latent |
+| `E_SEQUENCE` | Append Segment / Assemble Segments | 預期第 {expected} 段，收到第 {actual} 段。請連接前一段的 state。 | 第一段 `state` 留空；之後各段接前一段 Append 的 `state`；Assemble 要接最後一段之後的 state |
+| `E_PLAN` | Append Segment | 分段與 state 屬於不同計畫。請重新執行整個迴圈。 | 改過時間軸或來源後，整個迴圈重跑 |
+| `E_CARRY_DRIFT` | Append Segment | 續接區在取樣後被改變（最大差 {drift}）。兩段式取樣（例如 Wan 2.2 high / low）請在第二個 sampler 前再接一次 Extend Latent，on_conflict 設 carry_wins。 | 見[兩段式取樣器](#兩段式取樣器) |
+| `E_RAM` | Append Segment | 本段估計需 {gib} GiB RAM，超過預檢門檻。請縮短段長或降低解析度。 | 照訊息處理；門檻是可用 RAM 的 80% |
+| `E_DISK` | Append Segment | 暫存空間不足，需至少 {gib} GiB。請釋出空間後重試。 | 清出 plugin `.mf_tmp/` 所在磁碟的空間 |
+| `E_AUDIO_LAYOUT` | Append Segment | 各段音訊的有無、取樣率或聲道必須一致。請在上游統一音訊格式。 | 每段音訊都來自同一個來源 / VAE，或全部不接 |
+| `W_AUDIO_PAD` | Append Segment | 已在接縫或結尾補入 {samples} 個靜音樣本。 | 僅提示（H3 會補片尾，例如 267 samples） |
+| `E_SPILL_MISSING` | Assemble Segments | 分段暫存檔已不存在。請重跑整個迴圈，再組裝。 | 分段檔被刪了（例如清掉 `.mf_tmp/`，或被快取逐出）；重跑迴圈 |
+| `W_PROXY` | 時間軸編輯器 | 預覽建立失敗；時間軸仍可編輯。請重試。 | 編輯器顯示「預覽失敗（時間軸仍可編輯）」與「重試」按鈕；沒有預覽也能編輯 |
+| — | core Start / End Loop | `Loop body is not closed` | 迴圈本體內的 preview / 副作用節點沒接到 End Loop 的 `terminations` —— 接上，或移到迴圈外 |
+
 ## 常見問題
 
 **Q：為什麼不全用 VideoHelperSuite 就好？**
 A：VHS 在 IMAGE-batch workflow 很強。MediaForge 補的是**檔案級**操作（跨 codec 拼接、音訊感知裁切、廣播級編碼器）和**單次編碼多層 overlay** Compose。兩個一起裝。
 
 **Q：會加 diffusion / 生成節點嗎？**
-A：不會 — 這是設計決策。MediaForge 是 FFmpeg side 的工具集。AI 生成屬於 ComfyUI 核心 / 專門 plugin。我們只做後製端 AI（Whisper 轉錄、LLM 翻譯）。
+A：不會加模型載入、sampler 或 model patch —— 這是設計決策，生成仍屬於 ComfyUI 核心 / 專門 plugin。MediaForge 提供後製端 AI（Whisper 轉錄、LLM 翻譯）與 Timeline 的 latent 工具：Extend Latent 改寫你傳入的 `LATENT`、Append 用你接上的 `VAE` 解碼，最後交給 FFmpeg 編碼。模型 workflow 由你自己準備（見[時間軸與長片](#時間軸與長片)）。
 
 **Q：為什麼 AI 節點標 "experimental"？**
 A：`AI_CONFIG` schema 在 Phase 5 shakedown 期間可能會改。等到 Whisper + Translate 在 4 種 provider 都 e2e 驗證完，schema 才會凍結。
@@ -1119,6 +1471,13 @@ python -m pytest tests/ -k "video_io"        # 只跑 rawvideo roundtrip
 
 real-ffmpeg 系列需要 PATH 上有 `ffmpeg`。
 
+Timeline 測試（`test_timeline_*.py`、`test_latent_carry.py`、`test_segment_spill.py`、`test_load_segment_frames.py`）跟 `tests/` 其他測試一樣只在開發者本地。真 core 快取測試 `tests/test_timeline_core_cache.py` 會用 ComfyUI 的 interpreter 啟動多個 `main.py --cpu` 實例，必須在 ComfyUI 的 Linux / WSL 環境內跑。JS grid 測試需要 Node.js：
+
+```bash
+python -m pytest -q tests/test_timeline_core_cache.py   # 在 ComfyUI 的 Linux / WSL 環境內
+node --test tests/js/timeline_grid.test.mjs
+```
+
 ## Roadmap
 
 - **Phase 2** ✅ Foundation bridges — LoadVideoFrames / SaveVideoFrames
@@ -1127,6 +1486,7 @@ real-ffmpeg 系列需要 PATH 上有 `ffmpeg`。
 - **Phase 4.5** ✅ Compose pipeline v2 — 合一 ComposeVideo + 字幕進 chain + audio chain(Volume / AudioMix / Fade / Normalize)
 - **Phase 5** 🚧 AI — WhisperTranscribe / TranslateSubtitle(schema 仍 experimental)
 - **Phase 6** 🚧 獨立 Audio domain — `MF_ExtractAudio` 先上；檔案級 denoise、normalize-file、audio cut/trim、ducking 仍規劃中(Phase 4.5 的 Compose audio chain 是子集)
+- **Timeline** ✅ 時間軸與長片 — Edit Timeline 編輯器、分段迴圈、latent 尾端續接、落盤組裝（MiniMax H3 AV 支援；LTX-2 / Wan 2.2 為實驗性）
 - **Phase 7** ⏳ Net domain — yt-dlp ingest、HTTP fetch(lazy import)
 
 ## License
@@ -1139,3 +1499,4 @@ MIT — © YingLiang Lu (leon80148)。
 - **ComfyUI** — runtime 跟節點圖引擎
 - **VideoHelperSuite** — 先行作品，定義了 IMAGE-batch 契約，MediaForge 與其互通
 - **faster-whisper / CTranslate2** — 本地 Whisper backend
+- 時間軸規劃與 latent 尾端續接的設計概念受到 [ComfyUI MiniMax H3 Timeline Director](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector) 啟發；MediaForge 獨立實作這些功能，不沿用該專案程式碼，並維持 MIT 授權。

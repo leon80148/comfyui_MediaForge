@@ -1,0 +1,1621 @@
+{
+  "id": "474f667d-d1af-4f7d-b2d4-f601aa9472e0",
+  "revision": 0,
+  "last_node_id": 20,
+  "last_link_id": 27,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        320,
+        82
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "unet_name",
+          "name": "unet_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "unet_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "weight_dtype",
+          "name": "weight_dtype",
+          "type": "COMBO",
+          "widget": {
+            "name": "weight_dtype"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "模型",
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_FL2VA_UNET.safetensors",
+        "default"
+      ],
+      "widgets_values_named": {
+        "unet_name": "minimax_h3/minimax_h3_fl2va_pruned_fp8_scaled.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    {
+      "id": 2,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        850,
+        0
+      ],
+      "size": [
+        320,
+        82
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "model",
+          "name": "model",
+          "type": "MODEL",
+          "link": 1
+        },
+        {
+          "localized_name": "lora_name",
+          "name": "lora_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "lora_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "strength_model",
+          "name": "strength_model",
+          "type": "FLOAT",
+          "widget": {
+            "name": "strength_model"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "模型",
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            2,
+            13
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_TURBO_LORA.safetensors",
+        1
+      ],
+      "widgets_values_named": {
+        "lora_name": "minimax_h3/minimax_h3_fl2v_turbo_4step_v1.3_768p_comfyui_bf16.safetensors",
+        "strength_model": 1
+      }
+    },
+    {
+      "id": 3,
+      "type": "CLIPLoader",
+      "pos": [
+        0,
+        152
+      ],
+      "size": [
+        320,
+        106
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "clip_name",
+          "name": "clip_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "clip_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "type",
+          "name": "type",
+          "type": "COMBO",
+          "widget": {
+            "name": "type"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "device",
+          "name": "device",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "device"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "CLIP",
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            6
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_QWEN3VL_TEXT_ENCODER.safetensors",
+        "minimax",
+        "default"
+      ],
+      "widgets_values_named": {
+        "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "type": "minimax",
+        "device": "default"
+      }
+    },
+    {
+      "id": 4,
+      "type": "VAELoader",
+      "pos": [
+        0,
+        328
+      ],
+      "size": [
+        320,
+        58
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "vae_name",
+          "name": "vae_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "vae_name"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "VAE",
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            7,
+            23
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_VIDEO_VAE.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "minimax_h3/minimax_h3_video_vae_fp16.safetensors"
+      }
+    },
+    {
+      "id": 5,
+      "type": "VAELoader",
+      "pos": [
+        0,
+        456
+      ],
+      "size": [
+        320,
+        58
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "vae_name",
+          "name": "vae_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "vae_name"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "VAE",
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            24
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_AUDIO_VAE.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "minimax_h3/minimax_h3_audio_vae_fp32.safetensors"
+      }
+    },
+    {
+      "id": 6,
+      "type": "KSamplerSelect",
+      "pos": [
+        0,
+        584
+      ],
+      "size": [
+        320,
+        58
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "取樣器名稱",
+          "name": "sampler_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "sampler_name"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "取樣器",
+          "name": "SAMPLER",
+          "type": "SAMPLER",
+          "links": [
+            17
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSamplerSelect"
+      },
+      "widgets_values": [
+        "res_multistep"
+      ],
+      "widgets_values_named": {
+        "sampler_name": "res_multistep"
+      }
+    },
+    {
+      "id": 7,
+      "type": "BasicScheduler",
+      "pos": [
+        1260,
+        0
+      ],
+      "size": [
+        320,
+        106
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "model",
+          "name": "model",
+          "type": "MODEL",
+          "link": 2
+        },
+        {
+          "localized_name": "scheduler",
+          "name": "scheduler",
+          "type": "COMBO",
+          "widget": {
+            "name": "scheduler"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "步驟數",
+          "name": "steps",
+          "type": "INT",
+          "widget": {
+            "name": "steps"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "去雜訊強度",
+          "name": "denoise",
+          "type": "FLOAT",
+          "widget": {
+            "name": "denoise"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "Sigma 值",
+          "name": "SIGMAS",
+          "type": "SIGMAS",
+          "links": [
+            18
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BasicScheduler"
+      },
+      "widgets_values": [
+        "simple",
+        4,
+        1
+      ],
+      "widgets_values_named": {
+        "scheduler": "simple",
+        "steps": 4,
+        "denoise": 1
+      }
+    },
+    {
+      "id": 8,
+      "type": "RandomNoise",
+      "pos": [
+        0,
+        712
+      ],
+      "size": [
+        320,
+        82
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "noise_seed",
+          "name": "noise_seed",
+          "type": "INT",
+          "widget": {
+            "name": "noise_seed"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "雜訊",
+          "name": "NOISE",
+          "type": "NOISE",
+          "links": [
+            15
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "RandomNoise"
+      },
+      "widgets_values": [
+        42,
+        "fixed"
+      ],
+      "widgets_values_named": {
+        "noise_seed": 42,
+        "control_after_generate": "randomize"
+      }
+    },
+    {
+      "id": 10,
+      "type": "MF_EditTimeline",
+      "pos": [
+        0,
+        864
+      ],
+      "size": [
+        760,
+        684
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "video",
+          "name": "video",
+          "type": "COMBO",
+          "widget": {
+            "name": "video"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "fps",
+          "name": "fps",
+          "type": "COMBO",
+          "widget": {
+            "name": "fps"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "grid",
+          "name": "grid",
+          "type": "COMBO",
+          "widget": {
+            "name": "grid"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mode",
+          "name": "mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "timeline_data",
+          "name": "timeline_data",
+          "type": "STRING",
+          "widget": {
+            "name": "timeline_data"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "segment_plan",
+          "name": "segment_plan",
+          "type": "MF_SEGMENT_PLAN",
+          "links": [
+            4
+          ]
+        },
+        {
+          "localized_name": "ranges",
+          "name": "ranges",
+          "type": "SILENCE_RANGES",
+          "links": null
+        },
+        {
+          "localized_name": "plan_json",
+          "name": "plan_json",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "localized_name": "segment_count",
+          "name": "segment_count",
+          "type": "INT",
+          "links": [
+            3
+          ]
+        },
+        {
+          "localized_name": "total_frames",
+          "name": "total_frames",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_EditTimeline"
+      },
+      "widgets_values": [
+        "(none)",
+        "24",
+        "h3_5+17n",
+        "generate",
+        "{\"version\": 1, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 107, \"prompt\": \"A red fox trots through a snowy forest in soft morning light and sniffs the air.\"}, {\"start\": 85, \"end\": 192, \"prompt\": \"The fox stops beside a frozen stream and looks around, its breath visible in the cold.\", \"seam_in\": {\"kind\": \"crossfade\", \"frames\": 12, \"audio_curve\": \"auto\"}}, {\"start\": 153, \"end\": 260, \"prompt\": \"The fox leaps over the stream and runs off between the pine trees.\"}]}"
+      ],
+      "widgets_values_named": {
+        "video": "(none)",
+        "fps": "24",
+        "grid": "h3_5+17n",
+        "mode": "generate",
+        "timeline_data": "{\"version\": 1, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 107, \"prompt\": \"A red fox trots through a snowy forest in soft morning light and sniffs the air.\"}, {\"start\": 85, \"end\": 192, \"prompt\": \"The fox stops beside a frozen stream and looks around, its breath visible in the cold.\", \"seam_in\": {\"kind\": \"crossfade\", \"frames\": 12, \"audio_curve\": \"auto\"}}, {\"start\": 153, \"end\": 260, \"prompt\": \"The fox leaps over the stream and runs off between the pine trees.\"}]}"
+      }
+    },
+    {
+      "id": 11,
+      "type": "StartLoop",
+      "pos": [
+        850,
+        152
+      ],
+      "size": [
+        320,
+        234
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "parent_iteration",
+          "name": "parent_iteration",
+          "shape": 7,
+          "type": "INT",
+          "link": null
+        },
+        {
+          "localized_name": "initial_iteration_value",
+          "name": "initial_iteration_value",
+          "shape": 7,
+          "type": "*",
+          "link": null
+        },
+        {
+          "localized_name": "模式",
+          "name": "mode",
+          "type": "COMFY_DYNAMICCOMBO_V3",
+          "widget": {
+            "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "start_iteration_index",
+          "name": "mode.start_iteration_index",
+          "type": "INT",
+          "widget": {
+            "name": "mode.start_iteration_index"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "max_iteration",
+          "name": "mode.max_iteration",
+          "type": "INT",
+          "widget": {
+            "name": "mode.max_iteration"
+          },
+          "link": 3
+        },
+        {
+          "localized_name": "step",
+          "name": "mode.step",
+          "type": "INT",
+          "widget": {
+            "name": "mode.step"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "cache_iterations",
+          "name": "cache_iterations",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "cache_iterations"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "iteration_index",
+          "name": "iteration_index",
+          "type": "INT",
+          "links": [
+            5
+          ]
+        },
+        {
+          "localized_name": "is_first",
+          "name": "is_first",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "localized_name": "is_last",
+          "name": "is_last",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "localized_name": "list_item",
+          "name": "list_item",
+          "type": "*",
+          "links": null
+        },
+        {
+          "localized_name": "current_iteration_value",
+          "name": "current_iteration_value",
+          "type": "*",
+          "links": [
+            12,
+            21
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "StartLoop"
+      },
+      "widgets_values": [
+        "For",
+        0,
+        4,
+        1,
+        true
+      ],
+      "widgets_values_named": {
+        "mode": "For",
+        "mode.start_iteration_index": 0,
+        "mode.max_iteration": 4,
+        "mode.step": 1,
+        "cache_iterations": true
+      }
+    },
+    {
+      "id": 12,
+      "type": "MF_SelectSegment",
+      "pos": [
+        1260,
+        176
+      ],
+      "size": [
+        320,
+        138
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "segment_plan",
+          "name": "segment_plan",
+          "type": "MF_SEGMENT_PLAN",
+          "link": 4
+        },
+        {
+          "localized_name": "segment_index",
+          "name": "segment_index",
+          "type": "INT",
+          "widget": {
+            "name": "segment_index"
+          },
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "segment",
+          "name": "segment",
+          "type": "MF_SEGMENT",
+          "links": [
+            11,
+            20
+          ]
+        },
+        {
+          "localized_name": "prompt",
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            8
+          ]
+        },
+        {
+          "localized_name": "length",
+          "name": "length",
+          "type": "INT",
+          "links": [
+            9
+          ]
+        },
+        {
+          "localized_name": "start_sec",
+          "name": "start_sec",
+          "type": "FLOAT",
+          "links": null
+        },
+        {
+          "localized_name": "segment_count",
+          "name": "segment_count",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_SelectSegment"
+      },
+      "widgets_values": [
+        0
+      ],
+      "widgets_values_named": {
+        "segment_index": 0
+      }
+    },
+    {
+      "id": 13,
+      "type": "MiniMaxH3ImageToVideo",
+      "pos": [
+        1670,
+        0
+      ],
+      "size": [
+        320,
+        220
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "clip",
+          "name": "clip",
+          "type": "CLIP",
+          "link": 6
+        },
+        {
+          "localized_name": "vae",
+          "name": "vae",
+          "type": "VAE",
+          "link": 7
+        },
+        {
+          "localized_name": "首幀",
+          "name": "first_frame",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "localized_name": "末幀",
+          "name": "last_frame",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "localized_name": "提示詞",
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 8
+        },
+        {
+          "localized_name": "寬度",
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "高度",
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "長度",
+          "name": "length",
+          "type": "INT",
+          "widget": {
+            "name": "length"
+          },
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "正向",
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": [
+            14
+          ]
+        },
+        {
+          "localized_name": "latent (潛空間)",
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            10
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ImageToVideo"
+      },
+      "widgets_values": [
+        "",
+        832,
+        480,
+        124
+      ],
+      "widgets_values_named": {
+        "prompt": "",
+        "width": 832,
+        "height": 480,
+        "length": 124
+      }
+    },
+    {
+      "id": 14,
+      "type": "MF_ExtendLatent",
+      "pos": [
+        2080,
+        0
+      ],
+      "size": [
+        320,
+        190
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "target_latent",
+          "name": "target_latent",
+          "type": "LATENT",
+          "link": 10
+        },
+        {
+          "localized_name": "segment",
+          "name": "segment",
+          "type": "MF_SEGMENT",
+          "link": 11
+        },
+        {
+          "localized_name": "state",
+          "name": "state",
+          "shape": 7,
+          "type": "MF_SEGMENT_STATE",
+          "link": 12
+        },
+        {
+          "localized_name": "previous_latent",
+          "name": "previous_latent",
+          "shape": 7,
+          "type": "LATENT",
+          "link": null
+        },
+        {
+          "localized_name": "mask",
+          "name": "mask",
+          "type": "COMBO",
+          "widget": {
+            "name": "mask"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "carry_audio",
+          "name": "carry_audio",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "carry_audio"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "video_taper_tokens",
+          "name": "video_taper_tokens",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "video_taper_tokens"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "audio_taper_tokens",
+          "name": "audio_taper_tokens",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "audio_taper_tokens"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "experimental_causal",
+          "name": "experimental_causal",
+          "shape": 7,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "experimental_causal"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "on_conflict",
+          "name": "on_conflict",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "on_conflict"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "latent",
+          "name": "latent",
+          "type": "LATENT",
+          "links": [
+            19
+          ]
+        },
+        {
+          "localized_name": "report",
+          "name": "report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_ExtendLatent"
+      },
+      "widgets_values": [
+        "hard",
+        true,
+        2,
+        2,
+        false,
+        "error"
+      ],
+      "widgets_values_named": {
+        "mask": "hard",
+        "carry_audio": true,
+        "video_taper_tokens": 2,
+        "audio_taper_tokens": 2,
+        "experimental_causal": false,
+        "on_conflict": "error"
+      }
+    },
+    {
+      "id": 15,
+      "type": "BasicGuider",
+      "pos": [
+        2080,
+        260
+      ],
+      "size": [
+        320,
+        46
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "model",
+          "name": "model",
+          "type": "MODEL",
+          "link": 13
+        },
+        {
+          "localized_name": "條件設定",
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 14
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "引導器",
+          "name": "GUIDER",
+          "type": "GUIDER",
+          "links": [
+            16
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BasicGuider"
+      }
+    },
+    {
+      "id": 16,
+      "type": "SamplerCustomAdvanced",
+      "pos": [
+        2490,
+        0
+      ],
+      "size": [
+        320,
+        106
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "雜訊",
+          "name": "noise",
+          "type": "NOISE",
+          "link": 15
+        },
+        {
+          "localized_name": "引導器",
+          "name": "guider",
+          "type": "GUIDER",
+          "link": 16
+        },
+        {
+          "localized_name": "取樣器",
+          "name": "sampler",
+          "type": "SAMPLER",
+          "link": 17
+        },
+        {
+          "localized_name": "Sigma 值",
+          "name": "sigmas",
+          "type": "SIGMAS",
+          "link": 18
+        },
+        {
+          "localized_name": "latent 影像",
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 19
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "輸出",
+          "name": "output",
+          "type": "LATENT",
+          "links": [
+            22
+          ]
+        },
+        {
+          "localized_name": "去雜訊輸出",
+          "name": "denoised_output",
+          "type": "LATENT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SamplerCustomAdvanced"
+      }
+    },
+    {
+      "id": 17,
+      "type": "MF_AppendSegment",
+      "pos": [
+        2900,
+        0
+      ],
+      "size": [
+        320,
+        146
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "segment",
+          "name": "segment",
+          "type": "MF_SEGMENT",
+          "link": 20
+        },
+        {
+          "localized_name": "state",
+          "name": "state",
+          "shape": 7,
+          "type": "MF_SEGMENT_STATE",
+          "link": 21
+        },
+        {
+          "localized_name": "latent",
+          "name": "latent",
+          "shape": 7,
+          "type": "LATENT",
+          "link": 22
+        },
+        {
+          "localized_name": "vae",
+          "name": "vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": 23
+        },
+        {
+          "localized_name": "audio_vae",
+          "name": "audio_vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": 24
+        },
+        {
+          "localized_name": "frames",
+          "name": "frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "localized_name": "audio",
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "state",
+          "name": "state",
+          "type": "MF_SEGMENT_STATE",
+          "links": [
+            25,
+            26
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_AppendSegment"
+      }
+    },
+    {
+      "id": 18,
+      "type": "EndLoop",
+      "pos": [
+        3310,
+        0
+      ],
+      "size": [
+        320,
+        98
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "output_value",
+          "name": "output_value",
+          "shape": 7,
+          "type": "*",
+          "link": 25
+        },
+        {
+          "localized_name": "next_iteration_value",
+          "name": "next_iteration_value",
+          "shape": 7,
+          "type": "*",
+          "link": 26
+        },
+        {
+          "localized_name": "termination0",
+          "name": "terminations.termination0",
+          "shape": 7,
+          "type": "*",
+          "link": null
+        },
+        {
+          "localized_name": "累積",
+          "name": "accumulate",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "accumulate"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "輸出",
+          "name": "outputs",
+          "shape": 6,
+          "type": "MF_SEGMENT_STATE",
+          "links": [
+            27
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EndLoop"
+      },
+      "widgets_values": [
+        false
+      ],
+      "widgets_values_named": {
+        "accumulate": false
+      }
+    },
+    {
+      "id": 19,
+      "type": "MF_AssembleSegments",
+      "pos": [
+        3720,
+        0
+      ],
+      "size": [
+        320,
+        150
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "state",
+          "name": "state",
+          "type": "MF_SEGMENT_STATE",
+          "link": 27
+        },
+        {
+          "localized_name": "audio",
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "localized_name": "filename_prefix",
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": {
+            "name": "filename_prefix"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "codec",
+          "name": "codec",
+          "type": "COMBO",
+          "widget": {
+            "name": "codec"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "crf",
+          "name": "crf",
+          "type": "INT",
+          "widget": {
+            "name": "crf"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "preset",
+          "name": "preset",
+          "type": "COMBO",
+          "widget": {
+            "name": "preset"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "final_video_path",
+          "name": "final_video_path",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "localized_name": "report",
+          "name": "report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_AssembleSegments"
+      },
+      "widgets_values": [
+        "MediaForge/timeline_h3",
+        "h264 (libx264)",
+        18,
+        "medium"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "MediaForge/timeline_h3",
+        "codec": "h264 (libx264)",
+        "crf": 18,
+        "preset": "medium"
+      }
+    },
+    {
+      "id": 20,
+      "type": "MarkdownNote",
+      "pos": [
+        -760,
+        0
+      ],
+      "size": [
+        700,
+        640
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## MediaForge Timeline — MiniMax H3 AV loop\n\n1. Pick your H3 models in the loaders: fl2va UNet (+ optional turbo LoRA), the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE.\n2. Edit the segments in **⏱️ Edit Timeline** (drag the edges; H3 needs fps 24 and keeps lengths / overlaps on the 5+17n grid). Each segment has its own prompt.\n3. Queue. Start Loop runs once per segment: 🧬 Extend Latent carries the previous tail (video + audio) into the next segment, your sampler generates, ➕ Append Segment decodes and spills it to disk, 🧵 Assemble Segments writes one MP4.\n\nDefault plan: 3 × 107 frames, overlaps 22 / 39 → **260 frames**, 346,667 samples at 32 kHz. Batch 1 only. Seams are not guaranteed to be invisible.\n\n---\n1. 在載入器選好 H3 模型：fl2va UNet（可加 turbo LoRA）、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。\n2. 在 **⏱️ Edit Timeline** 編輯分段（拖邊界；H3 需 fps 24，段長與重疊落在 5+17n 格點）；每段可有自己的 prompt。\n3. 執行。Start Loop 每段跑一次：Extend Latent 把上一段尾端（影像 + 音訊）續接進下一段，sampler 生成，Append Segment 解碼落盤，Assemble Segments 輸出 MP4。\n\n預設計畫：3 × 107 幀、重疊 22 / 39 → **260 幀**、32 kHz 共 346,667 samples。只支援 batch 1；不保證接縫無痕。"
+      ],
+      "widgets_values_named": {
+        "text": "## MediaForge Timeline — MiniMax H3 AV loop\n\n1. Pick your H3 models in the loaders: fl2va UNet (+ optional turbo LoRA), the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE.\n2. Edit the segments in **⏱️ Edit Timeline** (drag the edges; H3 needs fps 24 and keeps lengths / overlaps on the 5+17n grid). Each segment has its own prompt.\n3. Queue. Start Loop runs once per segment: 🧬 Extend Latent carries the previous tail (video + audio) into the next segment, your sampler generates, ➕ Append Segment decodes and spills it to disk, 🧵 Assemble Segments writes one MP4.\n\nDefault plan: 3 × 107 frames, overlaps 22 / 39 → **260 frames**, 346,667 samples at 32 kHz. Batch 1 only. Seams are not guaranteed to be invisible.\n\n---\n1. 在載入器選好 H3 模型：fl2va UNet（可加 turbo LoRA）、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。\n2. 在 **⏱️ Edit Timeline** 編輯分段（拖邊界；H3 需 fps 24，段長與重疊落在 5+17n 格點）；每段可有自己的 prompt。\n3. 執行。Start Loop 每段跑一次：Extend Latent 把上一段尾端（影像 + 音訊）續接進下一段，sampler 生成，Append Segment 解碼落盤，Assemble Segments 輸出 MP4。\n\n預設計畫：3 × 107 幀、重疊 22 / 39 → **260 幀**、32 kHz 共 346,667 samples。只支援 batch 1；不保證接縫無痕。"
+      },
+      "color": "#432",
+      "bgcolor": "#653"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "MODEL"
+    ],
+    [
+      2,
+      2,
+      0,
+      7,
+      0,
+      "MODEL"
+    ],
+    [
+      3,
+      10,
+      3,
+      11,
+      4,
+      "INT"
+    ],
+    [
+      4,
+      10,
+      0,
+      12,
+      0,
+      "MF_SEGMENT_PLAN"
+    ],
+    [
+      5,
+      11,
+      0,
+      12,
+      1,
+      "INT"
+    ],
+    [
+      6,
+      3,
+      0,
+      13,
+      0,
+      "CLIP"
+    ],
+    [
+      7,
+      4,
+      0,
+      13,
+      1,
+      "VAE"
+    ],
+    [
+      8,
+      12,
+      1,
+      13,
+      4,
+      "STRING"
+    ],
+    [
+      9,
+      12,
+      2,
+      13,
+      7,
+      "INT"
+    ],
+    [
+      10,
+      13,
+      1,
+      14,
+      0,
+      "LATENT"
+    ],
+    [
+      11,
+      12,
+      0,
+      14,
+      1,
+      "MF_SEGMENT"
+    ],
+    [
+      12,
+      11,
+      4,
+      14,
+      2,
+      "MF_SEGMENT_STATE"
+    ],
+    [
+      13,
+      2,
+      0,
+      15,
+      0,
+      "MODEL"
+    ],
+    [
+      14,
+      13,
+      0,
+      15,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      15,
+      8,
+      0,
+      16,
+      0,
+      "NOISE"
+    ],
+    [
+      16,
+      15,
+      0,
+      16,
+      1,
+      "GUIDER"
+    ],
+    [
+      17,
+      6,
+      0,
+      16,
+      2,
+      "SAMPLER"
+    ],
+    [
+      18,
+      7,
+      0,
+      16,
+      3,
+      "SIGMAS"
+    ],
+    [
+      19,
+      14,
+      0,
+      16,
+      4,
+      "LATENT"
+    ],
+    [
+      20,
+      12,
+      0,
+      17,
+      0,
+      "MF_SEGMENT"
+    ],
+    [
+      21,
+      11,
+      4,
+      17,
+      1,
+      "MF_SEGMENT_STATE"
+    ],
+    [
+      22,
+      16,
+      0,
+      17,
+      2,
+      "LATENT"
+    ],
+    [
+      23,
+      4,
+      0,
+      17,
+      3,
+      "VAE"
+    ],
+    [
+      24,
+      5,
+      0,
+      17,
+      4,
+      "VAE"
+    ],
+    [
+      25,
+      17,
+      0,
+      18,
+      0,
+      "MF_SEGMENT_STATE"
+    ],
+    [
+      26,
+      17,
+      0,
+      18,
+      1,
+      "MF_SEGMENT_STATE"
+    ],
+    [
+      27,
+      18,
+      0,
+      19,
+      0,
+      "MF_SEGMENT_STATE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
