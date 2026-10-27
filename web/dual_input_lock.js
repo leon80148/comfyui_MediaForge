@@ -176,11 +176,7 @@ function applyLockState(node, config) {
     for (const name of (config.linked_widgets || [])) {
         setWidgetHidden(findWidget(node, name), !connected);
     }
-    // Force node to re-layout (size + redraw) after widget visibility change
-    if (node.setSize && node.computeSize) {
-        node.setSize(node.computeSize());
-    }
-    node.setDirtyCanvas?.(true, true);
+    relayout(node);
 }
 
 function applyWidgetValueLocks(node, rules) {
@@ -205,8 +201,15 @@ function applyWidgetValueLocks(node, rules) {
     for (const name of allNames) {
         setWidgetHidden(findWidget(node, name), hideSet.has(name));
     }
+    relayout(node);
+}
+
+// Collapse the vertical space of hidden widgets but keep the user's width — resetting the
+// width to computeSize() shrank wide nodes (e.g. the Edit Timeline editor) on every load.
+function relayout(node) {
     if (node.setSize && node.computeSize) {
-        node.setSize(node.computeSize());
+        const min = node.computeSize();
+        node.setSize([Math.max(node.size[0], min[0]), min[1]]);
     }
     node.setDirtyCanvas?.(true, true);
 }
