@@ -6,10 +6,12 @@ MF_SEGMENT_STATE 是新 dict，輸入的 state 不會被修改。
 """
 from ..utils import segment_spill
 from ..utils.ffmpeg import ensure_ffmpeg
-from ..utils.latent_carry import extract_carry_tail, latent_space_id, split_streams
+from ..utils.latent_carry import carry_drift, extract_carry_tail, latent_space_id, split_streams
 from ..utils.timeline_messages import TimelineError, format_message
 
 LABEL = segment_spill.APPEND_LABEL
+# 正確保留時差在 1e-6 級（float32 累積誤差）；兩段式取樣把雜訊留在續接區時是數十
+CARRY_DRIFT_ATOL = 1e-3
 
 
 def _check_interrupt():
@@ -120,6 +122,10 @@ class MF_AppendSegment:
 
         segment_spill.check_sequence(state, segment)
         provenance, marker = (None, None) if latent is None else _provenance(latent, segment)
+        if provenance == "consistent" and segment["carry_in"] is not None:
+            drift = carry_drift(latent, state["carry"], marker.get("streams_carried", ()))
+            if drift is not None and drift > CARRY_DRIFT_ATOL:
+                raise TimelineError(LABEL, "E_CARRY_DRIFT", drift=f"{drift:.3g}")
         images = _frames_input(frames, segment) if frames is not None else _decode_video(vae, latent, segment)
         wave = None
         if audio is not None:
