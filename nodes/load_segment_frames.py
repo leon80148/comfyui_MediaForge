@@ -20,6 +20,7 @@ NODE_LABEL = "Load Segment Frames"
 RESIZE_MODES = ("none", "fit", "fill", "stretch")
 MAX_AUDIO_RATE = 384000
 MAX_AUDIO_CHANNELS = 32
+AUDIO_PREROLL = Fraction(1)  # 秒；遠大於常見音訊封包（AAC ≈ 21 ms、PCM-in-MKV ≈ 85 ms）
 SHORTFALL_MODES = ("error", "hold_last", "black")
 
 
@@ -44,8 +45,9 @@ def _run(cmd, what):
 def _decode_video(path, seek, count, fps, size, scale):
     num, den = fps
     vf = f"fps={num}/{den}" + (f",{scale}" if scale else "")
+    # -map 與 probe 一樣取第一條 video；不指定時 FFmpeg 可能選到 default 的其他串流
     out = _run(["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{float(seek):.9f}"] + ffmpeg_input_args(path)
-               + ["-an", "-sn", "-vf", vf, "-frames:v", str(count), "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+               + ["-map", "0:v:0", "-vf", vf, "-frames:v", str(count), "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
                "解碼畫面")
     w, h = size
     n = len(out) // (w * h * 3)
@@ -54,9 +56,15 @@ def _decode_video(path, seek, count, fps, size, scale):
 
 
 def _decode_audio(path, seek, count, sample_rate, channels):
-    out = _run(["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{float(seek):.9f}"] + ffmpeg_input_args(path)
-               + ["-vn", "-sn", "-af", f"apad=whole_len={count},atrim=end_sample={count}",
-                  "-ac", str(channels), "-ar", str(sample_rate), "-f", "f32le", "pipe:1"],
+    # 輸入端 -ss 依 video 關鍵幀跳：音訊可能晚一個封包才開始，第一個關鍵幀之前的音訊甚至整段讀不到；
+    # raw PCM 又沒有時間戳。所以往前多解一段（接近開頭就乾脆從檔頭讀），aresample 依 PTS 補齊
+    # 空白（音軌晚於起點時也靠它），再以 sample 數精確裁掉前段
+    pre = min(seek, AUDIO_PREROLL)
+    af = (f"aresample=async=1:first_pts=0,atrim=start_sample={round(pre * sample_rate)},asetpts=PTS-STARTPTS,"
+          f"apad=whole_len={count},atrim=end_sample={count}")
+    head = ["-ss", f"{float(seek - pre):.9f}"] if seek > pre else []
+    out = _run(["ffmpeg", "-v", "error", "-nostdin"] + head + ffmpeg_input_args(path)
+               + ["-map", "0:a:0", "-af", af, "-ac", str(channels), "-ar", str(sample_rate), "-f", "f32le", "pipe:1"],
                "解碼音訊")
     pcm = np.frombuffer(out, dtype=np.float32).reshape(-1, channels).T
     return torch.from_numpy(pcm.copy()).unsqueeze(0)
