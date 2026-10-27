@@ -99,54 +99,54 @@ function isInt(v) {
 // Same check order as the Python validators, so the first reported location matches.
 export function validate(data, mode, fpsKey, grid, sourceFrames = null, hasSource = false) {
     const fps = FPS_PRESETS[fpsKey];
-    if (!fps) return fail("fps", "unknown fps");
+    if (!fps) return fail("fps", "unknown_fps");
     const effectiveGrid = mode === "cut" ? "free" : grid;
     const segs = data.segments;
-    if (!Array.isArray(segs) || segs.length === 0) return fail("segments", "at least one segment");
-    if (segs.length > MAX_SEGMENTS) return fail("segments", `at most ${MAX_SEGMENTS}`);
+    if (!Array.isArray(segs) || segs.length === 0) return fail("segments", "no_segments");
+    if (segs.length > MAX_SEGMENTS) return fail("segments", "too_many_segments");
     for (let i = 0; i < segs.length; i++) {
-        if (!isInt(segs[i].start) || segs[i].start < 0) return fail(`segments[${i}].start`, "integer >= 0");
-        if (!isInt(segs[i].end) || segs[i].end < 0) return fail(`segments[${i}].end`, "integer >= 0");
+        if (!isInt(segs[i].start) || segs[i].start < 0) return fail(`segments[${i}].start`, "not_frame_index");
+        if (!isInt(segs[i].end) || segs[i].end < 0) return fail(`segments[${i}].end`, "not_frame_index");
     }
     if (effectiveGrid === H3_GRID && (fps[0] !== 24 || fps[1] !== 1)) {
-        return { ok: false, error: { code: "E_H3_FPS", location: "fps", reason: "h3 needs 24 fps" } };
+        return { ok: false, error: { code: "E_H3_FPS", location: "fps", reason: "h3_fps" } };
     }
     if (mode === "generate") {
-        if (segs[0].start !== 0) return fail("segments[0].start", "first segment starts at 0");
+        if (segs[0].start !== 0) return fail("segments[0].start", "first_start_zero");
         for (let i = 0; i < segs.length; i++) {
             const loc = `segments[${i}]`;
             const s = segs[i];
             const length = s.end - s.start;
-            if (length <= 0) return fail(`${loc}.end`, "end > start");
-            if (!lengthOk(effectiveGrid, length)) return fail(loc, "illegal length");
+            if (length <= 0) return fail(`${loc}.end`, "end_before_start");
+            if (!lengthOk(effectiveGrid, length)) return fail(loc, "illegal_length");
             if (i === 0) {
-                if (s.seam_in.kind !== "cut") return fail(`${loc}.seam_in`, "first seam is cut");
+                if (s.seam_in.kind !== "cut") return fail(`${loc}.seam_in`, "first_seam_cut");
                 continue;
             }
             const p = segs[i - 1];
-            if (s.start <= p.start || s.end <= p.end) return fail(loc, "start and end must increase");
-            if (s.start > p.end) return fail(`${loc}.start`, "no gaps in generate mode");
+            if (s.start <= p.start || s.end <= p.end) return fail(loc, "not_increasing");
+            if (s.start > p.end) return fail(`${loc}.start`, "gap");
             // increasing start and end already imply overlap < both lengths
             const overlap = p.end - s.start;
-            if (!overlapOk(effectiveGrid, overlap)) return fail(`${loc}.start`, "illegal overlap");
+            if (!overlapOk(effectiveGrid, overlap)) return fail(`${loc}.start`, "illegal_overlap");
             if (s.seam_in.kind === "crossfade") {
                 const limit = crossfadeLimit(segs, i);
                 if (overlap === 0 || !isInt(s.seam_in.frames) || s.seam_in.frames < 1 || s.seam_in.frames > limit) {
-                    return fail(`${loc}.seam_in.frames`, `crossfade 1..${limit}`);
+                    return fail(`${loc}.seam_in.frames`, "crossfade_limit");
                 }
             }
         }
         return { ok: true, effectiveGrid, totalFrames: segs[segs.length - 1].end, diagnostics: diagnostics(segs) };
     }
-    if (!hasSource) return fail("video", "cut mode needs a source");
+    if (!hasSource) return fail("video", "needs_source");
     const origin = data.source.origin_frame;
     for (let i = 0; i < segs.length; i++) {
         const loc = `segments[${i}]`;
         const s = segs[i];
-        if (s.end <= s.start) return fail(`${loc}.end`, "end > start");
-        if (s.seam_in.kind !== "cut") return fail(`${loc}.seam_in`, "cut mode seams are cut");
-        if (i && s.start < segs[i - 1].end) return fail(`${loc}.start`, "sorted, non-overlapping");
-        if (s.start < origin || (sourceFrames !== null && s.end > origin + sourceFrames)) return fail(loc, "outside source");
+        if (s.end <= s.start) return fail(`${loc}.end`, "end_before_start");
+        if (s.seam_in.kind !== "cut") return fail(`${loc}.seam_in`, "cut_seam_only");
+        if (i && s.start < segs[i - 1].end) return fail(`${loc}.start`, "overlapping_cut");
+        if (s.start < origin || (sourceFrames !== null && s.end > origin + sourceFrames)) return fail(loc, "outside_source");
     }
     return { ok: true, effectiveGrid, totalFrames: segs.reduce((n, s) => n + s.end - s.start, 0), diagnostics: [] };
 }
@@ -216,17 +216,17 @@ export function editGenerate(segs, index, edge, frame, grid) {
         const p = segs[index - 1];
         const minLen = Math.max(1, (p ? p.end - s.start : 0) + 1, index + 1 < segs.length ? s.end - segs[index + 1].start + 1 : 1);
         const target = nearest(legalLengths(grid, minLen, Math.max(minLen, frame - s.start + 200)), frame - s.start);
-        if (target === null) return { ok: false, reason: "no legal length" };
+        if (target === null) return { ok: false, reason: "no_legal_length" };
         delta = s.start + target - s.end;
         return { ok: true, segments: segs.map((x, i) => (i < index ? x : i === index ? { ...x, end: x.end + delta } : { ...x, start: x.start + delta, end: x.end + delta })) };
     }
-    if (index === 0) return { ok: false, reason: "first segment starts at 0" };
+    if (index === 0) return { ok: false, reason: "first_start_zero" };
     const p = segs[index - 1];
     const maxOverlap = Math.min(p.end - p.start, s.end - s.start) - 1;
     const choices = [];
     for (let o = 0; o <= maxOverlap; o++) if (overlapOk(grid, o)) choices.push(o);
     const overlap = nearest(choices, p.end - frame);
-    if (overlap === null) return { ok: false, reason: "no legal overlap" };
+    if (overlap === null) return { ok: false, reason: "no_legal_overlap" };
     delta = (p.end - overlap) - s.start;
     return { ok: true, segments: segs.map((x, i) => (i < index ? x : { ...x, start: x.start + delta, end: x.end + delta })) };
 }
@@ -241,9 +241,9 @@ export function editCut(segs, index, edge, frame) {
 }
 
 export function autoFill(count, length, overlap, grid) {
-    if (!lengthOk(grid, length)) return { ok: false, reason: "illegal length" };
-    if (count > 1 && (!overlapOk(grid, overlap) || overlap >= length)) return { ok: false, reason: "illegal overlap" };
-    if (count < 1 || count > MAX_SEGMENTS) return { ok: false, reason: "segment count" };
+    if (!lengthOk(grid, length)) return { ok: false, reason: "illegal_length" };
+    if (count > 1 && (!overlapOk(grid, overlap) || overlap >= length)) return { ok: false, reason: "illegal_overlap" };
+    if (count < 1 || count > MAX_SEGMENTS) return { ok: false, reason: "segment_count" };
     const segs = [];
     for (let i = 0; i < count; i++) {
         const start = i * (length - overlap);
