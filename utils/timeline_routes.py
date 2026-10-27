@@ -43,6 +43,7 @@ CACHE_MAX_ENTRIES = 128
 CACHE_TTL_SEC = 24 * 3600
 MIN_FREE_BYTES = 1024 ** 3
 PRESET = "timeline_v1"
+DISCONNECT_POLL = 0.5
 PROXY_SUBFOLDER = "mediaforge_timeline_proxy"
 
 
@@ -282,6 +283,9 @@ def proxy_command(source, target):
 
 async def _build_proxy(runtime, source, target):
     async with runtime["proxy"]:
+        # fingerprint 不代表來源通過了限額（Edit Timeline 的 plan_json 也帶它）：轉碼前對來源本身檢查
+        async with runtime["probe"]:
+            _check_limits(await _probe(source))
         directory = os.path.dirname(target)
         _evict(directory)
         if shutil.disk_usage(directory).free < MIN_FREE_BYTES + MAX_PROXY_BYTES:
@@ -363,13 +367,30 @@ async def respond(request, handler):
             raw = await asyncio.wait_for(_read_body(request), BODY_READ_TIMEOUT)
         except asyncio.TimeoutError:
             raise RouteError(400, "bad_request", "讀取請求逾時。") from None
-        status, body = await handler(raw, request.headers, request.scheme, request.host)
+        status, body = await _unless_disconnected(request, handler(raw, request.headers, request.scheme, request.host))
     except RouteError as e:
         status, body = e.status, e.body()
     except Exception as e:  # noqa: BLE001 — 細節只留在 server log
         print(f"[MediaForge] timeline route 失敗：{type(e).__name__}: {e}")
         status, body = 503, RouteError(503, "unavailable", "服務暫時無法處理。", retryable=True).body()
     return web.json_response(body, status=status, headers={"Cache-Control": "no-store"})
+
+
+async def _unless_disconnected(request, work):
+    """core 的 AppRunner 不會因 client 斷線取消 handler：自己盯連線，斷了就取消——proxy 的等待者
+    計數才會歸零，沒人要的轉碼才會停。"""
+    task = asyncio.ensure_future(work)
+    try:
+        while not task.done():
+            await asyncio.wait({task}, timeout=DISCONNECT_POLL)
+            transport = request.transport
+            if not task.done() and (transport is None or transport.is_closing()):
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise RouteError(503, "client_closed", "連線已中斷。")
+        return task.result()
+    finally:
+        task.cancel()
 
 
 def register_timeline_routes():
