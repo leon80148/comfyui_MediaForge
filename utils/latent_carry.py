@@ -46,7 +46,7 @@ def extract_carry_tail(samples, segment):
     return tail
 
 
-def carry_drift(latent, carry, streams_carried):
+def carry_drift(latent, carry, streams_carried, label):
     """取樣後的 latent 在 noise_mask == 0（完全保留）的續接位置，與 carry tail 的最大絕對差。
 
     兩段式 KSamplerAdvanced 的第二段以第一段帶殘留雜訊的輸出當保留內容，續接區會被雜訊取代——
@@ -55,7 +55,7 @@ def carry_drift(latent, carry, streams_carried):
     if latent.get("noise_mask") is None:
         return None
     streams, nested = split_streams(latent["samples"])
-    masks = _existing_masks(latent, nested, len(streams))
+    masks = _existing_masks(latent, nested, len(streams), label)
     drift = 0.0
     for name, index, time_dim in (("video", 0, 2), ("audio", 1, -1)):
         tail = carry.get(name)
@@ -63,15 +63,15 @@ def carry_drift(latent, carry, streams_carried):
             continue
         k = tail.shape[time_dim]
         head = streams[index].narrow(time_dim, 0, k).float()
-        keep = _checked_mask(masks[index], streams[index].shape, name).narrow(time_dim, 0, k) == 0
+        keep = _checked_mask(masks[index], streams[index].shape, name, label).narrow(time_dim, 0, k) == 0
         keep = keep.to(head.device).expand(head.shape)
         if keep.any():
             drift = max(drift, float((head - tail.to(head.device, torch.float32)).abs()[keep].max()))
     return drift
 
 
-def _fail(message):
-    raise ValueError(f"[{EXTEND_LABEL}] {message}")
+def _fail(message, label=EXTEND_LABEL):
+    raise ValueError(f"[{label}] {message}")
 
 
 def mask_weights(mode, tokens, taper):
@@ -84,7 +84,7 @@ def mask_weights(mode, tokens, taper):
     return weights
 
 
-def _existing_masks(latent, nested, count):
+def _existing_masks(latent, nested, count, label=EXTEND_LABEL):
     mask = latent.get("noise_mask")
     if mask is None:
         return [None] * count
@@ -94,20 +94,20 @@ def _existing_masks(latent, nested, count):
     masks = list(mask.unbind())
     if not nested or len(masks) > count:
         _fail(f"既有 noise_mask 是 {len(masks)} 個 stream 的 nested mask，與 target_latent 的 stream 結構不符。"
-              "請檢查上游設定 noise_mask 的節點。")
+              "請檢查上游設定 noise_mask 的節點。", label)
     return masks + [None] * (count - len(masks))
 
 
-def _checked_mask(mask, shape, name):
+def _checked_mask(mask, shape, name, label=EXTEND_LABEL):
     # core 的 reshape_mask 會把任何形狀內插到 latent 尺寸，時間長度錯了也不會報錯——所以這裡
     # 只收「每維為 1 或等於 latent」（可少 channel 維），其餘一律拒絕，也不 clamp 掩蓋非法值
     m = mask.unsqueeze(1) if mask.ndim == len(shape) - 1 else mask
     if m.ndim != len(shape) or any(d not in (1, s) for d, s in zip(m.shape, shape)):
         _fail(f"既有 noise_mask（{name}）形狀 {tuple(mask.shape)} 需要內插才能對齊 latent {tuple(shape)}；"
-              "每一維必須是 1 或與 latent 相同。")
+              "每一維必須是 1 或與 latent 相同。", label)
     m = m.float()
     if not bool(torch.isfinite(m).all()) or m.min() < 0 or m.max() > 1:
-        _fail(f"既有 noise_mask（{name}）含 NaN / Inf 或超出 [0, 1] 的值。請檢查上游設定 noise_mask 的節點。")
+        _fail(f"既有 noise_mask（{name}）含 NaN / Inf 或超出 [0, 1] 的值。請檢查上游設定 noise_mask 的節點。", label)
     return m
 
 

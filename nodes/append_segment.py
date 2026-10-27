@@ -123,7 +123,7 @@ class MF_AppendSegment:
         segment_spill.check_sequence(state, segment)
         provenance, marker = (None, None) if latent is None else _provenance(latent, segment)
         if provenance == "consistent" and segment["carry_in"] is not None:
-            drift = carry_drift(latent, state["carry"], marker.get("streams_carried", ()))
+            drift = carry_drift(latent, state["carry"], marker.get("streams_carried", ()), LABEL)
             if drift is not None and drift > CARRY_DRIFT_ATOL:
                 raise TimelineError(LABEL, "E_CARRY_DRIFT", drift=f"{drift:.3g}")
         images = _frames_input(frames, segment) if frames is not None else _decode_video(vae, latent, segment)
