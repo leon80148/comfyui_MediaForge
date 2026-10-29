@@ -19,7 +19,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 - 🎚️ **單次編碼、多層 overlay 的 Compose pipeline** — `filter_complex` graph 編譯器，N 層 overlay 仍只走一次 re-encode
 - 🤖 **Provider-agnostic AI** — `MF_AIConfig` 讓 Whisper / Translate 在 OpenAI / Groq / Ollama / 本地 backend 之間一處切換
 - 🧵 **時間軸與長片** — 在視覺化編輯器規劃互相重疊的分段，把每段 latent 尾端續接到下一段，逐段解碼並暫存到磁碟，最後只編碼一次。MiniMax H3 AV 支援；LTX-2 / Wan 2.2 為實驗性（見[時間軸與長片](#時間軸與長片)）
-- 🪶 **零硬性 Python 相依** — 只要 PATH 有 `ffmpeg` + `ffprobe`。`requests` / `faster-whisper` 用到才 lazy import
+- 🪶 **輕量相依** — `requirements.txt` 只有四個小型純 Python 套件，加上找不到系統 `ffmpeg` / `ffprobe` 時才用的 `imageio-ffmpeg` / `static-ffmpeg`。全部用到才 import；`faster-whisper` 維持選裝
 - 🔁 **Tensor-native** — `IMAGE [B,H,W,C] float32` 跟 ComfyUI canonical 的 `AUDIO` dict；rawvideo roundtrip PSNR > 38 dB
 
 ## 目錄
@@ -83,7 +83,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 > **從 v1 遷移?** `MF_ComposeStart` + `MF_ComposeFinalize` 已合併進 `MF_ComposeVideo`。見 [遷移指南](#從-compose-v1-遷移)。
 
-### 3. AI 自動字幕：轉錄 → 翻譯 → 燒入（6 個節點，最進階）
+### 3. AI 自動字幕：轉錄 → 翻譯 → 燒入（5 個節點）
 
 ```
 [AIConfig (ASR)]──▶[WhisperTranscribe]──srt──▶[TranslateSubtitle]──srt──▶[BurnSubtitle]──▶ output.mp4
@@ -1152,7 +1152,7 @@ Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改�
 **輸出**：`srt_text` STRING — 標準 SRT（多段），直接 wire 給 `MF_TranslateSubtitle.srt_text` 或 `MF_BurnSubtitle.srt_text`（要另外存檔的話走 `MF_ConvertChinese` 給 `filename_prefix`）。
 
 **Backend 語意**（看 `ai_config.provider`）：
-- `openai_compatible` — POST 到 `<base_url>/audio/transcriptions`。支援 OpenAI、Groq、任意 OpenAI-API 相容 server。需要 `pip install requests`。
+- `openai_compatible` — POST 到 `<base_url>/audio/transcriptions`。支援 OpenAI、Groq、任意 OpenAI-API 相容 server。使用 `requirements.txt` 裡的 `requests`。
 - `faster_whisper_local` — lazy-import `faster-whisper`。吃 `ai_config.device`（`cpu` / `cuda` / `auto`）跟 `ai_config.model`（`tiny` / `base` / `small` / `medium` / `large-v3`）。第一次跑會下載到 HF cache。需要 `pip install faster-whisper`。
 
 **Model 自動替換**：`ai_config.model` 看起來不像 STT model id（例如同一個 `AI_CONFIG` 還要餵 Translate、所以是 `gpt-4o-mini`），Whisper 會自動換成 provider 預設 — OpenAI-compatible 用 `whisper-1`、faster-whisper-local 用 `base`。要明確指定 STT 模型（`whisper-large-v3` / `distil-large-v3` 等）直接填到 `ai_config.model`。
@@ -1317,6 +1317,7 @@ comfyui_MediaForge/
 ├── utils/
 │   ├── ass_style.py         # ASS 字幕 style helpers(BurnSubtitle + ComposeBurnSubtitle 共用)
 │   ├── audio_mix.py         # amix / afade / volume / loudnorm filter builders
+│   ├── cache_key.py         # path_fingerprint：給 IS_CHANGED 用的 mtime / size 指紋
 │   ├── color.py             # hex_to_ass_color:#RRGGBB → ASS BGR+alpha
 │   ├── compose_ir.py        # ComposeIR + AudioOp + compile_ir + compile_audio_chain
 │   ├── compose_ops.py       # MF_COMPOSE_OPS / AUDIO_OPS dispatch + watermark resolver
@@ -1324,6 +1325,7 @@ comfyui_MediaForge/
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / escape_filter_path
 │   ├── latent_carry.py      # Timeline：latent stream 拆分、尾端擷取、續接遮罩、provenance
 │   ├── output_path.py       # resolve_output_path + output_path_to_ui_entry (API metadata helper)
+│   ├── plugin_tmp.py        # .mf_tmp/ 暫存檔 + 清理過期的檔案與 session 目錄
 │   ├── segment_spill.py     # Timeline：不可變 state、FFV1 / WAV 分段暫存、crossfade、最終編碼
 │   ├── timeline_messages.py # Timeline：訊息目錄（穩定的 E_* / W_* key）
 │   ├── timeline_plan.py     # Timeline：時基、grid、timeline_data 驗證、分段規格
@@ -1333,6 +1335,7 @@ comfyui_MediaForge/
 ├── font/                    # 丟 .ttf / .otf 進來給 MF_BurnSubtitle 的 font_file dropdown
 ├── example_workflows/       # Timeline 範例 workflow（會出現在 ComfyUI 範本瀏覽器）
 ├── web/
+│   ├── ai_config_mask.js    # 前端 extension：在 canvas 上把 MF_AIConfig 的 api_key 遮罩起來
 │   ├── dual_input_lock.js   # 前端 extension：依 dual-input 模式隱藏不適用 widget
 │   │                        #   - lock_widget / hidden_when_connected: tensor 模式隱藏
 │   │                        #   - linked_widgets: path 模式隱藏
@@ -1356,8 +1359,9 @@ comfyui_MediaForge/
 
 - ComfyUI
 - Python ≥ 3.10
-- **PATH 上要有 FFmpeg + FFprobe**
-- 選用：`requests`（任何打 HTTP AI provider 的節點）、`faster-whisper`（本地 Whisper backend） — 第一次用到才會 lazy import
+- **FFmpeg + FFprobe** — 建議裝在系統 PATH；沒有時改用 `requirements.txt` 裡的 `imageio-ffmpeg`（只有 ffmpeg）與 `static-ffmpeg`（ffmpeg + ffprobe，第一次用到時下載）
+- `requirements.txt` 的 Python 套件 — ComfyUI Manager 會自動安裝；手動 clone 後請執行 `pip install -r requirements.txt`
+- 選用：`faster-whisper`（本地 Whisper backend） — 第一次用到才會 lazy import
 - Timeline 節點：不需額外 pip 套件（`psutil`、`torch`、`numpy` 隨 ComfyUI 安裝）；測試環境為 ComfyUI core 0.42.5 / frontend 1.55.18 —— 不是最低版本需求（見[相容性](#相容性)）
 
 FFmpeg 安裝：
@@ -1379,6 +1383,7 @@ FFmpeg 安裝：
 ```bash
 cd ComfyUI/custom_nodes
 git clone https://github.com/leon80148/comfyui_MediaForge.git
+pip install -r comfyui_MediaForge/requirements.txt
 ```
 
 重啟 ComfyUI — 節點會出現在 `MediaForge/Subtitle | Video | Analysis | Audio | Compose | AI`。
@@ -1386,7 +1391,6 @@ git clone https://github.com/leon80148/comfyui_MediaForge.git
 ### 選用相依（lazy — 你會用到才裝）
 
 ```bash
-pip install requests          # 任何打 HTTP AI provider 的節點
 pip install faster-whisper    # 只給 backend="faster_whisper_local" 用
 ```
 

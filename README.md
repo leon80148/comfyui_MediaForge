@@ -19,7 +19,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 - 🎙️ **Audio mixing built-in** — BurnSubtitle's `keep_source_audio` toggle `amix`-es an external audio pin with the source's native audio (default on); cinematic fps rates (23.976 / 29.97 / 59.94) accepted as FLOAT
 - 🤖 **Provider-agnostic AI** — `MF_AIConfig` lets you point Whisper / Translate at OpenAI / Groq / Ollama / local backends in one place
 - 🧵 **Timeline & long video** — plan overlapping segments in a visual editor, carry each segment's latent tail into the next, decode and spill one segment at a time, encode once. MiniMax H3 AV supported; LTX-2 / Wan 2.2 experimental (see [Timeline & Long Video](#timeline--long-video))
-- 🪶 **Zero hard dependencies** — only `ffmpeg` + `ffprobe` in PATH. `requests` / `faster-whisper` are lazy-imported on first use
+- 🪶 **Light dependencies** — `requirements.txt` lists four small pure-Python packages plus `imageio-ffmpeg` / `static-ffmpeg`, the fallbacks used when no system `ffmpeg` / `ffprobe` is found. All are imported only when needed; `faster-whisper` stays optional
 - 🔁 **Tensor-native** — `IMAGE [B,H,W,C] float32` and ComfyUI-canonical `AUDIO` dict; rawvideo roundtrip at PSNR > 38 dB
 
 ## Table of Contents
@@ -83,7 +83,7 @@ All four effects accumulate and compile to **one** `filter_complex_script` — t
 
 > **Migrating from v1?** `MF_ComposeStart` + `MF_ComposeFinalize` were merged into `MF_ComposeVideo`. See [the migration guide](#migrating-from-compose-v1).
 
-### 3. AI auto-subtitle: transcribe → translate → burn (6 nodes — most powerful)
+### 3. AI auto-subtitle: transcribe → translate → burn (5 nodes)
 
 ```
 [AIConfig (ASR)]──▶[WhisperTranscribe]──srt──▶[TranslateSubtitle]──srt──▶[BurnSubtitle]──▶ output.mp4
@@ -1152,7 +1152,7 @@ Audio file or in-memory `AUDIO` dict → SRT text (string output, not file). Bac
 **Output**: `srt_text` STRING — well-formed SRT (multi-block) ready to wire into `MF_TranslateSubtitle.srt_text` or `MF_BurnSubtitle.srt_text` directly (use `MF_ConvertChinese` with `filename_prefix` when you also want the SRT saved as a file).
 
 **Backend semantics** (from `ai_config.provider`):
-- `openai_compatible` — POSTs to `<base_url>/audio/transcriptions`. Works with OpenAI, Groq, any OpenAI-API-compatible server. Requires `pip install requests`.
+- `openai_compatible` — POSTs to `<base_url>/audio/transcriptions`. Works with OpenAI, Groq, any OpenAI-API-compatible server. Uses `requests` from `requirements.txt`.
 - `faster_whisper_local` — lazy-imports `faster-whisper`. Honors `ai_config.device` (`cpu` / `cuda` / `auto`) and `ai_config.model` (`tiny` / `base` / `small` / `medium` / `large-v3`). First run downloads model to HF cache. Requires `pip install faster-whisper`.
 
 **Model auto-substitution**: if `ai_config.model` doesn't look like an STT model id (e.g. it's `gpt-4o-mini` because the same `AI_CONFIG` feeds Translate), Whisper substitutes the provider's default — `whisper-1` for OpenAI-compatible, `base` for faster-whisper-local. Set an explicit STT model id (`whisper-large-v3`, `distil-large-v3`, …) to override.
@@ -1317,6 +1317,7 @@ comfyui_MediaForge/
 ├── utils/
 │   ├── ass_style.py         # ASS subtitle style helpers (shared by BurnSubtitle + ComposeBurnSubtitle)
 │   ├── audio_mix.py         # amix / afade / volume / loudnorm filter builders
+│   ├── cache_key.py         # path_fingerprint: mtime / size fingerprint for IS_CHANGED
 │   ├── color.py             # hex_to_ass_color: #RRGGBB → ASS BGR+alpha
 │   ├── compose_ir.py        # ComposeIR + AudioOp + compile_ir + compile_audio_chain
 │   ├── compose_ops.py       # MF_COMPOSE_OPS / AUDIO_OPS dispatch + watermark resolver
@@ -1324,6 +1325,7 @@ comfyui_MediaForge/
 │   ├── ffmpeg.py            # ensure_ffmpeg / run_ffmpeg / probe / probe_has_audio_stream
 │   ├── latent_carry.py      # Timeline: latent stream split, tail extract, carry masks, provenance
 │   ├── output_path.py       # resolve_output_path + output_path_to_ui_entry (API metadata helper)
+│   ├── plugin_tmp.py        # .mf_tmp/ temp files + sweep of stale files and session dirs
 │   ├── segment_spill.py     # Timeline: immutable state, FFV1 / WAV spill parts, crossfade, final encode
 │   ├── timeline_messages.py # Timeline: message catalog (stable E_* / W_* keys)
 │   ├── timeline_plan.py     # Timeline: time base, grids, timeline_data validation, segment specs
@@ -1333,6 +1335,7 @@ comfyui_MediaForge/
 ├── font/                    # drop .ttf / .otf here for MF_BurnSubtitle font_file dropdown
 ├── example_workflows/       # Timeline example workflows (shown in ComfyUI's template browser)
 ├── web/
+│   ├── ai_config_mask.js    # frontend extension: mask MF_AIConfig api_key on the canvas
 │   ├── dual_input_lock.js   # frontend extension: hide widgets per dual-input mode
 │   │                        #   - lock_widget / hidden_when_connected: hide on tensor mode
 │   │                        #   - linked_widgets: hide on path mode
@@ -1356,8 +1359,9 @@ comfyui_MediaForge/
 
 - ComfyUI
 - Python ≥ 3.10
-- **FFmpeg + FFprobe in PATH**
-- Optional: `requests` (for any AI node hitting an HTTP provider), `faster-whisper` (local Whisper backend) — lazy-imported on first use
+- **FFmpeg + FFprobe** — a system install in PATH is preferred; without one, `imageio-ffmpeg` (ffmpeg only) and `static-ffmpeg` (ffmpeg + ffprobe, downloaded on first use) from `requirements.txt` take over
+- Python packages in `requirements.txt` — ComfyUI Manager installs them; after a manual clone run `pip install -r requirements.txt`
+- Optional: `faster-whisper` (local Whisper backend) — lazy-imported on first use
 - Timeline nodes: no extra pip packages (`psutil`, `torch`, `numpy` come with ComfyUI); tested with ComfyUI core 0.42.5 / frontend 1.55.18 — not a minimum version (see [Compatibility](#compatibility))
 
 FFmpeg install:
@@ -1379,6 +1383,7 @@ Verify install: `ffmpeg -version && ffprobe -version` should both print version 
 ```bash
 cd ComfyUI/custom_nodes
 git clone https://github.com/leon80148/comfyui_MediaForge.git
+pip install -r comfyui_MediaForge/requirements.txt
 ```
 
 Restart ComfyUI — nodes appear under `MediaForge/Subtitle | Video | Analysis | Audio | Compose | AI`.
@@ -1386,7 +1391,6 @@ Restart ComfyUI — nodes appear under `MediaForge/Subtitle | Video | Analysis |
 ### Optional dependencies (lazy — install only what you actually use)
 
 ```bash
-pip install requests          # any node hitting an HTTP AI provider
 pip install faster-whisper    # only for backend="faster_whisper_local"
 ```
 
