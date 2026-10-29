@@ -1,73 +1,23 @@
 """MF_LoadSegmentFrames — 依 MF_SEGMENT 從來源影片解出本段的參考畫面與音訊。
 
-時間軸幀 f ↔ 來源時間 (f − origin_frame)·den/num 秒（相對來源第一個 video 幀）。FFmpeg 先
-accurate seek 到段首、再以 fps=num/den 重取樣：同 fps 的來源逐幀精確，不同 fps 則是決定性
-的最近幀取樣。既有 MF_LoadVideoFrames 沒有區間 seek，所以另立這個節點。
+時間軸幀 f ↔ 來源時間 (f − origin_frame)·den/num 秒（相對來源第一個 video 幀）；解碼規則見
+utils/timeline_media.py。既有 MF_LoadVideoFrames 沒有區間 seek，所以另立這個節點。
 """
-import subprocess
 from fractions import Fraction
 
-import numpy as np
 import torch
 
-from ..utils.ffmpeg import resolve_ffmpeg_cmd
+from ..utils.timeline_media import decode_audio, decode_video, scale_filter
 from ..utils.timeline_messages import TimelineError
 from ..utils.timeline_plan import sample_index
-from ..utils.timeline_source import ffmpeg_input_args, opaque_fingerprint, probe_source, resolve_timeline_source
+from ..utils.timeline_source import opaque_fingerprint, probe_source, resolve_timeline_source
 from ..utils.video_io import MAX_DECODE_BYTES
 
 NODE_LABEL = "Load Segment Frames"
 RESIZE_MODES = ("none", "fit", "fill", "stretch")
 MAX_AUDIO_RATE = 384000
 MAX_AUDIO_CHANNELS = 32
-AUDIO_PREROLL = Fraction(1)  # 秒；遠大於常見音訊封包（AAC ≈ 21 ms、PCM-in-MKV ≈ 85 ms）
 SHORTFALL_MODES = ("error", "hold_last", "black")
-
-
-def _scale_filter(resize, width, height):
-    if resize == "fit":
-        return f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
-    if resize == "fill":
-        return f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1"
-    if resize == "stretch":
-        return f"scale={width}:{height},setsar=1"
-    return None
-
-
-def _run(cmd, what):
-    proc = subprocess.run(resolve_ffmpeg_cmd(cmd), capture_output=True)
-    if proc.returncode != 0:
-        tail = "\n".join(proc.stderr.decode("utf-8", errors="replace").strip().splitlines()[-30:])
-        raise RuntimeError(f"[{NODE_LABEL}] FFmpeg {what}失敗 (exit {proc.returncode})：\n{tail}")
-    return proc.stdout
-
-
-def _decode_video(path, seek, count, fps, size, scale):
-    num, den = fps
-    vf = f"fps={num}/{den}" + (f",{scale}" if scale else "")
-    # -map 與 probe 一樣取第一條 video；不指定時 FFmpeg 可能選到 default 的其他串流
-    out = _run(["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{float(seek):.9f}"] + ffmpeg_input_args(path)
-               + ["-map", "0:v:0", "-vf", vf, "-frames:v", str(count), "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
-               "解碼畫面")
-    w, h = size
-    n = len(out) // (w * h * 3)
-    arr = np.frombuffer(out[: n * w * h * 3], dtype=np.uint8).reshape(n, h, w, 3)
-    return torch.from_numpy(arr.copy()).float() / 255.0
-
-
-def _decode_audio(path, seek, video_start, count, sample_rate, channels):
-    # 輸入端 -ss 跳到「不晚於目標的 video 關鍵幀」所在的 cluster：音訊可能晚一個封包才開始，第一個
-    # video 幀之前的音訊則整段讀不到；raw PCM 又沒有時間戳。所以往前多解一段——pre-roll 會落到第一個
-    # video 幀之前時就從檔頭讀——aresample 依 PTS 補齊空白（音軌晚於起點時也靠它），再以 sample 數精確裁掉前段
-    pre = seek if seek - AUDIO_PREROLL < video_start else AUDIO_PREROLL
-    af = (f"aresample=async=1:first_pts=0,atrim=start_sample={round(pre * sample_rate)},asetpts=PTS-STARTPTS,"
-          f"apad=whole_len={count},atrim=end_sample={count}")
-    head = ["-ss", f"{float(seek - pre):.9f}"] if seek > pre else []
-    out = _run(["ffmpeg", "-v", "error", "-nostdin"] + head + ffmpeg_input_args(path)
-               + ["-map", "0:a:0", "-af", af, "-ac", str(channels), "-ar", str(sample_rate), "-f", "f32le", "pipe:1"],
-               "解碼音訊")
-    pcm = np.frombuffer(out, dtype=np.float32).reshape(-1, channels).T
-    return torch.from_numpy(pcm.copy()).unsqueeze(0)
 
 
 class MF_LoadSegmentFrames:
@@ -101,7 +51,7 @@ class MF_LoadSegmentFrames:
         info = probe_source(path)
         fps = tuple(segment["fps"])
         length = segment["length"]
-        scale = _scale_filter(resize, width, height)
+        scale = scale_filter(resize, width, height)
         size = (width, height) if scale else info["display_size"]
         if length * size[0] * size[1] * 3 > MAX_DECODE_BYTES:
             raise ValueError(f"[{NODE_LABEL}] 本段 {length} 幀 × {size[0]}x{size[1]} 超過解碼上限；請改用 resize 縮小。")
@@ -113,7 +63,7 @@ class MF_LoadSegmentFrames:
         num, den = fps
         offset = Fraction((info["source_start_us"] or 0) - (info["format_start_us"] or 0), 1_000_000)
         seek = offset + Fraction(max(first, 0) * den, num)
-        frames = _decode_video(path, seek, length - head, fps, size, scale) if length > head else torch.zeros(0, size[1], size[0], 3)
+        frames = decode_video(path, seek, length - head, fps, size, scale, NODE_LABEL) if length > head else torch.zeros(0, size[1], size[0], 3)
         missing = length - head - frames.shape[0]
         if head or missing:
             if shortfall == "error" or (shortfall == "hold_last" and frames.shape[0] == 0):
@@ -132,7 +82,7 @@ class MF_LoadSegmentFrames:
             # 取樣率 / 聲道數來自檔案本身，惡意或損毀的 metadata 不能撐爆記憶體
             if not (0 < sr <= MAX_AUDIO_RATE and 0 < channels <= MAX_AUDIO_CHANNELS) or total * channels * 4 > MAX_DECODE_BYTES:
                 raise ValueError(f"[{NODE_LABEL}] 來源音訊規格異常（{sr} Hz × {channels} ch），拒絕解碼。請改用其他來源或先重新轉檔。")
-            waveform = _decode_audio(path, seek, offset, need, sr, channels) if need > 0 else torch.zeros(1, channels, 0)
+            waveform = decode_audio(path, seek, offset, need, sr, channels, NODE_LABEL) if need > 0 else torch.zeros(1, channels, 0)
             # seek 超過來源尾端時 FFmpeg 可能一個樣本都不輸出，apad 無從補起
             waveform = torch.cat([torch.zeros(1, channels, silent_head), waveform,
                                   torch.zeros(1, channels, need - waveform.shape[-1])], dim=-1)
