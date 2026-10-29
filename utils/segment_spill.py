@@ -15,14 +15,18 @@ import threading
 import time
 import uuid
 import weakref
+from fractions import Fraction
 
+import numpy as np
 import torch
 
 from .ffmpeg import resolve_ffmpeg_cmd
 from .output_path import resolve_output_path
 from .plugin_tmp import PLUGIN_TMP_DIR
+from .timeline_media import decode_audio
 from .timeline_messages import TimelineError, format_message
 from .timeline_plan import sample_index
+from .timeline_source import opaque_fingerprint, resolve_timeline_source
 
 APPEND_LABEL = "Append Segment"
 ASSEMBLE_LABEL = "Assemble Segments"
@@ -99,6 +103,36 @@ class SpillPart:
         self._finalizer()
 
 
+class PendingPart(SpillPart):
+    """crossfade 保留區（raw uint8 RGB 或 float32 PCM）。與 SpillPart 同一套 owner：被多個 state
+    共享、最後一個引用消失才刪檔；讀取不消耗，重跑 / 分支可以重讀。"""
+
+    def __init__(self, session, path, kind, start, count, layout, shape, dtype):
+        super().__init__(session, path, kind, start, count, layout)
+        self.shape = tuple(shape)
+        self.dtype = dtype
+
+    def load(self, label):
+        if not self.intact():
+            raise TimelineError(label, "E_SPILL_MISSING")
+        return torch.from_numpy(np.fromfile(self.path, dtype=self.dtype).reshape(self.shape))
+
+
+def _write_raw(path, tensor):
+    """tensor → raw bytes（.partial → 驗證大小 → rename）。"""
+    data = tensor.detach().to("cpu").contiguous().numpy()
+    partial = path + ".partial"
+    try:
+        data.tofile(partial)
+        if os.path.getsize(partial) != data.nbytes:
+            raise RuntimeError(f"[{APPEND_LABEL}] pending 暫存寫入不完整。請確認磁碟空間後重試。")
+        os.replace(partial, path)
+    except BaseException:
+        _unlink(partial)
+        raise
+    return data.dtype.str
+
+
 # ---------- 純運算：量化、crossfade、音訊 flush ----------
 
 def crossfade_frames(seam):
@@ -169,17 +203,26 @@ def flush_audio(committed_end, pending, wave, wave_start, mix, commit_end, curve
 
 # ---------- 序列 / 預檢 ----------
 
+def check_state(state, label):
+    if not isinstance(state, dict) or state.get("type") != "MF_SEGMENT_STATE":
+        raise ValueError(f"[{label}] state 必須來自 {APPEND_LABEL}，請連接前一段的 state。")
+    if state.get("version") != 2:
+        raise ValueError(f"[{label}] state 是舊版格式，請重新執行整個時間軸流程。")
+
+
 def check_sequence(state, segment):
     if state is None:
         if segment["index"] != 0:
             raise TimelineError(APPEND_LABEL, "E_SEQUENCE", expected=1, actual=segment["index"] + 1)
         return
-    if not isinstance(state, dict) or state.get("type") != "MF_SEGMENT_STATE":
-        raise ValueError(f"[{APPEND_LABEL}] state 必須來自 {APPEND_LABEL}，請連接前一段的 state。")
-    if (state["plan_id"], state["execution_id"]) != (segment["plan_id"], segment["execution_id"]):
-        raise TimelineError(APPEND_LABEL, "E_PLAN")
+    check_state(state, APPEND_LABEL)
+    if state["complete"]:
+        raise TimelineError(APPEND_LABEL, "E_SEQUENCE", expected="（已完成，不能再附加）", actual=segment["index"] + 1)
     if state["next_index"] != segment["index"]:
         raise TimelineError(APPEND_LABEL, "E_SEQUENCE", expected=state["next_index"] + 1, actual=segment["index"] + 1)
+    # 組裝前綴身分：前面各段的取樣內容、seam、emit、鎖音都相同才接受（不同計畫的等價前綴可以共用）
+    if state["assembly_id"] != segment["prev_assembly_id"]:
+        raise TimelineError(APPEND_LABEL, "E_PLAN")
 
 
 def check_ram(nbytes):
@@ -329,10 +372,10 @@ def _write_wav(path, wave, sample_rate):
         raise
 
 
-def _committed_chunks(frames, pending, x_in, own_lo, own_hi, step):
+def _committed_chunks(frames, held, x_in, own_lo, own_hi, step):
     # crossfade 幀逐幀算，其餘幀分批量化：整段只在 writer 端以 ~16 MiB 工作集轉成 uint8
     for j in range(x_in):
-        yield mix_frame(pending["frames_u8"][j], frames[own_lo - x_in + j], (j + 1) / (x_in + 1)).unsqueeze(0)
+        yield mix_frame(held[j], frames[own_lo - x_in + j], (j + 1) / (x_in + 1)).unsqueeze(0)
     for i in range(own_lo, own_hi, step):
         yield quantize(frames[i:min(i + step, own_hi)])
 
@@ -372,23 +415,31 @@ def _seam_report(segment, state, frames, out, padded, curve, x_in, window):
 
 def _final_ok(state):
     clock = state["audio_clock"]
-    total = state["expected_total_frames"]
-    return (state["pending"] is None and state["committed_frames"] == total
+    total = state["total_frames"]
+    return (state["complete"] and state["pending"] is None and state["committed_frames"] == total
             and (clock is None
                  or state["committed_end_sample"] == sample_index(total, clock["sample_rate"], state["video"]["fps"])))
 
 
-def _check_invariants(new, old, emitted):
+def _check_invariants(new, old):
     pending = new["pending"]
     held = pending["frame_range"][1] - pending["frame_range"][0] if pending else 0
-    ok = (new["committed_frames"] + held == emitted
+    ok = (new["committed_frames"] + held == new["processed_end"]
           and new["committed_end_sample"] >= old["committed_end_sample"]
           and new["available_end_sample"] >= new["committed_end_sample"])
-    if not ok or (new["next_index"] == new["expected_count"] and not _final_ok(new)):
+    if not ok or (new["complete"] and not _final_ok(new)):
         raise RuntimeError(f"[{APPEND_LABEL}] state 不變量檢查失敗（內部錯誤）。請重新執行整個迴圈。")
 
 
-def append_segment(state, segment, frames, audio, *, curve, carry, check_interrupt):
+def _merge_locks(held, added):
+    """母帶鎖音區間依 anchor id 合併：同一個 lock 跨重疊區會被前後兩段各收錄一次。"""
+    by_anchor = {lock["anchor"]: lock for lock in held}
+    for lock in added:
+        by_anchor.setdefault(lock["anchor"], lock)
+    return tuple(sorted(by_anchor.values(), key=lambda lock: lock["start"]))
+
+
+def append_segment(state, segment, frames, audio, *, curve, carry, check_interrupt, lock_drift=None):
     """把一段畫面 / 音訊 flush 進 spill，回傳新的 state（不修改輸入 state）。
 
     frames：[L,H,W,3] float，幀數已驗證；audio：audio_input() 的結果或 None；carry：下一段的
@@ -404,14 +455,13 @@ def append_segment(state, segment, frames, audio, *, curve, carry, check_interru
     layout = None if audio is None else (audio[1], int(audio[0].shape[0]))
     if state is None:
         session_id = uuid.uuid4().hex
-        state = {"type": "MF_SEGMENT_STATE", "version": 1, "session": session_id,
-                 "plan_id": segment["plan_id"], "execution_id": segment["execution_id"],
+        state = {"type": "MF_SEGMENT_STATE", "version": 2, "session": session_id, "assembly_id": None,
                  "spill_dir": os.path.join(SPILL_ROOT, f"seg_{session_id}"),
-                 "expected_count": segment["count"], "expected_total_frames": segment["total_frames"],
                  "next_index": 0, "video": {"width": width, "height": height, "fps": list(fps)},
                  "audio_clock": None if layout is None else {"sample_rate": layout[0], "channels": layout[1]},
-                 "parts": (), "committed_frames": 0, "committed_end_sample": 0, "available_end_sample": 0,
-                 "pending": None, "carry": None, "seams": (), "edge": None}
+                 "parts": (), "processed_end": 0, "committed_frames": 0, "committed_end_sample": 0,
+                 "available_end_sample": 0, "pending": None, "carry": None, "seams": (), "edge": None,
+                 "locks": (), "complete": False, "total_frames": None}
     video = state["video"]
     if (video["width"], video["height"]) != (width, height):
         raise ValueError(f"[{APPEND_LABEL}] 第 {segment['index'] + 1} 段畫面 {width}x{height} 與前段 "
@@ -420,8 +470,11 @@ def append_segment(state, segment, frames, audio, *, curve, carry, check_interru
     if (None if clock is None else (clock["sample_rate"], clock["channels"])) != layout:
         raise TimelineError(APPEND_LABEL, "E_AUDIO_LAYOUT")
     pending = state["pending"]
-    if (pending["frame_range"] if pending else None) != ([a - x_in, a] if x_in else None):
-        raise RuntimeError(f"[{APPEND_LABEL}] state 的 pending 區間與本段接縫不符（內部錯誤）。請重新執行整個迴圈。")
+    if ((pending["frame_range"] if pending else None) != ([a - x_in, a] if x_in else None)
+            or state["processed_end"] != a or state["committed_frames"] != a - x_in):
+        raise RuntimeError(f"[{APPEND_LABEL}] state 的游標 / pending 區間與本段接縫不符（內部錯誤）。請重新執行整個迴圈。")
+    held_frames = pending["frames"].load(APPEND_LABEL) if x_in else None
+    held_audio = pending["audio"].load(APPEND_LABEL) if (x_in and pending["audio"] is not None) else None
 
     session = _open_session(state["spill_dir"])
     need = 2 * (e - a) * width * height * FFV1_BYTES_PER_PIXEL
@@ -436,8 +489,9 @@ def append_segment(state, segment, frames, audio, *, curve, carry, check_interru
         wave_start = sample_index(origin, sr, fps)
         commit_end = sample_index(e - x_out, sr, fps)
         mix = (sample_index(a - x_in, sr, fps), sample_index(a, sr, fps)) if x_in else None
-        out, padded = flush_audio(end_sample, (pending["sample_range"][0], pending["audio_f32"]) if x_in else None,
-                                  wave, wave_start, mix, commit_end, curve, segment["is_last"])
+        held = (pending["sample_range"][0], held_audio) if held_audio is not None else None
+        out, padded = flush_audio(end_sample, held, wave, wave_start, mix if held else None, commit_end, curve,
+                                  segment["is_last"])
         end_sample += out.shape[1]
         window = max(mix[1] - mix[0] if mix else 0, sr // 100)
         if x_out:
@@ -445,22 +499,13 @@ def append_segment(state, segment, frames, audio, *, curve, carry, check_interru
             hi = min(sample_index(e, sr, fps), wave_start + wave.shape[1]) if end_sample == commit_end else commit_end
             pending_audio = wave[:, commit_end - wave_start:max(hi, commit_end) - wave_start].clone()
 
-    new_pending = None
-    if x_out:
-        new_pending = {"frame_range": [e - x_out, e], "frames_u8": quantize(frames[length - x_out:]),
-                       "sample_range": None, "audio_f32": None}
-        if pending_audio is not None:
-            new_pending["sample_range"] = [commit_end, commit_end + pending_audio.shape[1]]
-            new_pending["audio_f32"] = pending_audio
-    available_end = new_pending["sample_range"][1] if (pending_audio is not None and pending_audio.shape[1]) else end_sample
-
     start_frame = state["committed_frames"]
     count = x_in + (e - a - x_out)
-    new_parts = []
+    new_parts, new_pending = [], None
     try:
         if count:
             path = os.path.join(session.path, f"seg_{segment['index']}_{uuid.uuid4().hex}.mkv")
-            chunks = _committed_chunks(frames, pending, x_in, segment["overlap_in"], length - x_out,
+            chunks = _committed_chunks(frames, held_frames, x_in, segment["overlap_in"], length - x_out,
                                        chunk_frames(width, height))
             _write_video_part(path, chunks, width, height, fps, count, check_interrupt)
             new_parts.append(SpillPart(session, path, "video", start_frame, count, (width, height, fps)))
@@ -469,15 +514,39 @@ def append_segment(state, segment, frames, audio, *, curve, carry, check_interru
             _write_wav(path, out, clock["sample_rate"])
             new_parts.append(SpillPart(session, path, "audio", state["committed_end_sample"], out.shape[1],
                                        (clock["sample_rate"], clock["channels"])))
+        if x_out:
+            # crossfade 保留區落盤：快取住的每個 state 不再各自握著一份 RGB（1344×768×22 幀 ≈ 65 MiB）
+            tail = quantize(frames[length - x_out:])
+            path = os.path.join(session.path, f"pending_{segment['index']}_{uuid.uuid4().hex}.rgb")
+            dtype = _write_raw(path, tail)
+            new_pending = {"frame_range": [e - x_out, e], "sample_range": None, "audio": None,
+                           "frames": PendingPart(session, path, "pending_video", e - x_out, x_out,
+                                                 (width, height, fps), tail.shape, dtype)}
+            new_parts.append(new_pending["frames"])
+            if pending_audio is not None and pending_audio.shape[1]:
+                path = os.path.join(session.path, f"pending_{segment['index']}_{uuid.uuid4().hex}.f32")
+                dtype = _write_raw(path, pending_audio)
+                new_pending["sample_range"] = [commit_end, commit_end + pending_audio.shape[1]]
+                new_pending["audio"] = PendingPart(session, path, "pending_audio", commit_end, pending_audio.shape[1],
+                                                   (clock["sample_rate"], clock["channels"]), pending_audio.shape, dtype)
+                new_parts.append(new_pending["audio"])
+        available_end = new_pending["sample_range"][1] if (new_pending and new_pending["sample_range"]) else end_sample
         seam = _seam_report(segment, state, frames, out, padded, curve, x_in, window)
+        # planned：計畫要鎖；verified：Append 的漂移檢查通過（外部 sampler 拿掉 metadata 時不會走到這裡）
+        seam["latent_lock"] = {"planned": bool(segment["latent_locks"]), "verified": lock_drift is not None,
+                               "drift": lock_drift}
         last_audio = out[:, -1].clone() if (out is not None and out.shape[1]) else \
             (state["edge"]["audio"] if state["edge"] else None)
-        new_state = {**state, "next_index": segment["index"] + 1, "parts": state["parts"] + tuple(new_parts),
+        spill = tuple(p for p in new_parts if not isinstance(p, PendingPart))
+        new_state = {**state, "assembly_id": segment["assembly_id"], "next_index": segment["index"] + 1,
+                     "parts": state["parts"] + spill, "processed_end": e,
                      "committed_frames": start_frame + count, "committed_end_sample": end_sample,
                      "available_end_sample": available_end, "pending": new_pending, "carry": carry,
                      "seams": state["seams"] + (seam,),
-                     "edge": {"thumb": _thumb(frames[length - 1]), "audio": last_audio}}
-        _check_invariants(new_state, state, e)
+                     "edge": {"thumb": _thumb(frames[length - 1]), "audio": last_audio},
+                     "locks": _merge_locks(state["locks"], segment["audio_locks"]),
+                     "complete": segment["is_last"], "total_frames": e if segment["is_last"] else None}
+        _check_invariants(new_state, state)
     except BaseException:
         for part in new_parts:
             part.remove()
@@ -531,13 +600,93 @@ def _run(cmd, check_interrupt):
     return proc.returncode, stderr
 
 
-def assemble(state, filename_prefix, ext, pix_fmt, encoder_args, override, check_interrupt):
-    """parts → 最終影片（§5.6 / §6.1）；回傳 (輸出路徑, report dict)。不刪 spill part。
+MASTER_RATE = 48000
+
+
+def _lock_pcm(lock, fps, directory, label):
+    """鎖音區間的 canonical PCM（48 kHz 雙聲道 float32 WAV）：整個區間一次重取樣，樣本數 = Q₄₈ₖ 端點差。"""
+    path = resolve_timeline_source(lock["ref"])
+    if opaque_fingerprint(path) != lock["fingerprint"]:
+        raise TimelineError(label, "E_SOURCE_CHANGED")
+    num, den = fps
+    count = sample_index(lock["end"], MASTER_RATE, fps) - sample_index(lock["start"], MASTER_RATE, fps)
+    # -ss 以容器起點為 0、素材時間以第一個 audio PTS 為 0
+    origin = Fraction((lock["audio_start_us"] or 0) - (lock["format_start_us"] or 0), 1_000_000)
+    wave = decode_audio(path, origin + Fraction(lock["in"] * den, num), origin, count, MASTER_RATE, 2, label)[0]
+    out = os.path.join(directory, f"lock_{lock['anchor']}_{uuid.uuid4().hex}.wav")
+    _write_wav(out, wave, MASTER_RATE)
+    return out
+
+
+def master_filter(locks, total_samples, has_base):
+    """生成音軌（一次重取樣到 48 kHz）以 sample 精確的 atrim 切開，鎖音區間換成原聲 PCM，再依序 concat。
+
+    輸入編號：有生成音軌時它是 0、鎖音 PCM 從 1 起；沒有時鎖音從 0 起、底層改用靜音。
+    """
+    lead = (f"[0:a]aresample={MASTER_RATE},aformat=sample_fmts=flt:channel_layouts=stereo,asetpts=N/SR/TB,"
+            if has_base else f"anullsrc=r={MASTER_RATE}:cl=stereo,aformat=sample_fmts=flt,")
+    chains = [lead + f"apad=whole_len={total_samples},atrim=end_sample={total_samples}[base]"]
+    gaps, cursor = [], 0
+    for lo, hi in locks:
+        if lo > cursor:
+            gaps.append((cursor, lo))
+        cursor = hi
+    if cursor < total_samples:
+        gaps.append((cursor, total_samples))
+    chains.append(f"[base]asplit={len(gaps)}" + "".join(f"[b{k}]" for k in range(len(gaps))) if gaps
+                  else "[base]anullsink")
+    first_lock = 1 if has_base else 0
+    pieces = []
+    for _, kind, k in sorted([(lo, "gap", k) for k, (lo, _) in enumerate(gaps)]
+                             + [(lo, "lock", k) for k, (lo, _) in enumerate(locks)]):
+        if kind == "gap":
+            chains.append(f"[b{k}]atrim=start_sample={gaps[k][0]}:end_sample={gaps[k][1]},asetpts=N/SR/TB[g{k}]")
+            pieces.append(f"[g{k}]")
+        else:
+            chains.append(f"[{first_lock + k}:a]aformat=sample_fmts=flt:channel_layouts=stereo,asetpts=N/SR/TB[l{k}]")
+            pieces.append(f"[l{k}]")
+    chains.append("".join(pieces) + f"concat=n={len(pieces)}:v=0:a=1[master]")
+    return ";".join(chains)
+
+
+def build_master(state, directory, check_interrupt):
+    """lock_audio=original：生成音軌在鎖音區間換回原聲 → 48 kHz float32 WAV 母帶（AAC 之前可逐 sample 驗收）。"""
+    fps = tuple(state["video"]["fps"])
+    total = sample_index(state["total_frames"], MASTER_RATE, fps)
+    locks = [(sample_index(lock["start"], MASTER_RATE, fps), sample_index(lock["end"], MASTER_RATE, fps))
+             for lock in state["locks"]]
+    scratch, clock = [], state["audio_clock"]
+    try:
+        cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y"]
+        if clock is not None:
+            scratch.append(_concat_list(directory, [p.path for p in state["parts"] if p.kind == "audio"]))
+            cmd += ["-f", "concat", "-safe", "0", "-i", scratch[-1]]
+        for lock in state["locks"]:
+            scratch.append(_lock_pcm(lock, fps, directory, ASSEMBLE_LABEL))
+            cmd += ["-i", scratch[-1]]
+        master = os.path.join(directory, f"master_{uuid.uuid4().hex}.wav")
+        cmd += ["-filter_complex", master_filter(locks, total, clock is not None), "-map", "[master]",
+                "-c:a", "pcm_f32le", master]
+        returncode, stderr = _run(cmd, check_interrupt)
+        if returncode != 0:
+            stderr.print_tail(ASSEMBLE_LABEL)
+            _unlink(master)
+            raise RuntimeError(f"[{ASSEMBLE_LABEL}] 鎖音母帶組裝失敗（exit {returncode}），請查看上方 stderr 輸出。")
+        return master, total
+    finally:
+        for path in scratch:
+            _unlink(path)
+
+
+def assemble(state, filename_prefix, ext, pix_fmt, encoder_args, override, check_interrupt, lock_audio="generated"):
+    """parts → 最終影片；回傳 (輸出路徑, report dict)。不刪 spill part。只驗證 state 自洽（不接 plan）。
 
     override：audio_input() 的結果或 None，整條取代內部音軌，以它自己的 sample rate 補齊 / 截斷到 Q(F)。
+    lock_audio="original" 且 state 有鎖音時，母帶在鎖音區間換回原聲（override 優先）。
     """
-    if state["next_index"] != state["expected_count"]:
-        raise TimelineError(ASSEMBLE_LABEL, "E_SEQUENCE", expected=state["expected_count"], actual=state["next_index"])
+    check_state(state, ASSEMBLE_LABEL)
+    if not state["complete"]:
+        raise TimelineError(ASSEMBLE_LABEL, "E_SEQUENCE", expected="最後一段", actual=state["next_index"])
     if not _final_ok(state):
         raise RuntimeError(f"[{ASSEMBLE_LABEL}] state 不變量檢查失敗（內部錯誤）。請重新執行整個迴圈。")
     parts = state["parts"]  # 編碼期間持有全部 SpillPart，避免中途被回收
@@ -546,7 +695,7 @@ def assemble(state, filename_prefix, ext, pix_fmt, encoder_args, override, check
     clock = state["audio_clock"]
     v = state["video"]
     fps = tuple(v["fps"])
-    total = state["expected_total_frames"]
+    total = state["total_frames"]
     if not (_contiguous(video, total) and _contiguous(audio, state["committed_end_sample"] if clock else 0)
             and all(p.intact() for p in parts)
             and all(p.layout == (v["width"], v["height"], fps) for p in video)
@@ -565,6 +714,11 @@ def assemble(state, filename_prefix, ext, pix_fmt, encoder_args, override, check
             _write_wav(scratch[-1], wave, sample_rate)
             cmd += ["-i", scratch[-1]]
             source = "override"
+        elif lock_audio == "original" and state["locks"]:
+            master, _ = build_master(state, state["spill_dir"], check_interrupt)
+            scratch.append(master)
+            cmd += ["-i", master]
+            source, sample_rate = "locked_original", MASTER_RATE
         elif clock is not None:
             scratch.append(_concat_list(state["spill_dir"], [p.path for p in audio]))
             cmd += ["-f", "concat", "-safe", "0", "-i", scratch[-1]]
@@ -606,7 +760,9 @@ def assemble(state, filename_prefix, ext, pix_fmt, encoder_args, override, check
         for path in scratch:
             _unlink(path)
 
-    report = {"version": 1, "plan_id": state["plan_id"], "execution_id": state["execution_id"],
+    lock_reason = ("audio_override" if override is not None and state["locks"] else
+                   None if source == "locked_original" else "no_locks" if not state["locks"] else "disabled")
+    report = {"version": 2, "assembly_id": state["assembly_id"],
               "session": state["session"], "frames": total, "fps": [num, den],
               "width": v["width"], "height": v["height"], "pix_fmt": pix_fmt,
               "color": {"assumed": "BT.709", "conversion": "full-range RGB → limited-range YUV",
@@ -614,5 +770,7 @@ def assemble(state, filename_prefix, ext, pix_fmt, encoder_args, override, check
               "audio": {"source": source, "sample_rate": sample_rate, "samples": samples},
               "padded_samples": sum(s["padded_samples"] for s in state["seams"]),
               "seams": list(state["seams"]),
-              "parts": {"video": len(video), "audio": len(audio)}}
+              "parts": {"video": len(video), "audio": len(audio)},
+              "effective": [{"feature": "lock_audio", "requested": lock_audio == "original",
+                             "applied": source == "locked_original", "reason": lock_reason}]}
     return output, report

@@ -27,9 +27,11 @@ class MF_SelectSegment:
     def select(self, segment_plan, segment_index):
         if not isinstance(segment_plan, dict) or segment_plan.get("type") != "MF_SEGMENT_PLAN":
             raise ValueError("[Select Segment] segment_plan 必須來自 Edit Timeline，請檢查接線")
+        if segment_plan.get("version") != 2:
+            raise ValueError("[Select Segment] segment_plan 是舊版格式，請重新執行 Edit Timeline")
         spec = segment_spec(segment_plan, segment_index)
         num, den = spec["fps"]
-        return (spec, spec["prompt"], spec["length"], spec["start"] * den / num, spec["count"])
+        return (spec, spec["prompt"], spec["length"], spec["start"] * den / num, len(segment_plan["specs"]))
 
 
 NODE_CLASS_MAPPINGS = {"MF_SelectSegment": MF_SelectSegment}

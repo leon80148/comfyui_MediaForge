@@ -4,11 +4,14 @@ Python 是唯一權威；web/timeline_grid.js 鏡射同一套規則給 GUI 即�
 tests/golden/timeline_vectors.json 對拍。所有邊界都是整數幀與有理數 fps，秒只
 用來顯示——浮點 fps（例如 23.976）換算 NTSC 會挑錯分母，所以連輸入都不收浮點。
 """
+import copy
 import hashlib
 import json
 from fractions import Fraction
 
+from . import timeline_materials
 from .timeline_messages import TimelineError
+from .timeline_source import check_relative_name
 
 NODE_LABEL = "Edit Timeline"
 
@@ -133,19 +136,30 @@ def _keys(obj, allowed, location):
         _fail(f"不認得的欄位 {extra}", location)
 
 
+def _string(value, location):
+    if not isinstance(value, str):
+        _fail("必須是字串", location)
+    return value
+
+
 def parse_timeline_data(text):
-    """嚴格解析 timeline_data 並補齊 canonical 預設；回傳只含語意欄位的 dict。"""
+    """嚴格解析 timeline_data（v1 / v2）並補齊 canonical 預設；一律回傳 v2 形式的語意 dict。"""
     try:
         data = json.loads(text, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_constant)
     except ValueError as e:
         _fail(str(e), "timeline_data")
-    _keys(data, ("version", "source", "segments"), "timeline_data")
-    if _int(data.get("version"), "version") != 1:
-        _fail("只支援 version 1", "version")
+    if not isinstance(data, dict):
+        _fail("必須是物件", "timeline_data")
+    v2 = data.get("version") == 2
+    _keys(data, ("version", "source", "prompt", "segments", "materials", "refs", "anchors") if v2
+          else ("version", "source", "segments"), "timeline_data")
+    if _int(data.get("version"), "version") not in (1, 2):
+        _fail("只支援 version 1 / 2", "version")
 
     source = data.get("source", {})
     _keys(source, ("origin_frame",), "source")
     origin = _int(source.get("origin_frame", 0), "source.origin_frame")
+    prompt = _string(data.get("prompt", ""), "prompt")
 
     segments = data.get("segments")
     if not isinstance(segments, list) or not segments:
@@ -155,15 +169,20 @@ def parse_timeline_data(text):
     out = []
     for i, seg in enumerate(segments):
         loc = f"segments[{i}]"
-        _keys(seg, ("start", "end", "prompt", "seam_in"), loc)
+        _keys(seg, ("start", "end", "prompt", "seam_in", "seed") if v2 else ("start", "end", "prompt", "seam_in"), loc)
         start = _int(seg.get("start"), f"{loc}.start", minimum=0)
         end = _int(seg.get("end"), f"{loc}.end", minimum=0)
-        prompt = seg.get("prompt", "")
-        if not isinstance(prompt, str):
-            _fail("必須是字串", f"{loc}.prompt")
-        out.append({"start": start, "end": end, "prompt": prompt,
+        seg_prompt = _string(seg.get("prompt", ""), f"{loc}.prompt")
+        seed = seg.get("seed")
+        if seed is not None:
+            seed = _int(seed, f"{loc}.seed", minimum=0)
+        out.append({"start": start, "end": end, "prompt": seg_prompt, "seed": seed,
                     "seam_in": _parse_seam(seg.get("seam_in", {"kind": "cut"}), f"{loc}.seam_in")})
-    return {"version": 1, "source": {"origin_frame": origin}, "segments": out}
+    materials = timeline_materials.parse_materials(data.get("materials", []), check_relative_name)
+    return {"version": 2, "source": {"origin_frame": origin}, "prompt": prompt, "segments": out,
+            "materials": materials,
+            "refs": timeline_materials.parse_refs(data.get("refs", []), materials),
+            "anchors": timeline_materials.parse_anchors(data.get("anchors", []), materials)}
 
 
 def _parse_seam(seam, location):
@@ -244,8 +263,9 @@ def source_timeline_frames(source, fps):
     return (source["duration_us"] * num) // (den * 1_000_000)
 
 
-def compile_plan(data, mode, fps_key, grid, source=None):
-    """data 是 parse_timeline_data() 的結果；source 是 timeline_source.describe_source() 或 None。"""
+def compile_plan(data, mode, fps_key, grid, source=None, snapshots=None):
+    """data 是 parse_timeline_data() 的結果；source 是 timeline_source.describe_source() 或 None；
+    snapshots 是 {material_id: timeline_media.describe_material()}（沒有素材時可省略）。"""
     if mode not in MODES:
         _fail(f"mode 必須是 {list(MODES)}", "mode")
     if fps_key not in FPS_PRESETS:
@@ -264,25 +284,36 @@ def compile_plan(data, mode, fps_key, grid, source=None):
     else:
         if source is None:
             _fail("cut 模式需要來源影片", "video")
+        if data["materials"]:
+            _fail("cut 模式不使用素材", "materials")
         diagnostics = _validate_cut(segments, source_timeline_frames(source, fps), origin)
         total = sum(s["end"] - s["start"] for s in segments)
+    snapshots = snapshots or {}
+    h3 = effective_grid == H3_GRID
+    if data["materials"]:
+        timeline_materials.validate_geometry(data["refs"], data["anchors"], snapshots, segments, h3)
 
-    semantic = {"version": 1, "mode": mode, "fps": list(fps), "effective_grid": effective_grid,
-                "source": data["source"], "segments": segments}
+    semantic = {"version": 2, "mode": mode, "fps": list(fps), "effective_grid": effective_grid,
+                **{k: data[k] for k in ("source", "prompt", "segments", "materials", "refs", "anchors")}}
     plan_id = _digest(canonical_json(semantic))
+    material_fps = sorted([m["id"], snapshots[m["id"]]["fingerprint"]] for m in data["materials"])
     fingerprint = source["fingerprint"] if source else ""
     plan_source = None
     if source is not None:
         plan_source = {k: source.get(k) for k in ("source_ref", "fingerprint", "fps", "frame_count", "source_start_us", "duration_us")}
         plan_source["origin_frame"] = origin
-    return {
-        "type": "MF_SEGMENT_PLAN", "version": 1,
-        "plan_id": plan_id, "execution_id": _digest(plan_id + "|" + fingerprint),
+    plan = {
+        "type": "MF_SEGMENT_PLAN", "version": 2,
+        "plan_id": plan_id, "execution_id": _digest(canonical_json([plan_id, fingerprint, material_fps])),
         "mode": mode, "fps": list(fps), "effective_grid": effective_grid,
-        "source": plan_source,
+        "source": plan_source, "prompt": data["prompt"],
+        "materials": [snapshots[m["id"]] for m in data["materials"]],
+        "refs": data["refs"], "anchors": data["anchors"],
         "segments": [{"index": i, **s} for i, s in enumerate(segments)],
         "total_frames": total, "diagnostics": diagnostics,
     }
+    plan["specs"] = _build_specs(plan, data, snapshots, h3)
+    return plan
 
 
 def _emit_intervals(plan):
@@ -296,44 +327,142 @@ def _emit_intervals(plan):
     return [[segments[i - 1]["end"] if i else 0, s["end"]] for i, s in enumerate(segments)]
 
 
-def segment_spec(plan, index):
-    """MF_SEGMENT：Extend / Append / Load 共用的不可變衍生快照。"""
+_EMPTY_MANIFEST = {"pictures": [], "videos": [], "audios": [], "keyframes": [], "guides": [], "locks": [],
+                   "carry_conflicts": []}
+# 只供報告 / GUI 的欄位：改名、換 binding id 不該讓 conditioning 重新編碼
+_REPORT_KEYS = {"name", "binding", "anchor", "material", "requested_frames", "discarded_tail", "tag", "audio_tag"}
+
+
+def _encode_materials(manifest):
+    out = {}
+    for kind in ("pictures", "videos", "audios", "keyframes", "guides", "locks"):
+        out[kind] = [{**{k: v for k, v in item.items() if k not in _REPORT_KEYS and k != "snapshot"},
+                      "snapshot": {k: v for k, v in item["snapshot"].items() if k not in ("id", "name")}}
+                     for item in manifest[kind]]
+    for lock in out["locks"]:
+        lock["policy"] = timeline_materials.LOCK_POLICY
+    return out
+
+
+def _audio_locks(plan, seg):
+    """本段觸及的 lock 在母帶上的時間軸區間（以 anchor 為單位，Assemble 依 id 合併）。"""
+    by_id = {m["id"]: m for m in plan["materials"]}
+    out = []
+    for a in plan["anchors"]:
+        if a["role"] != "lock":
+            continue
+        lo, hi = a["at"], min(a["at"] + a["length"], plan["total_frames"])
+        if lo < seg["end"] and hi > seg["start"] and lo < hi:
+            snap = by_id[a["material"]]
+            out.append({"anchor": a["id"], "start": lo, "end": hi, "in": a["in"], "ref": snap["ref"],
+                        "fingerprint": snap["fingerprint"],
+                        **{k: snap[k] for k in ("audio_sample_rate", "audio_channels", "audio_start_us", "format_start_us")}})
+    return out
+
+
+def _build_specs(plan, data, snapshots, h3):
     segments = plan["segments"]
     count = len(segments)
-    if not 0 <= index < count:
-        raise TimelineError("Select Segment", "E_SEGMENT_INDEX", count=count, index=index)
-    seg = segments[index]
     grid = plan["effective_grid"]
     generate = plan["mode"] == "generate"
-    prev = segments[index - 1] if index else None
-    nxt = segments[index + 1] if index + 1 < count else None
-    overlap_in = prev["end"] - seg["start"] if (generate and prev) else 0
-    overlap_out = seg["end"] - nxt["start"] if (generate and nxt) else 0
-    length = seg["end"] - seg["start"]
-    carry_in = carry_spec(grid, prev["end"] - prev["start"], overlap_in) if prev else None
-    carry_out = carry_spec(grid, length, overlap_out) if nxt else None
+    emits = _emit_intervals(plan)
     source = plan["source"]
-    window = None
-    if source is not None:
-        window = {"source_ref": source["source_ref"], "source_fingerprint": source["fingerprint"],
-                  "source_start_us": source["source_start_us"], "origin_frame": source["origin_frame"],
-                  "start_frame": seg["start"], "end_frame": seg["end"]}
-    return {
-        "type": "MF_SEGMENT", "version": 1,
-        "plan_id": plan["plan_id"], "execution_id": plan["execution_id"],
-        "index": index, "count": count, "is_first": index == 0, "is_last": index == count - 1,
-        "total_frames": plan["total_frames"],
-        "start": seg["start"], "end": seg["end"], "length": length,
-        "expected_tokens": latent_tokens(grid, length),
-        "overlap_in": overlap_in, "overlap_out": overlap_out,
-        "emit_interval": _emit_intervals(plan)[index],
-        "fps": plan["fps"], "effective_grid": grid,
-        "carry_in": carry_in, "carry_out": carry_out,
-        "carry_in_id": spec_id(carry_in), "carry_out_id": spec_id(carry_out),
-        "seam_in": seg["seam_in"], "seam_out": nxt["seam_in"] if nxt else None,
-        "source_window": window,
-        "prompt": seg["prompt"],
-    }
+    specs, prev_sampling, prev_assembly = [], None, None
+    for index, seg in enumerate(segments):
+        prev = segments[index - 1] if index else None
+        nxt = segments[index + 1] if index + 1 < count else None
+        overlap_in = prev["end"] - seg["start"] if (generate and prev) else 0
+        overlap_out = seg["end"] - nxt["start"] if (generate and nxt) else 0
+        length = seg["end"] - seg["start"]
+        carry_in = carry_spec(grid, prev["end"] - prev["start"], overlap_in) if prev else None
+        carry_out = carry_spec(grid, length, overlap_out) if nxt else None
+        window = None
+        if source is not None:
+            window = {"source_ref": source["source_ref"], "source_fingerprint": source["fingerprint"],
+                      "source_start_us": source["source_start_us"], "origin_frame": source["origin_frame"],
+                      "start_frame": seg["start"], "end_frame": seg["end"]}
+        manifest = _EMPTY_MANIFEST
+        if generate and plan["materials"]:
+            manifest = timeline_materials.segment_manifest(segments, index, plan["refs"], plan["anchors"],
+                                                           snapshots, h3, carry_in)
+        template = seg["prompt"] or plan["prompt"]
+        prompt = timeline_materials.resolve_prompt(template, manifest, data["materials"], index, h3) if generate else template
+        spec = {
+            "type": "MF_SEGMENT", "version": 2, "view": "full",
+            "index": index, "is_first": index == 0, "is_last": index == count - 1,
+            "start": seg["start"], "end": seg["end"], "length": length,
+            "expected_tokens": latent_tokens(grid, length),
+            "overlap_in": overlap_in, "overlap_out": overlap_out,
+            "emit_interval": emits[index],
+            "fps": plan["fps"], "effective_grid": grid,
+            "carry_in": carry_in, "carry_out": carry_out,
+            "carry_in_id": spec_id(carry_in), "carry_out_id": spec_id(carry_out),
+            "carry_conflicts": manifest["carry_conflicts"],
+            "seam_in": seg["seam_in"], "seam_out": nxt["seam_in"] if nxt else None,
+            "source_window": window,
+            "prompt": prompt, "prompt_template": template, "seed": seg["seed"],
+            "materials": manifest, "audio_locks": _audio_locks(plan, seg) if generate else [],
+            # 本段實際寫進 latent 的鎖音 token（不足一個完整 token 的 lock 只做母帶替換）
+            "latent_locks": [x["tokens"] for x in manifest["locks"] if "tokens" in x and x["tokens"][0] < x["tokens"][1]],
+        }
+        encode = segment_view(spec, "encode")
+        spec["encode_id"] = _digest(canonical_json({k: v for k, v in encode.items() if k not in ("type", "version", "view", "index")}))
+        # 鏡頭切換（overlap_in = 0）不需要前段 latent：取樣鏈在這裡重新起算，改前鏡不必重抽後鏡
+        spec["prev_sampling_id"] = prev_sampling if overlap_in else None
+        spec["sampling_id"] = _digest(canonical_json({
+            "prev": spec["prev_sampling_id"], "encode": spec["encode_id"],
+            "seed": seg["seed"] if seg["seed"] is not None else "global",
+            "carry_in": carry_in, "overlap_in": overlap_in}))
+        spec["prev_assembly_id"] = prev_assembly
+        spec["assembly_id"] = _digest(canonical_json({
+            "prev": prev_assembly, "sampling": spec["sampling_id"], "emit": spec["emit_interval"],
+            "seam_in": spec["seam_in"], "seam_out": spec["seam_out"], "carry_out": carry_out,
+            "is_last": spec["is_last"], "locks": spec["audio_locks"], "source_window": window}))
+        prev_sampling, prev_assembly = spec["sampling_id"], spec["assembly_id"]
+        specs.append(spec)
+    return specs
+
+
+VIEW_FIELDS = {
+    "encode": ("index", "length", "fps", "effective_grid", "prompt", "materials"),
+    "extend": ("index", "sampling_id", "prev_sampling_id", "expected_tokens", "length", "overlap_in",
+               "carry_in", "carry_in_id", "effective_grid", "carry_conflicts"),
+    "assemble": ("index", "assembly_id", "prev_assembly_id", "sampling_id", "start", "end", "length", "fps",
+                 "effective_grid", "emit_interval", "overlap_in", "overlap_out", "carry_in", "carry_out",
+                 "carry_out_id", "seam_in", "seam_out", "is_last", "audio_locks", "latent_locks", "source_window"),
+}
+
+
+def segment_view(spec, view):
+    """expansion 傳給各節點的精簡 MF_SEGMENT（只含該節點會讀、且影響結果的欄位）。"""
+    out = {"type": "MF_SEGMENT", "version": 2, "view": view}
+    for key in VIEW_FIELDS[view]:
+        out[key] = _encode_materials(spec["materials"]) if (view, key) == ("encode", "materials") else spec[key]
+    return out
+
+
+def require_segment(segment, views, label):
+    """消費端入口檢查：MF_SEGMENT v2、view 被接受、必要欄位齊全；full 一律接受。"""
+    if not isinstance(segment, dict) or segment.get("type") != "MF_SEGMENT":
+        raise ValueError(f"[{label}] segment 必須來自 Select Segment，請檢查接線。")
+    if segment.get("version") != 2:
+        raise TimelineError(label, "E_VIEW", reason="segment 是舊版格式，請重新執行 Edit Timeline")
+    view = segment.get("view")
+    if view != "full" and view not in views:
+        raise TimelineError(label, "E_VIEW", reason=f"不接受 {view} view")
+    if view != "full":
+        missing = [k for k in VIEW_FIELDS[view] if k not in segment]
+        if missing:
+            raise TimelineError(label, "E_VIEW", reason=f"缺少欄位 {missing}")
+    return segment
+
+
+def segment_spec(plan, index):
+    """MF_SEGMENT（full view）：Extend / Append / Load / Encode 共用的不可變衍生快照。"""
+    specs = plan["specs"]
+    if not 0 <= index < len(specs):
+        raise TimelineError("Select Segment", "E_SEGMENT_INDEX", count=len(specs), index=index)
+    return copy.deepcopy(specs[index])
 
 
 def cut_ranges_seconds(plan):

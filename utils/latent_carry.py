@@ -7,7 +7,7 @@ LATENT["samples"] 可能是一般 5D tensor，或 core 的 NestedTensor（H3 / L
 import torch
 
 from .timeline_messages import TimelineError, format_message
-from .timeline_plan import H3_GRID, h3_audio_tokens
+from .timeline_plan import H3_GRID, h3_audio_tokens, require_segment
 
 EXTEND_LABEL = "Extend Latent"
 
@@ -70,6 +70,36 @@ def carry_drift(latent, carry, marker, label):
         keep = keep.to(head.device)
         if keep.any():
             drift = max(drift, float((head - ref).abs()[keep].max()))
+    return drift
+
+
+def lock_drift(latent, segment, label):
+    """planned 鎖音（assemble view 的 latent_locks）→ 取樣後的 audio 鎖定 token 與 mf_lock.target 的最大差。
+
+    缺 marker、token 範圍不符、形狀錯、NaN / Inf 都是明確失敗——外部 sampler 拿掉 metadata 時
+    不能當成「通過」。沒有 planned 鎖音時回 None。
+    """
+    planned = segment["latent_locks"]
+    if not planned:
+        return None
+    lock = latent.get("mf_lock")
+    if not isinstance(lock, dict):
+        raise TimelineError(label, "E_LOCK_DRIFT", reason="latent 缺少 mf_lock")
+    if lock.get("tokens") != planned or len(lock.get("target", ())) != len(planned):
+        raise TimelineError(label, "E_LOCK_DRIFT", reason="mf_lock 的 token 範圍與計畫不符")
+    streams, nested = split_streams(latent["samples"])
+    if not nested or len(streams) != 2:
+        raise TimelineError(label, "E_LOCK_DRIFT", reason="latent 不是 H3 的 video + audio")
+    audio = streams[1]
+    drift = 0.0
+    for (k0, k1), target in zip(planned, lock["target"]):
+        if k1 > audio.shape[-1] or tuple(target.shape) != tuple(audio.shape[:-1]) + (k1 - k0,):
+            raise TimelineError(label, "E_LOCK_DRIFT", reason="鎖定區形狀或範圍不符")
+        got = audio[..., k0:k1].to(torch.float32)
+        ref = target.to(device=got.device, dtype=torch.float32)
+        if not (bool(torch.isfinite(got).all()) and bool(torch.isfinite(ref).all())):
+            raise TimelineError(label, "E_LOCK_DRIFT", reason="鎖定區含 NaN / Inf")
+        drift = max(drift, float((got - ref).abs().max()))
     return drift
 
 
@@ -165,17 +195,22 @@ def _source_tails(spec, state, previous_latent, target_samples, carry_audio):
 
 
 def _provenance(segment, state, previous_latent):
-    """一致性提示，不是來源證明：consistent / absent；任一欄不符直接 E_PROVENANCE。"""
+    """一致性提示，不是來源證明：consistent / absent；任一欄不符直接 E_PROVENANCE。
+
+    marker 是取樣前寫的，只能擋「plan 宣告的內容 / seed 不同」的 latent 混接。
+    """
     if state is not None:
-        names = ("execution_id", "producer_index", "carry_id")
-        got = (state["execution_id"], state["carry"]["producer_index"], state["carry"]["carry_id"])
+        names = ("sampling_id", "producer_index", "carry_id")
+        carry = state["carry"]
+        got = (carry.get("sampling_id"), carry["producer_index"], carry["carry_id"])
+        want = (segment["prev_sampling_id"], segment["index"] - 1, segment["carry_in_id"])
     else:
         marker = previous_latent.get("mf_carry")
         if marker is None:
             return "absent"
-        names = ("execution_id", "segment_index", "carry_spec_id")
+        names = ("sampling_id", "segment_index")
         got = tuple(marker.get(n) for n in names)
-    want = (segment["execution_id"], segment["index"] - 1, segment["carry_in_id"])
+        want = (segment["prev_sampling_id"], segment["index"] - 1)
     for name, a, b in zip(names, got, want):
         if a != b:
             raise TimelineError(EXTEND_LABEL, "E_PROVENANCE", field=name)
@@ -185,8 +220,7 @@ def _provenance(segment, state, previous_latent):
 def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=None, previous_latent=None,
                   video_taper_tokens=2, audio_taper_tokens=2, experimental_causal=False, on_conflict="error"):
     """MF_ExtendLatent 的引擎 → (新 LATENT dict, report dict)。不修改任何輸入。"""
-    if not isinstance(segment, dict) or segment.get("type") != "MF_SEGMENT" or segment.get("version") != 1:
-        _fail("segment 必須來自 Select Segment。")
+    require_segment(segment, ("extend",), EXTEND_LABEL)
     samples = target_latent["samples"]
     streams, nested = split_streams(samples)
     video = streams[0]
@@ -205,6 +239,12 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
         raise TimelineError(EXTEND_LABEL, "E_AUDIO_CARRY")
     if state is not None and previous_latent is not None:
         _fail("state 與 previous_latent 只能擇一，請移除其中一條連線。")
+    requested_audio = carry_audio
+    # 鎖音的原聲 latent 與 carry 的生成 tail 落在同一批 token 會互相矛盾：原聲優先
+    lock_skip = carry_audio and segment["carry_in"] is not None and bool(segment["carry_conflicts"])
+    if lock_skip:
+        print(format_message(EXTEND_LABEL, "W_LOCK_CARRY", segment=segment["index"] + 1))
+        carry_audio = False
 
     spec = segment["carry_in"]
     out = dict(target_latent)
@@ -253,13 +293,15 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
         out["samples"] = type(samples)(new_streams) if nested else new_streams[0]
         out["noise_mask"] = type(samples)(new_masks) if nested else new_masks[0]
 
-    out["mf_carry"] = {"execution_id": segment["execution_id"], "segment_index": segment["index"],
-                       "carry_spec_id": segment["carry_out_id"], "streams_carried": list(carried),
-                       "carry_dtypes": dtypes}
+    out["mf_carry"] = {"sampling_id": segment["sampling_id"], "segment_index": segment["index"],
+                       "streams_carried": list(carried), "carry_dtypes": dtypes, "mask": mask,
+                       "taper": {"video": video_taper_tokens, "audio": audio_taper_tokens} if mask == "taper" else None}
     changed = ("samples", "noise_mask", "mf_carry") if carried else ("mf_carry",)
+    audio_reason = ("lock_conflict" if lock_skip else "no_carry" if spec is None
+                    else None if requested_audio else "disabled")
     report = {
-        "version": 1,
-        "plan_id": segment["plan_id"], "execution_id": segment["execution_id"],
+        "version": 2,
+        "sampling_id": segment["sampling_id"],
         "session": state["session"] if state is not None else None,
         "segment_index": segment["index"],
         "carry_source": source, "provenance": provenance,
@@ -273,6 +315,8 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
                      "added": [key for key in changed if key not in target_latent]},
         "experimental": bool(carried) and grid != H3_GRID,
         "conditioning_check": "unavailable",
-        "warnings": ["W_PROVENANCE"] if provenance == "absent" else [],
+        "effective": [{"feature": "audio_carry", "requested": requested_audio, "applied": "audio" in carried,
+                       "reason": audio_reason}],
+        "warnings": (["W_PROVENANCE"] if provenance == "absent" else []) + (["W_LOCK_CARRY"] if lock_skip else []),
     }
     return out, report

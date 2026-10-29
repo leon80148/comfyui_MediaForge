@@ -29,6 +29,18 @@ MESSAGES = {
     "W_AUDIO_PAD": "已在接縫或結尾補入 {samples} 個靜音樣本。",
     "W_PROXY": "預覽建立失敗；時間軸仍可編輯。請重試。",
     "W_SOURCE_TIME_UNKNOWN": "無法取得來源的起始時間，暫以 0 計算；預覽與來源時間可能略有偏移。",
+    "E_MATERIAL": "素材「{name}」無法使用：{reason}。請確認檔案在 input/ 內且格式正確。",
+    "E_REF": "參考 {ref} 無效：{reason}。請在時間軸上調整。",
+    "E_ANCHOR": "錨定 {anchor} 無效：{reason}。請在時間軸上調整。",
+    "E_ANCHOR_OVERLAP": "{stream} 錨定 {first} 與 {second} 的時間重疊。請把它們錯開。",
+    "E_REF_LIMIT": "第 {segment} 段的 {kind} 有 {count} 個，超過 H3 上限 {limit}。請縮小參考範圍或移到其他段。",
+    "E_REF_SHORT": "第 {segment} 段的參考影片「{name}」只有 {frames} 幀（至少 5 幀）。請延長參考或移出本段。",
+    "E_PROMPT_REF": "第 {segment} 段 prompt 的素材引用無效：{reason}。",
+    "E_H3_NODES": "找不到可用的 core MiniMax H3 節點（{nodes}）。請更新 ComfyUI。",
+    "E_MEDIA_MISSING": "第 {segment} 段沒有第 {ordinal} 個 {kind}（本段共 {count} 個）。請調整 ordinal。",
+    "E_LOCK_DRIFT": "鎖定原音檢查失敗（{reason}）。請確認 sampler 保留 noise_mask 與 latent 的 mf_lock，或改用完整 schedule。",
+    "E_VIEW": "segment 格式不符：{reason}。",
+    "W_LOCK_CARRY": "第 {segment} 段的鎖定原音落在續接區，略過本段音訊續接（video 續接照常）。",
 }
 
 

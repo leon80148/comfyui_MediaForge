@@ -15,7 +15,7 @@ from fractions import Fraction
 from .cache_key import path_fingerprint
 from .ffmpeg import resolve_ffmpeg_cmd
 
-DEMUXER_WHITELIST = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpegts,mpeg"
+DEMUXER_WHITELIST = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpegts,mpeg,wav,mp3,flac,ogg,aac"
 FFMPEG_INPUT_GUARD = ["-protocol_whitelist", "file", "-format_whitelist", DEMUXER_WHITELIST]
 PROBE_TIMEOUT_SEC = 10
 MAX_NAME_BYTES = 255
@@ -96,33 +96,46 @@ def _timing(video):
 def probe_command(path):
     return resolve_ffmpeg_cmd(
         ["ffprobe", "-v", "error"] + ffmpeg_input_args(path)
-        + ["-show_entries", "stream=codec_type,codec_name,avg_frame_rate,r_frame_rate,nb_frames,start_time,width,height,"
-           "sample_aspect_ratio,sample_rate,channels:stream_side_data=rotation:format=duration,start_time", "-of", "json"]
+        + ["-show_entries", "stream=codec_type,codec_name,avg_frame_rate,r_frame_rate,nb_frames,start_time,duration,width,height,"
+           "sample_aspect_ratio,sample_rate,channels:stream_disposition=attached_pic:stream_side_data=rotation"
+           ":format=duration,start_time", "-of", "json"]
     )
 
 
-def probe_source(path):
-    """ffprobe（帶白名單與 timeout）→ 時間軸需要的來源 metadata；欄位未知時為 None。"""
+def run_probe(path):
+    """ffprobe（帶白名單與 timeout）→ 原始 JSON bytes。"""
     try:
         proc = subprocess.run(probe_command(path), capture_output=True, timeout=PROBE_TIMEOUT_SEC, check=False)
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"[Timeline] ffprobe 逾時（>{PROBE_TIMEOUT_SEC}s）：{os.path.basename(path)}") from e
     if proc.returncode != 0:
         tail = "\n".join(proc.stderr.decode("utf-8", errors="replace").strip().splitlines()[-5:])
-        raise RuntimeError(f"[Timeline] 無法讀取來源影片（格式不在允許清單或檔案損毀）：\n{tail}")
-    info = parse_probe_output(proc.stdout)
+        raise RuntimeError(f"[Timeline] 無法讀取 {os.path.basename(path)}（格式不在允許清單或檔案損毀）：\n{tail}")
+    return proc.stdout
+
+
+def probe_source(path):
+    """時間軸需要的來源 metadata；欄位未知時為 None。"""
+    info = parse_probe_output(run_probe(path))
     if info is None:
         raise RuntimeError(f"[Timeline] 來源沒有影像串流：{os.path.basename(path)}")
     return info
 
 
+def _video_streams(streams):
+    # 封面圖（attached_pic）也是 video stream；當成畫面來源會得到一張靜止圖
+    videos = [s for s in streams if s.get("codec_type") == "video"]
+    return [(i, s) for i, s in enumerate(videos) if not (s.get("disposition") or {}).get("attached_pic")]
+
+
 def parse_probe_output(stdout):
-    """ffprobe JSON → metadata dict；沒有 video stream 回 None（route 與節點共用）。"""
+    """ffprobe JSON → metadata dict；沒有（非封面圖的）video stream 回 None（route 與節點共用）。"""
     info = json.loads(stdout.decode("utf-8", errors="replace") or "{}")
     streams = info.get("streams", [])
-    video = next((s for s in streams if s.get("codec_type") == "video"), None)
-    if video is None:
+    candidates = _video_streams(streams)
+    if not candidates:
         return None
+    video_ordinal, video = candidates[0]
     nb_frames = video.get("nb_frames")
     rotation = next((int(float(d["rotation"])) for d in video.get("side_data_list", []) if "rotation" in d), 0) % 360
     width, height = int(video.get("width") or 0), int(video.get("height") or 0)
@@ -133,6 +146,9 @@ def parse_probe_output(stdout):
         "frame_count": int(nb_frames) if str(nb_frames or "").isdigit() else None,
         "source_start_us": _micros(video.get("start_time")),
         "duration_us": _micros(info.get("format", {}).get("duration")),
+        "video_duration_us": _micros(video.get("duration")),
+        # 第幾條 video stream（-map 0:v:N 用）；跳過封面圖後不一定是 0
+        "video_ordinal": video_ordinal,
         # FFmpeg 的 -ss 以檔案起點（format start_time）為 0，時間軸卻錨在第一個 video 幀
         "format_start_us": _micros(info.get("format", {}).get("start_time")),
         "width": width,
@@ -145,6 +161,24 @@ def parse_probe_output(stdout):
         "has_audio": audio is not None,
         "audio_sample_rate": int(audio["sample_rate"]) if audio and audio.get("sample_rate") else None,
         "audio_channels": int(audio["channels"]) if audio and audio.get("channels") else None,
+        "audio_start_us": _micros(audio.get("start_time")) if audio else None,
+    }
+
+
+def parse_audio_probe(stdout):
+    """純音訊素材：第一條 audio stream（忽略封面圖等 video stream）；沒有 audio 回 None。"""
+    info = json.loads(stdout.decode("utf-8", errors="replace") or "{}")
+    audio = next((s for s in info.get("streams", []) if s.get("codec_type") == "audio"), None)
+    if audio is None:
+        return None
+    fmt = info.get("format", {})
+    return {
+        "audio_sample_rate": int(audio["sample_rate"]) if audio.get("sample_rate") else None,
+        "audio_channels": int(audio["channels"]) if audio.get("channels") else None,
+        "audio_start_us": _micros(audio.get("start_time")),
+        "audio_duration_us": _micros(audio.get("duration")),
+        "duration_us": _micros(fmt.get("duration")),
+        "format_start_us": _micros(fmt.get("start_time")),
     }
 
 

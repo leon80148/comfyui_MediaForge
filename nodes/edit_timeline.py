@@ -6,6 +6,7 @@ API 使用者也可以直接送字串。每次執行都在這裡重新嚴格驗�
 import json
 
 from ..utils.cache_key import path_fingerprint
+from ..utils.timeline_media import describe_material
 from ..utils.timeline_messages import format_message
 from ..utils.timeline_plan import FPS_PRESETS, GRIDS, MODES, compile_plan, cut_ranges_seconds, parse_timeline_data
 from ..utils.timeline_source import describe_source, resolve_timeline_source
@@ -47,7 +48,9 @@ class MF_EditTimeline:
     def edit(self, video, fps, grid, mode, timeline_data):
         data = parse_timeline_data(timeline_data)
         source = None if video == NO_SOURCE else describe_source(video)
-        plan = compile_plan(data, mode, fps, grid, source)
+        rate = FPS_PRESETS.get(fps, (24, 1))
+        snapshots = {m["id"]: describe_material(m, rate) for m in data["materials"]}
+        plan = compile_plan(data, mode, fps, grid, source, snapshots)
         if source is not None and source["source_start_us"] is None:
             print(format_message("Edit Timeline", "W_SOURCE_TIME_UNKNOWN"))
         return (plan, cut_ranges_seconds(plan), json.dumps(plan, ensure_ascii=False),
@@ -55,14 +58,25 @@ class MF_EditTimeline:
 
     @classmethod
     def IS_CHANGED(s, **kwargs):
-        video = kwargs.get("video", NO_SOURCE)
-        if video == NO_SOURCE:
-            return ""
+        text = kwargs.get("timeline_data")
+        if text is None or kwargs.get("video") is None:
+            # 接成 linked 輸入時這裡看不到內容（C1）：每次重跑、重建素材快照
+            return float("nan")
+        refs = [kwargs.get("video", NO_SOURCE)]
         try:
-            return path_fingerprint(resolve_timeline_source(video))
-        except (ValueError, OSError):
-            # 非法 / 找不到的來源交給 edit() 報清楚的錯；這裡只需要穩定值
-            return f"invalid:{video}"
+            refs += [m["ref"] for m in json.loads(text).get("materials", []) if isinstance(m, dict)]
+        except (ValueError, AttributeError, TypeError):
+            pass  # 壞掉的 JSON 交給 edit() 報清楚的錯
+        out = []
+        for ref in refs:
+            if ref == NO_SOURCE or not isinstance(ref, str):
+                continue
+            try:
+                out.append(path_fingerprint(resolve_timeline_source(ref)))
+            except (ValueError, OSError):
+                # 非法 / 找不到的路徑交給 edit() 報清楚的錯；這裡只需要穩定值
+                out.append(f"invalid:{ref}")
+        return "|".join(out)
 
 
 NODE_CLASS_MAPPINGS = {"MF_EditTimeline": MF_EditTimeline}

@@ -9,7 +9,7 @@ import torch
 
 from ..utils.timeline_media import decode_audio, decode_video, scale_filter
 from ..utils.timeline_messages import TimelineError
-from ..utils.timeline_plan import sample_index
+from ..utils.timeline_plan import require_segment, sample_index
 from ..utils.timeline_source import opaque_fingerprint, probe_source, resolve_timeline_source
 from ..utils.video_io import MAX_DECODE_BYTES
 
@@ -42,7 +42,7 @@ class MF_LoadSegmentFrames:
     CATEGORY = "MediaForge/Video"
 
     def load(self, segment, resize, width, height, shortfall):
-        window = segment.get("source_window") if isinstance(segment, dict) else None
+        window = require_segment(segment, (), NODE_LABEL)["source_window"]
         if window is None:
             raise ValueError(f"[{NODE_LABEL}] 本段沒有來源影片；請在 Edit Timeline 選擇 video。")
         path = resolve_timeline_source(window["source_ref"])
@@ -63,7 +63,7 @@ class MF_LoadSegmentFrames:
         num, den = fps
         offset = Fraction((info["source_start_us"] or 0) - (info["format_start_us"] or 0), 1_000_000)
         seek = offset + Fraction(max(first, 0) * den, num)
-        frames = decode_video(path, seek, length - head, fps, size, scale, NODE_LABEL) if length > head else torch.zeros(0, size[1], size[0], 3)
+        frames = decode_video(path, seek, length - head, fps, size, scale, NODE_LABEL, info["video_ordinal"]) if length > head else torch.zeros(0, size[1], size[0], 3)
         missing = length - head - frames.shape[0]
         if head or missing:
             if shortfall == "error" or (shortfall == "hold_last" and frames.shape[0] == 0):

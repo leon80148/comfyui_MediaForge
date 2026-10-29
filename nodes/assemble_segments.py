@@ -31,6 +31,10 @@ class MF_AssembleSegments:
             },
             "optional": {
                 "audio": ("AUDIO", {"tooltip": "整條取代最終音軌；長度自動補靜音 / 截斷到影片長度。"}),
+                "lock_audio": (["original", "generated"], {
+                    "default": "original",
+                    "tooltip": "original：鎖定原音的區間在母帶換回原聲（48 kHz）；generated：全部用生成音軌。沒有鎖音時無作用。",
+                }),
             },
         }
 
@@ -40,9 +44,8 @@ class MF_AssembleSegments:
     CATEGORY = "MediaForge/Video"
     OUTPUT_NODE = True
 
-    def assemble(self, state, filename_prefix, codec, crf, preset, audio=None):
-        if not isinstance(state, dict) or state.get("type") != "MF_SEGMENT_STATE":
-            raise ValueError(f"[{LABEL}] state 必須來自 {segment_spill.APPEND_LABEL}，請連接最後一段的 state。")
+    def assemble(self, state, filename_prefix, codec, crf, preset, audio=None, lock_audio="original"):
+        segment_spill.check_state(state, LABEL)
         if not ensure_ffmpeg():
             raise RuntimeError(f"[{LABEL}] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
         codec_id, pix_fmt = get_available_codecs()[codec]
@@ -53,7 +56,7 @@ class MF_AssembleSegments:
             ext, encoder_args = ".mp4", build_encoder_args(codec_id, crf=crf, preset=preset)
         override = None if audio is None else segment_spill.audio_input(audio, LABEL)
         path, report = segment_spill.assemble(state, filename_prefix, ext, pix_fmt, encoder_args, override,
-                                              check_interrupt=_check_interrupt)
+                                              check_interrupt=_check_interrupt, lock_audio=lock_audio)
         report["codec"] = codec_id
         print(f"[{LABEL}] 輸出成功: {path}")
         entry = output_path_to_ui_entry(path)

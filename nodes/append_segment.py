@@ -6,11 +6,12 @@ MF_SEGMENT_STATE 是新 dict，輸入的 state 不會被修改。
 """
 from ..utils import segment_spill
 from ..utils.ffmpeg import ensure_ffmpeg
-from ..utils.latent_carry import carry_drift, extract_carry_tail, latent_space_id, split_streams
+from ..utils.latent_carry import carry_drift, extract_carry_tail, latent_space_id, lock_drift, split_streams
 from ..utils.timeline_messages import TimelineError, format_message
+from ..utils.timeline_plan import require_segment
 
 LABEL = segment_spill.APPEND_LABEL
-# 正確保留時差在 1e-6 級（float32 累積誤差）；兩段式取樣把雜訊留在續接區時是數十
+# 正確保留時差在 1e-6 級（float32 累積誤差）；兩段式取樣把雜訊留在續接區時是數十。鎖音同一標準
 CARRY_DRIFT_ATOL = 1e-3
 
 
@@ -25,8 +26,7 @@ def _provenance(latent, segment):
     if marker is None:
         print(format_message(LABEL, "W_PROVENANCE"))
         return "absent", None
-    expected = {"execution_id": segment["execution_id"], "segment_index": segment["index"],
-                "carry_spec_id": segment["carry_out_id"]}
+    expected = {"sampling_id": segment["sampling_id"], "segment_index": segment["index"]}
     bad = [k for k, v in expected.items() if not isinstance(marker, dict) or marker.get(k) != v]
     if bad:
         raise TimelineError(LABEL, "E_PROVENANCE", field=", ".join(bad))
@@ -106,8 +106,7 @@ class MF_AppendSegment:
     CATEGORY = "MediaForge/Video"
 
     def append(self, segment, state=None, latent=None, vae=None, audio_vae=None, frames=None, audio=None):
-        if not isinstance(segment, dict) or segment.get("type") != "MF_SEGMENT":
-            raise ValueError(f"[{LABEL}] segment 必須來自 Select Segment，請連接它的 segment 輸出。")
+        require_segment(segment, ("assemble",), LABEL)
         if frames is not None:
             if vae is not None or audio_vae is not None:
                 raise ValueError(f"[{LABEL}] 已接 frames 時畫面不經 VAE；請拔掉 vae / audio_vae（latent 可保留作續接來源）。")
@@ -126,6 +125,9 @@ class MF_AppendSegment:
             drift = carry_drift(latent, state["carry"], marker, LABEL)
             if drift is not None and drift > CARRY_DRIFT_ATOL:
                 raise TimelineError(LABEL, "E_CARRY_DRIFT", drift=f"{drift:.3g}")
+        locked = None if latent is None else lock_drift(latent, segment, LABEL)
+        if locked is not None and locked > CARRY_DRIFT_ATOL:
+            raise TimelineError(LABEL, "E_LOCK_DRIFT", reason=f"取樣後最大差 {locked:.3g}")
         images = _frames_input(frames, segment) if frames is not None else _decode_video(vae, latent, segment)
         wave = None
         if audio is not None:
@@ -136,11 +138,12 @@ class MF_AppendSegment:
         if segment["carry_out"] is not None:
             samples = latent["samples"]
             carry = {**extract_carry_tail(samples, segment), "producer_index": segment["index"],
-                     "carry_id": segment["carry_out_id"], "latent_space_id": latent_space_id(samples)}
+                     "carry_id": segment["carry_out_id"], "sampling_id": segment["sampling_id"],
+                     "latent_space_id": latent_space_id(samples)}
         new_state = segment_spill.append_segment(
             state, segment, images, wave,
             curve=_audio_curve(segment["seam_in"], audio_vae is not None, provenance, marker),
-            carry=carry, check_interrupt=_check_interrupt)
+            carry=carry, check_interrupt=_check_interrupt, lock_drift=locked)
         if frames is None:
             import comfy.model_management
             comfy.model_management.soft_empty_cache()
