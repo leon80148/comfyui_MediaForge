@@ -3,9 +3,9 @@
 // timeline_data (a plain STRING widget) stays the only persisted carrier: the editor
 // reads and writes it, Python re-validates it on every run, and when the editor
 // cannot start the STRING widget is simply left visible as a JSON text box.
-// View state (zoom / selection / playhead) is session memory keyed by graph + node id: it survives the
-// graph reload behind undo / redo, but it is never written into the workflow, so selecting or seeking is
-// not an edit (no undo step, no "modified" mark) and never reaches the prompt.
+// View state (zoom / selection / playhead) lives only in the editor and is handed to the editor that replaces
+// it in a graph reload (undo / redo); it is never written into the workflow, so selecting or seeking is not
+// an edit (no undo step, no "modified" mark) and never reaches the prompt.
 //
 // Edits follow one path: drags only update a draft (repainted on rAF) and commit on
 // pointerup inside one beforeChange/afterChange pair, so one drag is one undo step.
@@ -28,9 +28,8 @@ import { S } from "./timeline_strings.js";
 
 const NODE_TYPE = "MF_EditTimeline";
 const DEFAULT_VIEW = { active: 0, zoom: null, playhead: 0, sel: null };
-const VIEWS = new Map();
-const MAX_VIEWS = 256;
-const ROOTS = new Map();  // view key → { root, editor } last shown for that node
+const OWNERS = new WeakMap();      // editor root → its editor
+const HANDOVER = new Map();        // node id → { graphId, view } of an editor destroyed during the current task
 const UPLOAD_SUBFOLDER = "mediaforge_timeline";
 const NO_SOURCE = "(none)";
 const EDITOR_HEIGHT = 680;
@@ -60,13 +59,6 @@ function chainCallback(object, property, callback) {
     } else {
         object[property] = callback;
     }
-}
-
-// null until the node belongs to a graph with its final id: LGraphNode.clone() configures before it is added
-function viewKey(node) {
-    if (!node.graph || !(node.id >= 0)) return null;
-    const workflow = app.extensionManager?.workflow?.activeWorkflow;
-    return `${workflow?.instanceId ?? workflow?.path ?? ""}:${node.graph.id}:${node.id}`;
 }
 
 function findWidget(node, name) {
@@ -261,6 +253,7 @@ class TimelineEditor {
         this.destroyed = false;
         this.view = { ...DEFAULT_VIEW };
         this.build();
+        OWNERS.set(this.root, this);
         this.resizeObserver = new ResizeObserver(() => this.scheduleTrack());
         this.widget = node.addDOMWidget("timeline_editor", "mf_timeline_editor", this.root, {
             serialize: false,
@@ -421,31 +414,24 @@ class TimelineEditor {
         return p.segment != null ? { type: "segment", index: p.segment } : null;
     }
 
-    // Nodes 2.0 keeps a node's widget component across the graph reload behind undo / redo, so the new
-    // editor's root is never mounted and the destroyed editor's root stays on screen: put ours in its place.
+    // Nodes 2.0 keeps the widget component of a node id across a graph reload (undo / redo, switching workflow),
+    // so the new editor's root is never mounted and the destroyed editor's root stays on screen. Only one graph
+    // is shown, so a destroyed editor's root still on screen for this node id is that stale mount: take its
+    // place. A live editor is never displaced (a clone configured before it is added has the source's id).
     adoptMount() {
-        const key = viewKey(this.node);
-        if (!key) return;
-        const old = ROOTS.get(key);
-        // only take over from an editor the reload destroyed, never from a live one
-        if (old && old.editor !== this && old.editor.destroyed && old.root.isConnected && !this.root.isConnected) {
-            old.root.replaceWith(this.root);
+        if (this.root.isConnected) return;
+        for (const root of document.querySelectorAll(".mf-tl")) {
+            const owner = OWNERS.get(root);
+            if (owner && owner !== this && owner.destroyed && owner.node.id === this.node.id) {
+                root.replaceWith(this.root);
+                return;
+            }
         }
-        ROOTS.set(key, { root: this.root, editor: this });
-    }
-
-    saveView() {
-        const key = viewKey(this.node);
-        if (!key) return;
-        VIEWS.delete(key);  // re-insert so the map stays in least-recently-saved order
-        VIEWS.set(key, { ...this.view });
-        if (VIEWS.size > MAX_VIEWS) VIEWS.delete(VIEWS.keys().next().value);
     }
 
     select(sel) {
         this.view.sel = sel;
         if (sel?.type === "segment") this.view.active = sel.index;
-        this.saveView();
     }
 
     // keyboard focus selects (Tab through bars and segments); pointer selection already happened in onPointerDown
@@ -1286,7 +1272,6 @@ class TimelineEditor {
 
     zoom(factor) {
         this.view.zoom = factor === null ? null : Math.min(64, Math.max(1, (this.view.zoom ?? 1) * factor));
-        this.saveView();
         this.renderTrack();
     }
 
@@ -1644,7 +1629,6 @@ class TimelineEditor {
     seek(frame) {
         const { fps } = this.settings();
         this.view.playhead = Math.max(0, frame);
-        this.saveView();
         if (this.video.getAttribute("src")) {
             this.video.currentTime = Math.max(0, ((this.view.playhead - this.data.source.origin_frame) * fps[1]) / fps[0]);
         }
@@ -1783,10 +1767,12 @@ class TimelineEditor {
             video.removeAttribute("src");
             video.load();
         }
-        // a reload re-creates the node synchronously and adoptMount() takes over the entry; a real removal
-        // must not keep the detached editor DOM alive
-        const key = viewKey(this.node);
-        if (key) setTimeout(() => ROOTS.get(key)?.editor === this && ROOTS.delete(key), 0);
+        // graph.configure() clears the old nodes (graph id still the old one) and builds the new ones in the same
+        // task; only a reload of the same graph gets the view back
+        const id = this.node.id;
+        const entry = { graphId: this.node.graph?.id, view: { ...this.view } };
+        HANDOVER.set(id, entry);
+        setTimeout(() => HANDOVER.get(id) === entry && HANDOVER.delete(id), 0);
     }
 }
 
@@ -1820,14 +1806,11 @@ app.registerExtension({
                 fallback(this, e);
             }
         });
-        // a node added from the menu / paste gets its id here: register its root for a later reload
-        chainCallback(nodeType.prototype, "onAdded", function () {
-            this.mfTimeline?.adoptMount();
-        });
         chainCallback(nodeType.prototype, "onConfigure", function () {
             if (!this.mfTimeline) return;
             try {
-                this.mfTimeline.view = { ...DEFAULT_VIEW, ...(VIEWS.get(viewKey(this)) ?? {}) };
+                const handover = HANDOVER.get(this.id);
+                this.mfTimeline.view = { ...DEFAULT_VIEW, ...(handover && handover.graphId === this.graph?.id ? handover.view : {}) };
                 this.mfTimeline.adoptMount();
                 this.mfTimeline.hydrate();
                 this.mfTimeline.loadSource();
