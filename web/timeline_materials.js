@@ -413,14 +413,19 @@ export function segmentManifest(segments, index, refs, anchors, snapshots, h3, c
 }
 
 // samples actually sent to the H3 audio VAE (Python's _h3_samples): Q32k(frames) cut down to whole tokens
+// Python's audio_sample_count: Q(end) − Q(start) on global endpoints (§4.3), cut down to a multiple
+export function audioSampleCount(dstStart, frames, rate, fps, multiple = 1) {
+    const [num, den] = fps.map(BigInt);
+    const q = (f) => (2n * BigInt(f) * BigInt(rate) * den + num) / (2n * num);
+    const count = Number(q(dstStart + frames) - q(dstStart));
+    return count - (count % multiple);
+}
+
 function h3Samples(manifest) {
-    const samples = (frames) => {
-        const count = Math.floor((2 * frames * 32000 + 24) / 48);
-        return count - (count % 800);
-    };
-    for (const v of manifest.videos) if (v.soundtrack) v.soundtrack_samples = samples(v.effective_frames);
-    for (const a of manifest.audios) a.samples = samples(a.frames);
-    for (const g of manifest.guides) if (g.soundtrack) g.samples = samples(g.frames);
+    const samples = (start, frames) => audioSampleCount(start, frames, 32000, [24, 1], 800);
+    for (const v of manifest.videos) if (v.soundtrack) v.soundtrack_samples = samples(v.source_start, v.effective_frames);
+    for (const a of manifest.audios) a.samples = samples(a.source_start, a.frames);
+    for (const g of manifest.guides) if (g.soundtrack) g.samples = samples(g.frame_idx, g.frames);
 }
 
 function h3Tags(manifest, index) {

@@ -297,19 +297,29 @@ def segment_manifest(segments, index, refs, anchors, snapshots, h3, carry_in=Non
     return manifest
 
 
+def audio_sample_count(dst_start, frames, rate, fps, multiple=1):
+    """[dst_start, dst_start + frames) 的音訊 sample 數 = 全域端點差 Q(end) − Q(start)（§4.3），再往下裁到 multiple 的整數倍。
+
+    素材切片與 manifest 共用這一個算式：參考影片 / 音訊以素材軸（source_start）為端點，帶聲 guide 以段內位置
+    （frame_idx）為端點。
+    """
+    num, den = fps
+    count = (2 * (dst_start + frames) * rate * den + num) // (2 * num) - (2 * dst_start * rate * den + num) // (2 * num)
+    return count - count % multiple
+
+
 def _h3_samples(manifest):
-    """實際送進 audio VAE 的 samples（與 h3_adapter 的 load_audio_slice 同一算式）：Q32k(幀數) 向下裁到整數 token。"""
-    def samples(frames):
-        count = (2 * frames * H3_AUDIO_RATE + 24) // 48
-        return count - count % H3_SAMPLES_PER_TOKEN
+    """實際送進 H3 audio VAE 的 samples（h3_adapter 解碼時呼叫同一個 audio_sample_count）。"""
+    def samples(start, frames):
+        return audio_sample_count(start, frames, H3_AUDIO_RATE, (24, 1), H3_SAMPLES_PER_TOKEN)
     for v in manifest["videos"]:
         if v["soundtrack"]:
-            v["soundtrack_samples"] = samples(v["effective_frames"])
+            v["soundtrack_samples"] = samples(v["source_start"], v["effective_frames"])
     for item in manifest["audios"]:
-        item["samples"] = samples(item["frames"])
+        item["samples"] = samples(item["source_start"], item["frames"])
     for g in manifest["guides"]:
         if g["soundtrack"]:
-            g["samples"] = samples(g["frames"])
+            g["samples"] = samples(g["frame_idx"], g["frames"])
 
 
 def _h3_tags(manifest, index):
