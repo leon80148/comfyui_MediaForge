@@ -185,7 +185,7 @@ Materials (`generate` mode):
 
 General:
 
-- `timeline_data` JSON is the only state that is saved and queued; the editor's view state (zoom, selection, playhead) is kept for the session (it survives undo / redo) but is not written into the workflow, so selecting or moving the playhead is not an undo step and never reaches the prompt. Material probe results live only in the editor.
+- `timeline_data` JSON is the only state that is saved and queued; the editor's view state (zoom, selection, playhead) lives only in the editor and is not written into the workflow, so selecting or moving the playhead is not an undo step and never reaches the prompt. When the same graph is reloaded (undo / redo, or a workflow with the same graph id, such as the same file opened again) the view carries over; any other graph starts from the default view. Material probe results live only in the editor.
 - If the editor fails to load, the raw JSON widget is shown and stays editable.
 - UI text is Traditional Chinese; node, widget and enum names stay English.
 
