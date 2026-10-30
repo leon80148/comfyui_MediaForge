@@ -185,7 +185,7 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。
 
 一般：
 
-- `timeline_data` JSON 是唯一會被存檔與送出執行的狀態；編輯器的檢視狀態（縮放、選取、播放頭）存在節點 properties，不會進入 prompt。素材讀取結果只存在編輯器裡。
+- `timeline_data` JSON 是唯一會被存檔與送出執行的狀態；編輯器的檢視狀態（縮放、選取、播放頭）只保留在本次 session（undo / redo 後仍在），不寫進 workflow，所以選取或移動播放頭不算一個 undo 步驟，也不會進入 prompt。素材讀取結果只存在編輯器裡。
 - 編輯器載入失敗時會改顯示原始 JSON widget，仍可直接編輯。
 - 介面文字為繁體中文；節點名稱、widget 名稱與 enum 值保留英文。
 
@@ -228,7 +228,7 @@ Sample Segments 以常數把每段規格傳進該段的節點組，ComfyUI 的�
 | 不用模型（frames 路徑） | 可用 | Load Segment Frames → Append 的 `frames` / `audio` → Assemble，搭配 Start / End Loop，在 core 四種快取模式（classic / lru / none / ram_pressure 預設）都通過 |
 | MiniMax H3 — Sample Segments（單節點） | **支援** | 832×480 與 320×192、turbo 4-step。與 loop 路徑同 seed / sampler / sigmas → 取樣後 latent 完全相同（最大差 0），同樣 260 幀 / 346,667 samples。core 收到的 `<Picture N>` / `<Video N>` / `<Audio N>` prompt、圖片順序與裁切後的參考幀數與時間軸一致；keyframe / guide 的 frame index 正確。鎖定的音訊 token 取樣後與原聲編碼差 ≤ 2.4e-7；`lock_audio = original` 的母帶在鎖音區間與原聲 PCM 逐 sample 相同；解碼後生成音訊與原聲的包絡相關 0.997–1.000。832×480 從 2 段到 6 段：觀測峰值 RSS 只多 0.15 GiB（一段 RGB 是 0.48 GiB）。改一段 seed 只重跑該段與下一段；加段只取樣新的一段 |
 
-2026-10-30 驗證（RTX 5090、ComfyUI 0.42.5、H3 fl2va fp8 + turbo 4-step LoRA）：上表 Sample Segments 一列是以真的 H3 模型量測。此外，Encode H3 Segment 有針對 core `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` 類別的契約測試；Sample Segments 的展開與快取有在真 core executor 上的測試（H3 模型節點用替身：每一種失效情況、LRU / RAM-pressure 模式的實際逐出、編碼 / 取樣 / 附加時中斷）。loop 路徑的 Encode H3 Segment 與它共用程式碼，但沒有單獨在 GPU 上端到端跑過。
+2026-10-30 驗證（RTX 5090、ComfyUI 0.42.5、H3 fl2va fp8 + turbo 4-step LoRA）：上表 Sample Segments 一列是以真的 H3 模型量測。此外，Encode H3 Segment 有針對 core `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` 類別的契約測試；Sample Segments 的展開與快取有在真 core executor 上的測試（H3 模型節點用替身：每一種失效情況、LRU / RAM-pressure 模式的實際逐出、編碼 / 取樣 / 附加時中斷）。loop 路徑（core Start / End Loop 內的 Select → Encode H3 Segment → Extend → sampler → Append）也用同一份素材時間軸（2 張圖、3 支參考影片、一個關鍵幀與一個錨定片段）在 GPU 實跑：取樣後的 latent 與 Sample Segments 完全相同（最大差 0），同樣 192 幀 / 256,000 samples。
 
 拒絕執行（直接報錯停止）：VACE reference 額外 token、未裁除的 guide、batch > 1、layout 與計畫不符的 latent、非 H3 latent 的音訊續接、Sample Segments / Encode H3 Segment 用在 `generate` + `grid = h3_5+17n` + 24 fps 以外的計畫。
 
@@ -248,6 +248,7 @@ Sample Segments 以常數把每段規格傳進該段的節點組，ComfyUI 的�
 - Sample Segments 每段留在 core 快取的主要是 conditioning —— 估計純文字 prompt ≈ 5 MB、每張參考圖約 +10 MB（`ref_image_size = match`）、每秒參考影片約 +20 MB；9 張圖加 3 支 15 秒影片 ≈ 1 GB —— 再加幾個 latent（1344×768 × 107 幀約各 12 MB）。20 段純文字 ≈ 1.2 GB；素材多時可達數 GB。以上是估算，不是 GPU 實測。
 - 要壓低：用 `--cache-lru N` 啟動 ComfyUI、降低 `ref_video_short_edge`、維持 `ref_image_size = match`。不要指望預設的 RAM-pressure 快取釋放 —— 它的掃描可能看不進 H3 的巢狀 latent，會低估用量。
 - 總記憶體仍受段長、素材、crossfade、模型工作集與 core 快取影響。這能減少解碼畫面佔用的記憶體，但不保證總記憶體固定或接縫無痕。
+- 音訊一律逐 sample 精確切出。時間戳比一個 sample 粗的容器（Matroska / WebM 以毫秒記錄）不做 seek，改從檔頭解碼到切片位置，720p MKV 約每分鐘位置 0.5 秒；MP4、MOV、WAV、MPEG-TS 照常快速 seek。
 
 ### 從 Timeline Director 遷移
 

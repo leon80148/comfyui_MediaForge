@@ -185,7 +185,7 @@ Materials (`generate` mode):
 
 General:
 
-- `timeline_data` JSON is the only state that is saved and queued; the editor's view state (zoom, selection, playhead) lives in node properties and never reaches the prompt. Material probe results live only in the editor.
+- `timeline_data` JSON is the only state that is saved and queued; the editor's view state (zoom, selection, playhead) is kept for the session (it survives undo / redo) but is not written into the workflow, so selecting or moving the playhead is not an undo step and never reaches the prompt. Material probe results live only in the editor.
 - If the editor fails to load, the raw JSON widget is shown and stays editable.
 - UI text is Traditional Chinese; node, widget and enum names stay English.
 
@@ -228,7 +228,7 @@ Verified with ComfyUI core 0.42.5 and frontend 1.55.18 (Nodes 2.0 and classic) o
 | No model (frames path) | Works | Load Segment Frames → Append `frames` / `audio` → Assemble with Start / End Loop, in all four core cache modes (classic / lru / none / ram_pressure, the default) |
 | MiniMax H3 — Sample Segments (single node) | **Supported** | 832×480 and 320×192, turbo 4-step. Same seed / sampler / sigmas as the loop path → identical sampled latents (max diff 0) and the same 260 frames / 346,667 samples. Core received the resolved `<Picture N>` / `<Video N>` / `<Audio N>` prompt, image order and cropped reference frames from the timeline; keyframe / guide frame indices matched. Locked audio tokens stayed within 2.4e-7 of the encoded original after sampling; the `lock_audio = original` master equals the original PCM sample for sample in the lock ranges; envelope correlation of the decoded generated audio vs. the original 0.997–1.000. 2 → 6 segments at 832×480: observed peak RSS +0.15 GiB (one segment of RGB is 0.48 GiB). Changing one segment's seed re-sampled only that segment and the next; adding a segment sampled only the new one |
 
-Verified on 2026-10-30 (RTX 5090, ComfyUI 0.42.5, H3 fl2va fp8 + turbo 4-step LoRA): the Sample Segments row above was measured with the real H3 models. Besides that, Encode H3 Segment is covered by contract tests against core's `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` classes, and Sample Segments' expansion and caching by tests on the real core executor with stand-ins for the H3 model nodes (every invalidation case, eviction in LRU / RAM-pressure modes, interruption during encode / sampling / append). The loop path with Encode H3 Segment shares that code but was not run end-to-end on GPU on its own.
+Verified on 2026-10-30 (RTX 5090, ComfyUI 0.42.5, H3 fl2va fp8 + turbo 4-step LoRA): the Sample Segments row above was measured with the real H3 models. Besides that, Encode H3 Segment is covered by contract tests against core's `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` classes, and Sample Segments' expansion and caching by tests on the real core executor with stand-ins for the H3 model nodes (every invalidation case, eviction in LRU / RAM-pressure modes, interruption during encode / sampling / append). The loop path with Encode H3 Segment (Select → Encode H3 Segment → Extend → sampler → Append inside core Start / End Loop) was also run on GPU with the same material timeline (2 images, 3 reference videos, a keyframe and a guide): its sampled latents matched Sample Segments exactly (max diff 0), same 192 frames / 256,000 samples.
 
 Rejected (the run stops with an error): VACE reference extra tokens, uncropped guides, batch > 1, latents whose layout doesn't match the plan, audio carry on non-H3 latents, Sample Segments / Encode H3 Segment on anything but `generate` + `grid = h3_5+17n` + 24 fps.
 
@@ -248,6 +248,7 @@ The official Wan 2.2 high / low `KSamplerAdvanced` chain does not preserve the c
 - What Sample Segments leaves in core's cache per segment is mainly the conditioning — estimated at ≈ 5 MB for a text-only prompt, about +10 MB per reference image (`ref_image_size = match`) and about +20 MB per second of reference video; nine images plus three 15 s videos ≈ 1 GB — plus a few latents of ≈ 12 MB each at 1344×768 × 107 frames. Twenty text-only segments ≈ 1.2 GB; heavy materials can reach several GB. These are estimates, not GPU measurements.
 - To keep it down: start ComfyUI with `--cache-lru N`, lower `ref_video_short_edge`, keep `ref_image_size = match`. Don't count on the default RAM-pressure cache to free it — its scan may not look inside H3's nested latents and can underestimate.
 - Total memory still depends on segment length, materials, crossfades, the model's working set and core's cache. This reduces decoded-frame memory; it does not guarantee constant total memory or seamless joins.
+- Audio is cut sample-exactly from every source. Containers whose timestamps are coarser than one sample (Matroska / WebM store milliseconds) are decoded from the start of the file up to the slice instead of seeking, about 0.5 s per minute of position on a 720p MKV; MP4, MOV, WAV and MPEG-TS keep the fast seek.
 
 ### Migrating from Timeline Director
 

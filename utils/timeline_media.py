@@ -4,6 +4,7 @@ FFmpeg 一律走 timeline_source 的安全輸入旗標。時間軸幀 f ↔ 素�
 video 幀）；先 accurate seek 再以 fps=num/den 重取樣——同 fps 的來源逐幀精確，不同 fps 則是決定
 性的最近幀取樣。
 """
+import json
 import math
 import subprocess
 from fractions import Fraction
@@ -160,6 +161,15 @@ def decode_video(path, seek, count, fps, size, scale, label, stream=0):
     return torch.from_numpy(arr.copy()).float().div_(255.0)
 
 
+def _coarse_audio_clock(path, label):
+    """第一條 audio stream 的時間戳是否比一個 sample 粗（Matroska / WebM 以 1 ms 計；MP4 / WAV 是 1 / 取樣率）。"""
+    out = run_capture(["ffprobe", "-v", "error"] + ffmpeg_input_args(path)
+                      + ["-select_streams", "a:0", "-show_entries", "stream=time_base,sample_rate", "-of", "json"],
+                      label, "讀取音訊時間基準")
+    stream = json.loads(out)["streams"][0]
+    return Fraction(stream["time_base"]) > Fraction(1, int(stream["sample_rate"]))
+
+
 def decode_audio(path, seek, origin, count, sample_rate, channels, source_channels, label):
     """最多 count 個 sample；來源提早結束時回傳較短的 PCM（尾端不補），由呼叫端決定補靜音或截短上下文。
 
@@ -171,8 +181,11 @@ def decode_audio(path, seek, origin, count, sample_rate, channels, source_channe
     # 輸入端 -ss 跳到「不晚於目標的 video 關鍵幀」所在的 cluster：音訊可能晚一個封包才開始，第一個
     # video 幀之前的音訊則整段讀不到；raw PCM 又沒有時間戳。所以往前多解一段——pre-roll 會落到素材原點
     # 之前時就從檔頭讀——aresample 依 PTS 補齊空白（音軌晚於起點時也靠它），再以 sample 數精確裁掉前段。
-    # -ss 放在素材的 sample 格點上：FFmpeg 把 -ss 截到微秒、再取最近的 sample，不在格點上就會差一個
-    if first < preroll:
+    # -ss 放在素材的 sample 格點上：FFmpeg 把 -ss 截到微秒、再取最近的 sample，不在格點上就會差一個。
+    # 時間戳比一個 sample 粗時，seek 後的 sample 依量化過的封包時間戳擺放（FFmpeg 6.1 + MKV 實測差 5–21 個）：
+    # 改成一律從檔頭解、只靠 sample 數裁切。async=1 除了起點，只在誤差 > 0.1 s 時補 / 裁，封包時間戳的
+    # 次毫秒誤差不會挪動 sample。代價：解碼量隨目標位置成長（demuxer 要讀過前面整段，含交錯的 video 封包）
+    if first < preroll or _coarse_audio_clock(path, label):
         ss, skip = 0, math.floor(origin * sample_rate + Fraction(1, 2)) + first
     else:
         ss, skip = origin + Fraction(first - preroll, sample_rate), preroll

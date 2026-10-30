@@ -3,8 +3,9 @@
 // timeline_data (a plain STRING widget) stays the only persisted carrier: the editor
 // reads and writes it, Python re-validates it on every run, and when the editor
 // cannot start the STRING widget is simply left visible as a JSON text box.
-// View state (zoom / selection / playhead) lives in node.properties so it never
-// reaches the prompt and never invalidates the node's cache.
+// View state (zoom / selection / playhead) is session memory keyed by graph + node id: it survives the
+// graph reload behind undo / redo, but it is never written into the workflow, so selecting or seeking is
+// not an edit (no undo step, no "modified" mark) and never reaches the prompt.
 //
 // Edits follow one path: drags only update a draft (repainted on rAF) and commit on
 // pointerup inside one beforeChange/afterChange pair, so one drag is one undo step.
@@ -26,7 +27,9 @@ import {
 import { S } from "./timeline_strings.js";
 
 const NODE_TYPE = "MF_EditTimeline";
-const VIEW_KEY = "mf_timeline_view";
+const DEFAULT_VIEW = { active: 0, zoom: null, playhead: 0, sel: null };
+const VIEWS = new Map();
+const ROOTS = new Map();  // view key → the editor root last shown for that node
 const UPLOAD_SUBFOLDER = "mediaforge_timeline";
 const NO_SOURCE = "(none)";
 const EDITOR_HEIGHT = 680;
@@ -56,6 +59,10 @@ function chainCallback(object, property, callback) {
     } else {
         object[property] = callback;
     }
+}
+
+function viewKey(node) {
+    return `${node.graph?.id ?? ""}:${node.id}`;
 }
 
 function findWidget(node, name) {
@@ -248,7 +255,7 @@ class TimelineEditor {
         this.deferredBatches = [];       // batches that finished during a gesture; committed after it
         this.previewKey = null;          // material shown in the preview slot instead of the source
         this.destroyed = false;
-        this.view = { active: 0, zoom: null, playhead: 0, sel: null, ...(node.properties?.[VIEW_KEY] ?? {}) };
+        this.view = { ...DEFAULT_VIEW };
         this.build();
         this.resizeObserver = new ResizeObserver(() => this.scheduleTrack());
         this.widget = node.addDOMWidget("timeline_editor", "mf_timeline_editor", this.root, {
@@ -410,9 +417,17 @@ class TimelineEditor {
         return p.segment != null ? { type: "segment", index: p.segment } : null;
     }
 
+    // Nodes 2.0 keeps a node's widget component across the graph reload behind undo / redo, so the new
+    // editor's root is never mounted and the destroyed editor's root stays on screen: put ours in its place.
+    adoptMount() {
+        const key = viewKey(this.node);
+        const old = ROOTS.get(key);
+        if (old && old !== this.root && old.isConnected && !this.root.isConnected) old.replaceWith(this.root);
+        ROOTS.set(key, this.root);
+    }
+
     saveView() {
-        this.node.properties = this.node.properties ?? {};
-        this.node.properties[VIEW_KEY] = { ...this.view };
+        VIEWS.set(viewKey(this.node), { ...this.view });
     }
 
     select(sel) {
@@ -1789,10 +1804,15 @@ app.registerExtension({
                 fallback(this, e);
             }
         });
+        // a node added from the menu / paste gets its id here: register its root for a later reload
+        chainCallback(nodeType.prototype, "onAdded", function () {
+            this.mfTimeline?.adoptMount();
+        });
         chainCallback(nodeType.prototype, "onConfigure", function () {
             if (!this.mfTimeline) return;
             try {
-                this.mfTimeline.view = { active: 0, zoom: null, playhead: 0, sel: null, ...(this.properties?.[VIEW_KEY] ?? {}) };
+                this.mfTimeline.view = { ...DEFAULT_VIEW, ...(VIEWS.get(viewKey(this)) ?? {}) };
+                this.mfTimeline.adoptMount();
                 this.mfTimeline.hydrate();
                 this.mfTimeline.loadSource();
             } catch (e) {
