@@ -93,7 +93,8 @@ def lock_drift(latent, segment, label):
     audio = streams[1]
     drift = 0.0
     for (k0, k1), target in zip(planned, lock["target"]):
-        if k1 > audio.shape[-1] or tuple(target.shape) != tuple(audio.shape[:-1]) + (k1 - k0,):
+        if (not torch.is_tensor(target) or k1 > audio.shape[-1]
+                or tuple(target.shape) != tuple(audio.shape[:-1]) + (k1 - k0,)):
             raise TimelineError(label, "E_LOCK_DRIFT", reason="鎖定區形狀或範圍不符")
         got = audio[..., k0:k1].to(torch.float32)
         ref = target.to(device=got.device, dtype=torch.float32)

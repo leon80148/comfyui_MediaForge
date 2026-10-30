@@ -6,6 +6,8 @@
 // fps is rational [num, den]; sample math goes through BigInt so the half-up
 // rounding matches Python exactly.
 
+import { FloatToken, parseAnchors, parseMaterials, parseRefs } from "./timeline_materials.js";
+
 export const FPS_PRESETS = {
     "16": [16, 1], "24": [24, 1], "25": [25, 1], "30": [30, 1],
     "24000/1001": [24000, 1001], "30000/1001": [30000, 1001],
@@ -74,17 +76,26 @@ export function phaseMs(spec) {
     return (num / den) * 25; // one H3 audio token = 1/40 s = 25 ms
 }
 
-// Canonical defaults — must match utils/timeline_plan.parse_timeline_data().
+// Canonical defaults — must match utils/timeline_plan.parse_timeline_data(): v1 comes out in the
+// v2 shape, as Python upgrades it. Call it only on data that passed schemaError().
 export function canonicalize(data) {
+    const materials = parseMaterials(data?.materials ?? []);
+    const refs = materials.ok ? parseRefs(data?.refs ?? [], materials.materials) : materials;
+    const anchors = materials.ok ? parseAnchors(data?.anchors ?? [], materials.materials) : materials;
+    if (!refs.ok || !anchors.ok) throw new TypeError("canonicalize() needs data that passed schemaError()");
     return {
-        version: 1,
+        version: 2,
         source: { origin_frame: data?.source?.origin_frame ?? 0 },
+        prompt: data?.prompt ?? "",
         segments: (data?.segments ?? []).map((s) => ({
-            start: s.start, end: s.end, prompt: s.prompt ?? "",
+            start: s.start, end: s.end, prompt: s.prompt ?? "", seed: s.seed ?? null,
             seam_in: s.seam_in?.kind === "crossfade"
                 ? { kind: "crossfade", frames: s.seam_in.frames, audio_curve: s.seam_in.audio_curve ?? "auto" }
                 : { kind: "cut" },
         })),
+        materials: materials.materials,
+        refs: refs.refs,
+        anchors: anchors.anchors,
     };
 }
 
@@ -100,26 +111,37 @@ function hasOnlyKeys(v, allowed) {
     return v !== null && typeof v === "object" && !Array.isArray(v) && Object.keys(v).every((k) => allowed.includes(k));
 }
 
-// Structural rules of parse_timeline_data, in the same order, so the first failing location
-// matches. canonicalize() would otherwise drop unknown fields / wrong types and the editor
-// would show (and later save) a timeline that Python rejects. Two gaps remain because
-// JSON.parse cannot see them: duplicate keys and integral floats such as 5.0.
+// Structural rules of parse_timeline_data (v1 and v2), in the same order, so the first failing
+// location matches. canonicalize() would otherwise drop unknown fields / wrong types and the
+// editor would show (and later save) a timeline that Python rejects. JSON.parse cannot see
+// duplicate keys or integral floats such as 5.0; parse the text with strictParse() to catch them.
+// mirrors Python: a lone surrogate can't be UTF-8 encoded for the plan hash
+function textOk(value) {
+    return typeof value === "string" && !/\p{Cs}/u.test(value);
+}
+
 export function schemaError(data) {
-    if (!hasOnlyKeys(data, ["version", "source", "segments"])) return "timeline_data";
-    if (data.version !== 1) return "version";
+    // Python picks the key set with `version == 2`, which 2.0 satisfies too
+    const v2 = data?.version === 2 || (data?.version instanceof FloatToken && Number(data.version.text) === 2);
+    if (!hasOnlyKeys(data, v2 ? ["version", "source", "prompt", "segments", "materials", "refs", "anchors"]
+        : ["version", "source", "segments"])) return "timeline_data";
+    if (data.version !== 1 && data.version !== 2) return "version";
     const source = data.source === undefined ? {} : data.source;
     if (!hasOnlyKeys(source, ["origin_frame"])) return "source";
     if (source.origin_frame !== undefined && !isInt(source.origin_frame)) return "source.origin_frame";
+    if (data.prompt !== undefined && !textOk(data.prompt)) return "prompt";
     const segs = data.segments;
     if (!Array.isArray(segs) || segs.length === 0 || segs.length > MAX_SEGMENTS) return "segments";
+    const segmentKeys = v2 ? ["start", "end", "prompt", "seam_in", "seed"] : ["start", "end", "prompt", "seam_in"];
     for (let i = 0; i < segs.length; i++) {
         const loc = `segments[${i}]`;
         const s = segs[i];
-        if (!hasOnlyKeys(s, ["start", "end", "prompt", "seam_in"])) return loc;
+        if (!hasOnlyKeys(s, segmentKeys)) return loc;
         for (const key of ["start", "end"]) {
             if (!isInt(s[key]) || s[key] < 0) return `${loc}.${key}`;
         }
-        if (s.prompt !== undefined && typeof s.prompt !== "string") return `${loc}.prompt`;
+        if (s.prompt !== undefined && !textOk(s.prompt)) return `${loc}.prompt`;
+        if (s.seed !== undefined && s.seed !== null && !(isInt(s.seed) && s.seed >= 0)) return `${loc}.seed`;
         if (s.seam_in === undefined) continue;
         const seam = s.seam_in;
         if (!hasOnlyKeys(seam, ["kind", "frames", "audio_curve"])) return `${loc}.seam_in`;
@@ -133,7 +155,14 @@ export function schemaError(data) {
         }
         if (!isInt(seam.frames) || seam.frames < 1) return `${loc}.seam_in.frames`;
     }
-    return null;
+    // absent → []; an explicit null still fails, like Python's data.get(key, [])
+    const listOf = (key) => (data[key] === undefined ? [] : data[key]);
+    const materials = parseMaterials(listOf("materials"));
+    if (!materials.ok) return materials.error.location;
+    const refs = parseRefs(listOf("refs"), materials.materials);
+    if (!refs.ok) return refs.error.location;
+    const anchors = parseAnchors(listOf("anchors"), materials.materials);
+    return anchors.ok ? null : anchors.error.location;
 }
 
 // Same check order as the Python validators, so the first reported location matches.
@@ -179,6 +208,7 @@ export function validate(data, mode, fpsKey, grid, sourceFrames = null, hasSourc
         return { ok: true, effectiveGrid, totalFrames: segs[segs.length - 1].end, diagnostics: diagnostics(segs) };
     }
     if (!hasSource) return fail("video", "needs_source");
+    if (data.materials?.length) return fail("materials", "cut_no_materials");
     const origin = data.source.origin_frame;
     for (let i = 0; i < segs.length; i++) {
         const loc = `segments[${i}]`;

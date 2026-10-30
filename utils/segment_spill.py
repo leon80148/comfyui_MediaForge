@@ -612,7 +612,8 @@ def _lock_pcm(lock, fps, directory, label):
     count = sample_index(lock["end"], MASTER_RATE, fps) - sample_index(lock["start"], MASTER_RATE, fps)
     # -ss 以容器起點為 0、素材時間以第一個 audio PTS 為 0
     origin = Fraction((lock["audio_start_us"] or 0) - (lock["format_start_us"] or 0), 1_000_000)
-    wave = decode_audio(path, origin + Fraction(lock["in"] * den, num), origin, count, MASTER_RATE, 2, label)[0]
+    wave = decode_audio(path, origin + Fraction(lock["in"] * den, num), origin, count, MASTER_RATE, 2,
+                        lock["audio_channels"], label)[0]
     out = os.path.join(directory, f"lock_{lock['anchor']}_{uuid.uuid4().hex}.wav")
     _write_wav(out, wave, MASTER_RATE)
     return out
@@ -747,9 +748,12 @@ def assemble(state, filename_prefix, ext, pix_fmt, encoder_args, override, check
             streams = _probe_streams(tmp, "mov", "codec_type,nb_read_packets," + ",".join(COLOR_TAGS))
             video_streams = [s for s in streams if s.get("codec_type") == "video"]
             audio_count = sum(s.get("codec_type") == "audio" for s in streams)
-            if not (len(video_streams) == 1 and video_streams[0].get("nb_read_packets") == str(total)
+            tags = dict(video_streams[0]) if len(video_streams) == 1 else {}
+            if ext == ".mov":
+                tags.setdefault("color_range", "tv")  # ProRes is limited range by definition; FFmpeg 6.1 doesn't report it
+            if not (len(video_streams) == 1 and tags.get("nb_read_packets") == str(total)
                     and audio_count == (0 if samples is None else 1)
-                    and all(video_streams[0].get(k) == tag for k, tag in COLOR_TAGS.items())):
+                    and all(tags.get(k) == tag for k, tag in COLOR_TAGS.items())):
                 raise RuntimeError(f"[{ASSEMBLE_LABEL}] 輸出驗證失敗（幀數 / 音軌 / 色彩標記不符）：{streams}。請改用其他 codec 後重試。")
             os.replace(tmp, output)
         except BaseException:

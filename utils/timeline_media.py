@@ -36,6 +36,35 @@ def timeline_frames(duration_us, fps):
     return None if duration_us is None else max(0, duration_us * num // (den * 1_000_000))
 
 
+def image_fields(path):
+    """圖片尺寸（套用 EXIF 方向，與 core LoadImage 一致）；只讀檔頭。讀不了 → ValueError。"""
+    try:
+        with Image.open(path) as img:
+            width, height = img.size
+            orientation = img.getexif().get(0x0112)
+    except (UnidentifiedImageError, OSError) as e:
+        raise ValueError(f"無法讀取圖片（{e}）") from e
+    if orientation in _EXIF_SWAPS_AXES:
+        width, height = height, width
+    return {"width": width, "height": height}
+
+
+def video_fields(info):
+    """parse_probe_output() → 快照 / probe route 共用的 video 欄位（duration_us = 所選 stream 的有效時長）。"""
+    return {**{k: info[k] for k in ("fps", "source_start_us", "format_start_us", "video_ordinal", "has_audio",
+                                    "audio_sample_rate", "audio_channels", "audio_start_us")},
+            "display_size": list(info["display_size"]),
+            "duration_us": _available_us(info["video_duration_us"], info["duration_us"], info["source_start_us"],
+                                         info["format_start_us"])}
+
+
+def audio_fields(info):
+    """parse_audio_probe() → 快照 / probe route 共用的 audio 欄位。"""
+    return {**{k: info[k] for k in ("audio_sample_rate", "audio_channels", "audio_start_us", "format_start_us")},
+            "duration_us": _available_us(info["audio_duration_us"], info["duration_us"], info["audio_start_us"],
+                                         info["format_start_us"])}
+
+
 def describe_material(material, fps, input_dir=None):
     """素材快照（plan 用，不含絕對路徑）。任何讀不到 / 不支援的狀況都是 E_MATERIAL。"""
     def fail(reason):
@@ -49,14 +78,9 @@ def describe_material(material, fps, input_dir=None):
             "fingerprint": opaque_fingerprint(path)}
     if material["kind"] == "image":
         try:
-            with Image.open(path) as img:
-                width, height = img.size
-                orientation = img.getexif().get(0x0112)
-        except (UnidentifiedImageError, OSError) as e:
-            fail(f"無法讀取圖片（{e}）")
-        if orientation in _EXIF_SWAPS_AXES:
-            width, height = height, width
-        snap.update(width=width, height=height)
+            snap.update(image_fields(path))
+        except ValueError as e:
+            fail(str(e))
         return snap
     try:
         stdout = run_probe(path)
@@ -66,20 +90,16 @@ def describe_material(material, fps, input_dir=None):
         info = parse_probe_output(stdout)
         if info is None:
             fail("沒有影像串流")
-        duration = _available_us(info["video_duration_us"], info["duration_us"], info["source_start_us"], info["format_start_us"])
-        snap.update({k: info[k] for k in ("fps", "source_start_us", "format_start_us", "video_ordinal",
-                                          "has_audio", "audio_sample_rate", "audio_channels", "audio_start_us")},
-                    display_size=list(info["display_size"]))
+        snap.update(video_fields(info))
     else:
         info = parse_audio_probe(stdout)
         if info is None or not info["audio_sample_rate"] or not info["audio_channels"]:
             fail("沒有可用的音訊串流")
-        duration = _available_us(info["audio_duration_us"], info["duration_us"], info["audio_start_us"], info["format_start_us"])
-        snap.update({k: info[k] for k in ("audio_sample_rate", "audio_channels", "audio_start_us", "format_start_us")})
-    frames = timeline_frames(duration, fps)
-    if frames is None or duration <= 0:
+        snap.update(audio_fields(info))
+    frames = timeline_frames(snap["duration_us"], fps)
+    if frames is None or snap["duration_us"] <= 0:
         fail("無法取得長度")
-    snap.update(duration_us=duration, frames=frames)
+    snap["frames"] = frames
     return snap
 
 
@@ -115,7 +135,7 @@ def decode_video(path, seek, count, fps, size, scale, label, stream=0):
     return torch.from_numpy(arr.copy()).float() / 255.0
 
 
-def decode_audio(path, seek, video_start, count, sample_rate, channels, label):
+def decode_audio(path, seek, video_start, count, sample_rate, channels, source_channels, label):
     # 輸入端 -ss 跳到「不晚於目標的 video 關鍵幀」所在的 cluster：音訊可能晚一個封包才開始，第一個
     # video 幀之前的音訊則整段讀不到；raw PCM 又沒有時間戳。所以往前多解一段——pre-roll 會落到第一個
     # video 幀之前時就從檔頭讀——aresample 依 PTS 補齊空白（音軌晚於起點時也靠它），再以 sample 數精確裁掉前段
@@ -123,6 +143,8 @@ def decode_audio(path, seek, video_start, count, sample_rate, channels, label):
     # 重取樣放在最前面：atrim / apad 以「進到它們的取樣率」計數，-ar 是在 filter chain 最後才插入
     af = (f"aresample={sample_rate}:async=1:first_pts=0,atrim=start_sample={round(pre * sample_rate)},"
           f"asetpts=PTS-STARTPTS,apad=whole_len={count},atrim=end_sample={count}")
+    if source_channels == 1 and channels == 2:
+        af += ",pan=stereo|c0=c0|c1=c0"  # -ac 2 would upmix mono at -3 dB; the spec duplicates it
     head = ["-ss", f"{float(seek - pre):.9f}"] if seek > pre else []
     out = run_capture(["ffmpeg", "-v", "error", "-nostdin"] + head + ffmpeg_input_args(path)
                       + ["-map", "0:a:0", "-af", af, "-ac", str(channels), "-ar", str(sample_rate), "-f", "f32le", "pipe:1"],
@@ -182,5 +204,5 @@ def load_audio_slice(item, start, count_frames, fps, label, sample_rate=None, mu
     count = (2 * count_frames * rate * den + num) // (2 * num)
     count -= count % multiple
     origin = material_origin(snap, origin_key)
-    wave = decode_audio(path, origin + Fraction(start * den, num), origin, count, rate, 2, label)
+    wave = decode_audio(path, origin + Fraction(start * den, num), origin, count, rate, 2, snap["audio_channels"], label)
     return {"waveform": wave, "sample_rate": rate}

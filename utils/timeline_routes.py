@@ -18,8 +18,9 @@ from urllib.parse import urlsplit
 
 from .cache_key import path_fingerprint
 from .ffmpeg import resolve_ffmpeg_cmd
+from .timeline_media import audio_fields, image_fields, video_fields
 from .timeline_source import (
-    check_relative_name, ffmpeg_input_args, opaque_fingerprint, parse_probe_output, probe_command,
+    check_relative_name, ffmpeg_input_args, opaque_fingerprint, parse_audio_probe, parse_probe_output, probe_command,
     resolve_timeline_source,
 )
 
@@ -190,23 +191,48 @@ def _runtime():
     return _state
 
 
-def _check_limits(info):
-    width, height = info["display_size"]
-    fps = info["fps"]
-    if ((info["duration_us"] or 0) > MAX_DURATION_US or max(width, height) > MAX_SIDE or width * height > MAX_PIXELS
-            or (fps and fps[0] > MAX_FPS * fps[1])):
-        raise RouteError(413, "too_large", "來源影片超過時長 / 解析度 / 幀率上限。")
+def _check_limits(kind, fields):
+    if (fields.get("duration_us") or 0) > MAX_DURATION_US:
+        raise RouteError(413, "too_large", "素材超過時長上限。")
+    if kind == "audio":
+        return
+    width, height = fields["display_size"] if kind == "video" else (fields["width"], fields["height"])
+    fps = fields.get("fps")
+    if max(width, height) > MAX_SIDE or width * height > MAX_PIXELS or (fps and fps[0] > MAX_FPS * fps[1]):
+        raise RouteError(413, "too_large", "素材超過解析度 / 幀率上限。")
 
 
-async def _probe(path):
+async def _run_probe(path):
     try:
         code, out, _ = await run_process(probe_command(path), PROBE_TIMEOUT)
     except asyncio.TimeoutError:
         raise RouteError(504, "timeout", "讀取來源逾時。", retryable=True) from None
-    info = parse_probe_output(out) if code == 0 else None
+    return out if code == 0 else None
+
+
+async def _probe(path):
+    """video 專用（proxy 用）：沒有可用的畫面串流 → 415。"""
+    out = await _run_probe(path)
+    info = parse_probe_output(out) if out is not None else None
     if info is None:
         raise RouteError(415, "unsupported_media", "無法讀取這個檔案（格式不在允許清單或檔案損毀）。")
     return info
+
+
+async def _probe_any(path):
+    """→ (kind, 與 Edit Timeline 快照共用的欄位, video 的額外資訊)。圖片只讀檔頭，不啟動 FFmpeg。"""
+    try:
+        return "image", await asyncio.get_running_loop().run_in_executor(None, image_fields, path), None
+    except ValueError:
+        pass
+    out = await _run_probe(path)
+    info = parse_probe_output(out) if out is not None else None
+    if info is not None:
+        return "video", video_fields(info), info
+    audio = parse_audio_probe(out) if out is not None else None
+    if audio is not None and audio["audio_sample_rate"] and audio["audio_channels"]:
+        return "audio", audio_fields(audio), None
+    raise RouteError(415, "unsupported_media", "無法讀取這個檔案（格式不在允許清單或檔案損毀）。")
 
 
 async def handle_probe(raw, headers, scheme, host):
@@ -214,16 +240,14 @@ async def handle_probe(raw, headers, scheme, host):
     rel, _ = parse_request(raw, "probe")
     path = _resolve(rel)
     async with _runtime()["probe"]:
-        info = await _probe(path)
-    _check_limits(info)
-    width, height = info["display_size"]
-    return 200, {
-        "version": 1, "fingerprint": opaque_fingerprint(path),
-        "source_start_us": info["source_start_us"], "duration_us": info["duration_us"], "fps": info["fps"],
-        "frame_count": info["frame_count"], "frame_count_kind": "metadata" if info["frame_count"] else "unknown",
-        "timing": info["timing"], "width": width, "height": height, "sar": info["sar"],
-        "rotation_deg": info["rotation_deg"], "video_codec": info["video_codec"], "has_audio": info["has_audio"],
-    }
+        kind, fields, info = await _probe_any(path)
+    _check_limits(kind, fields)
+    body = {"version": 2, "kind": kind, "fingerprint": opaque_fingerprint(path), "duration_us": None, **fields}
+    if kind == "video":
+        body.update(frame_count=info["frame_count"], frame_count_kind="metadata" if info["frame_count"] else "unknown",
+                    timing=info["timing"], sar=info["sar"], rotation_deg=info["rotation_deg"],
+                    video_codec=info["video_codec"])
+    return 200, body
 
 
 def proxy_dir():
@@ -269,10 +293,11 @@ def _manifest_info(target):
     return info if os.path.exists(target) and isinstance(info, dict) else None
 
 
-def proxy_command(source, target):
+def proxy_command(source, target, video_ordinal=0):
+    # 與解碼用同一條 video（跳過封面圖），預覽看到的就是實際生成用的畫面
     return resolve_ffmpeg_cmd(
         ["ffmpeg", "-nostdin", "-v", "error", "-y"] + ffmpeg_input_args(source)
-        + ["-map", "0:v:0", "-an", "-sn", "-dn", "-map_metadata", "-1",
+        + ["-map", f"0:v:{video_ordinal}", "-an", "-sn", "-dn", "-map_metadata", "-1",
            "-vf", "setpts=PTS-STARTPTS,scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1,"
                   "scale=w='min(960,iw)':h='min(540,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
            "-fpsmax", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
@@ -285,7 +310,8 @@ async def _build_proxy(runtime, source, target):
     async with runtime["proxy"]:
         # fingerprint 不代表來源通過了限額（Edit Timeline 的 plan_json 也帶它）：轉碼前對來源本身檢查
         async with runtime["probe"]:
-            _check_limits(await _probe(source))
+            source_info = await _probe(source)
+        _check_limits("video", video_fields(source_info))
         directory = os.path.dirname(target)
         _evict(directory)
         if shutil.disk_usage(directory).free < MIN_FREE_BYTES + MAX_PROXY_BYTES:
@@ -293,7 +319,8 @@ async def _build_proxy(runtime, source, target):
         partial = target + ".partial"
         try:
             try:
-                code, _, _ = await run_process(proxy_command(source, partial), PROXY_TIMEOUT, stdout_limit=0)
+                code, _, _ = await run_process(proxy_command(source, partial, source_info["video_ordinal"]),
+                                               PROXY_TIMEOUT, stdout_limit=0)
             except asyncio.TimeoutError:
                 raise RouteError(504, "timeout", "建立預覽逾時。", retryable=True) from None
             if code != 0 or not os.path.exists(partial):

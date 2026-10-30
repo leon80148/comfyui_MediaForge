@@ -137,7 +137,8 @@ def _keys(obj, allowed, location):
 
 
 def _string(value, location):
-    if not isinstance(value, str):
+    # a lone surrogate parses fine but can't be UTF-8 encoded for the plan hash
+    if not isinstance(value, str) or any("\ud800" <= ch <= "\udfff" for ch in value):
         _fail("必須是字串", location)
     return value
 
@@ -330,7 +331,8 @@ def _emit_intervals(plan):
 _EMPTY_MANIFEST = {"pictures": [], "videos": [], "audios": [], "keyframes": [], "guides": [], "locks": [],
                    "carry_conflicts": []}
 # 只供報告 / GUI 的欄位：改名、換 binding id 不該讓 conditioning 重新編碼
-_REPORT_KEYS = {"name", "binding", "anchor", "material", "requested_frames", "discarded_tail", "tag", "audio_tag"}
+_REPORT_KEYS = {"name", "binding", "anchor", "material", "requested_frames", "discarded_tail", "tag", "audio_tag",
+                "soundtrack_samples", "samples"}
 
 
 def _encode_materials(manifest):
@@ -402,8 +404,8 @@ def _build_specs(plan, data, snapshots, h3):
             "source_window": window,
             "prompt": prompt, "prompt_template": template, "seed": seg["seed"],
             "materials": manifest, "audio_locks": _audio_locks(plan, seg) if generate else [],
-            # 本段實際寫進 latent 的鎖音 token（不足一個完整 token 的 lock 只做母帶替換）
-            "latent_locks": [x["tokens"] for x in manifest["locks"] if "tokens" in x and x["tokens"][0] < x["tokens"][1]],
+            # 本段寫進 latent 的鎖音 token（只有 H3 profile 會鎖 latent）
+            "latent_locks": [x["tokens"] for x in manifest["locks"] if "tokens" in x],
         }
         encode = segment_view(spec, "encode")
         spec["encode_id"] = _digest(canonical_json({k: v for k, v in encode.items() if k not in ("type", "version", "view", "index")}))

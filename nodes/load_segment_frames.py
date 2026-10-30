@@ -82,7 +82,8 @@ class MF_LoadSegmentFrames:
             # 取樣率 / 聲道數來自檔案本身，惡意或損毀的 metadata 不能撐爆記憶體
             if not (0 < sr <= MAX_AUDIO_RATE and 0 < channels <= MAX_AUDIO_CHANNELS) or total * channels * 4 > MAX_DECODE_BYTES:
                 raise ValueError(f"[{NODE_LABEL}] 來源音訊規格異常（{sr} Hz × {channels} ch），拒絕解碼。請改用其他來源或先重新轉檔。")
-            waveform = decode_audio(path, seek, offset, need, sr, channels, NODE_LABEL) if need > 0 else torch.zeros(1, channels, 0)
+            waveform = (decode_audio(path, seek, offset, need, sr, channels, channels, NODE_LABEL) if need > 0
+                        else torch.zeros(1, channels, 0))
             # seek 超過來源尾端時 FFmpeg 可能一個樣本都不輸出，apad 無從補起
             waveform = torch.cat([torch.zeros(1, channels, silent_head), waveform,
                                   torch.zeros(1, channels, need - waveform.shape[-1])], dim=-1)

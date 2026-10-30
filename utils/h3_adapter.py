@@ -92,7 +92,8 @@ def write_locks(latent, locks, fps, audio_vae):
         count = (k + left + right) * per_token  # 800 的整數倍：core 公共 VAE.encode 不會再置中裁切
         origin = material_origin(snap, "audio_start_us")
         start = Fraction(a - per_token * left, rate)
-        wave = decode_audio(material_path(lock, LABEL), origin + start, origin, count, rate, 2, LABEL)
+        wave = decode_audio(material_path(lock, LABEL), origin + start, origin, count, rate, 2, snap["audio_channels"],
+                            LABEL)
         z = audio_vae.encode(wave.movedim(1, -1))
         if z.ndim != audio.ndim or z.shape[-1] != count // per_token or tuple(z.shape[1:-1]) != tuple(audio.shape[1:-1]):
             raise TimelineError(LABEL, "E_H3_NODES", nodes=f"audio VAE（輸出形狀 {tuple(z.shape)}）")
@@ -154,7 +155,6 @@ def encode_segment(segment, clip, vae, width, height, ref_image_size, audio_vae=
             image=image, audio=audio), 1, GUIDE_NODE)[0]
         del image, audio
 
-    locks = [x for x in materials["locks"] if x["tokens"][0] < x["tokens"][1]]
-    if locks:
-        latent = write_locks(latent, locks, fps, audio_vae)
+    if materials["locks"]:
+        latent = write_locks(latent, materials["locks"], fps, audio_vae)
     return positive, latent

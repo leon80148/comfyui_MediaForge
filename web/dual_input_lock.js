@@ -30,7 +30,8 @@ import { app } from "../../scripts/app.js";
 
 // node type → which widgets to flip when the input named `trigger_input`
 // (IMAGE `frames` or AUDIO `audio`) connects/disconnects
-//   lock_widget           : reverse direction — visible only when trigger is DISCONNECTED (path mode)
+//   lock_widget           : reverse direction — visible only when trigger is DISCONNECTED (path mode);
+//                           optional for entries that only have linked_widgets
 //   linked_widgets        : same direction    — visible only when trigger is CONNECTED   (tensor mode)
 //   hidden_when_connected : reverse direction — extra widgets to hide alongside lock_widget when
 //                           trigger is wired. Use for path-mode-only widgets that aren't the path
@@ -62,6 +63,10 @@ const DUAL_INPUT_NODES = {
 const EXTRA_INPUT_LOCKS = {
     // R4-1: srt_text (STRING forceInput, from Whisper/Translate) replaces srt_path.
     "MF_BurnSubtitle": { trigger_input: "srt_text", lock_widget: "srt_path" },
+    // cfg is only read when a negative conditioning makes the sampler use a CFG guider.
+    "MF_SampleSegments": { trigger_input: "negative", linked_widgets: ["cfg"] },
+    // An external AUDIO replaces the whole soundtrack, so the lock-audio master never runs.
+    "MF_AssembleSegments": { trigger_input: "audio", lock_widget: "lock_audio" },
 };
 
 // node type → array of widget-value conditional rules
@@ -126,6 +131,17 @@ const WIDGET_VALUE_LOCKS = {
     ],
     "MF_AssembleSegments": [
         { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
+    ],
+    "MF_SampleSegments": [
+        { trigger: "mask", value: "hard", hide: ["video_taper_tokens", "audio_taper_tokens"] },
+        { trigger: "mask", value: "linear", hide: ["video_taper_tokens", "audio_taper_tokens"] },
+        { trigger: "carry_audio", value: false, hide: ["audio_taper_tokens"] },
+    ],
+    // Audio kinds return no image, so the image resize widgets would be dead UI.
+    "MF_LoadSegmentMedia": [
+        { trigger: "resize", value: "none", hide: ["width", "height"] },
+        { trigger: "kind", value: "audio", hide: ["resize", "width", "height"] },
+        { trigger: "kind", value: "lock", hide: ["resize", "width", "height"] },
     ],
 };
 

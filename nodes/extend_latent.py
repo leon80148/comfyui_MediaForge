@@ -5,7 +5,8 @@
 """
 import json
 
-from ..utils.latent_carry import extend_latent
+from ..utils import segment_spill
+from ..utils.latent_carry import EXTEND_LABEL, extend_latent
 
 
 class MF_ExtendLatent:
@@ -47,6 +48,8 @@ class MF_ExtendLatent:
 
     def extend(self, target_latent, segment, mask, carry_audio, state=None, previous_latent=None,
                video_taper_tokens=2, audio_taper_tokens=2, experimental_causal=False, on_conflict="error"):
+        if state is not None:
+            segment_spill.check_state(state, EXTEND_LABEL)  # an old saved state gets the re-run message, not E_PROVENANCE
         latent, report = extend_latent(target_latent, segment, mask, carry_audio, state, previous_latent,
                                        video_taper_tokens, audio_taper_tokens, experimental_causal, on_conflict)
         return (latent, json.dumps(report, ensure_ascii=False))

@@ -90,7 +90,7 @@ def parse_materials(raw, check_ref):
 
 
 def _material(by_id, value, location):
-    m = by_id.get(value)
+    m = by_id.get(value) if isinstance(value, str) else None
     if m is None:
         _fail("material 必須是已存在的素材 id", location)
     return m
@@ -166,6 +166,7 @@ def parse_anchors(raw, materials):
 LOCK_POLICY = "ctx_v1"
 H3_LIMITS = {"pictures": 9, "videos": 3, "audios": 3}
 H3_MIN_REF_FRAMES = 5
+H3_AUDIO_RATE, H3_SAMPLES_PER_TOKEN = 32000, 800  # H3 audio VAE; core VAE.encode crops to whole tokens
 
 
 def h3_crop(frames):
@@ -190,8 +191,11 @@ def _anchor_error(anchor, reason):
 
 
 def validate_geometry(refs, anchors, snapshots, segments, h3):
+    total = segments[-1]["end"]
     for r in refs:
         snap = snapshots[r["material"]]
+        if r["from"] >= total:
+            _ref_error(r, f"起點超出時間軸總長（{total} 幀），不會套用到任何段")
         if snap["kind"] == "image":
             continue
         used = r["in"] + (r["to"] - r["from"] if r.get("mode") == "follow" else r["length"])
@@ -202,6 +206,8 @@ def validate_geometry(refs, anchors, snapshots, segments, h3):
     emits = emit_intervals(segments)
     for a in anchors:
         snap = snapshots[a["material"]]
+        if a["at"] >= total:
+            _anchor_error(a, f"位置超出時間軸總長（{total} 幀），不會套用到任何段")
         if a["role"] != "keyframe" and a["in"] + a["length"] > snap["frames"]:
             _anchor_error(a, f"需要素材到第 {a['in'] + a['length']} 幀，素材只有 {snap['frames']} 幀")
         if a.get("audio") and not snap["has_audio"]:
@@ -255,7 +261,7 @@ def segment_manifest(segments, index, refs, anchors, snapshots, h3, carry_in=Non
                 effective = h3_crop(n)
             videos.append(_item(snap, {"binding": r["id"], "mode": r["mode"], "source_start": start,
                                        "requested_frames": requested, "effective_frames": effective,
-                                       "soundtrack": r["audio"]}))
+                                       "discarded_tail": requested - effective, "soundtrack": r["audio"]}))
         else:
             key = (r["material"], r["in"], r["length"])
             if key not in seen_audios:
@@ -276,7 +282,8 @@ def segment_manifest(segments, index, refs, anchors, snapshots, h3, carry_in=Non
             lock = _item(snap, {"anchor": a["id"], "frame_idx": p, "frames": q - p,
                                 "source_start": a["in"] + max(lo, s) - lo})
             if h3:
-                lock["tokens"] = [-(-5 * p // 3), min(5 * q // 3, (10 * length + 3) // 6)]
+                # 5/3 token per frame at 24 fps: a lock of ≥ 1 frame always covers a whole token, and q ≤ length keeps K1 ≤ Ta
+                lock["tokens"] = [-(-5 * p // 3), 5 * q // 3]
             locks.append(lock)
     for group in (keyframes, guides, locks):
         group.sort(key=lambda x: x["frame_idx"])
@@ -286,7 +293,23 @@ def segment_manifest(segments, index, refs, anchors, snapshots, h3, carry_in=Non
                 "carry_conflicts": [x["anchor"] for x in locks if x["tokens"][0] < carried] if h3 else []}
     if h3:
         _h3_tags(manifest, index)
+        _h3_samples(manifest)
     return manifest
+
+
+def _h3_samples(manifest):
+    """實際送進 audio VAE 的 samples（與 h3_adapter 的 load_audio_slice 同一算式）：Q32k(幀數) 向下裁到整數 token。"""
+    def samples(frames):
+        count = (2 * frames * H3_AUDIO_RATE + 24) // 48
+        return count - count % H3_SAMPLES_PER_TOKEN
+    for v in manifest["videos"]:
+        if v["soundtrack"]:
+            v["soundtrack_samples"] = samples(v["effective_frames"])
+    for item in manifest["audios"]:
+        item["samples"] = samples(item["frames"])
+    for g in manifest["guides"]:
+        if g["soundtrack"]:
+            g["samples"] = samples(g["frames"])
 
 
 def _h3_tags(manifest, index):
@@ -311,7 +334,8 @@ def _h3_tags(manifest, index):
 # ---- prompt 別名 ----
 
 ALIAS_RE = re.compile(r"<@([^<>]*)>")
-TAG_RE = re.compile(r"<(Picture|Video|Audio) (\d+)>")
+# core only writes ASCII digits; \d would also take full-width and other Unicode digits
+TAG_RE = re.compile(r"<(Picture|Video|Audio) ([0-9]+)>")
 
 
 def tag_counts(manifest):
@@ -330,7 +354,7 @@ def resolve_prompt(template, manifest, materials, index, h3):
         return template
     counts = tag_counts(manifest)
     for kind, n in TAG_RE.findall(template):
-        if not 1 <= int(n) <= counts[kind]:
+        if len(n) > 9 or not 1 <= int(n) <= counts[kind]:
             fail(f"<{kind} {n}> 超出本段的 {counts[kind]} 個 {kind}")
     by_name = {m["name"]: m for m in materials}
 
