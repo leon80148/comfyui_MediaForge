@@ -248,7 +248,7 @@ Sample Segments 以常數把每段規格傳進該段的節點組，ComfyUI 的�
 - Sample Segments 每段留在 core 快取的主要是 conditioning —— 估計純文字 prompt ≈ 5 MB、每張參考圖約 +10 MB（`ref_image_size = match`）、每秒參考影片約 +20 MB；9 張圖加 3 支 15 秒影片 ≈ 1 GB —— 再加幾個 latent（1344×768 × 107 幀約各 12 MB）。20 段純文字 ≈ 1.2 GB；素材多時可達數 GB。以上是估算，不是 GPU 實測。
 - 要壓低：用 `--cache-lru N` 啟動 ComfyUI、降低 `ref_video_short_edge`、維持 `ref_image_size = match`。不要指望預設的 RAM-pressure 快取釋放 —— 它的掃描可能看不進 H3 的巢狀 latent，會低估用量。
 - 總記憶體仍受段長、素材、crossfade、模型工作集與 core 快取影響。這能減少解碼畫面佔用的記憶體，但不保證總記憶體固定或接縫無痕。
-- 音訊一律逐 sample 精確切出。時間戳比一個 sample 粗的容器（Matroska / WebM 以毫秒記錄）不做 seek，改從檔頭解碼到切片位置，720p MKV 約每分鐘位置 0.5 秒；MP4、MOV、WAV、MPEG-TS 照常快速 seek。
+- 音訊一律逐 sample 精確切出。兩種情況不做 seek、改從檔頭解碼到切片位置：時間戳比一個 sample 粗的容器（Matroska / WebM 以毫秒記錄），以及需要重取樣的音訊（H3 參考與鎖音轉 32 kHz、其他取樣率轉 48 kHz 母帶）——從 seek 點重新起算的重取樣相位與從檔頭起算不同。代價在 720p MKV 約每分鐘位置 0.5 秒，純音訊檔更少；取樣率相同的 MP4、MOV、WAV、MPEG-TS 照常快速 seek。
 
 ### 從 Timeline Director 遷移
 
