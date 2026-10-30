@@ -161,13 +161,15 @@ def decode_video(path, seek, count, fps, size, scale, label, stream=0):
     return torch.from_numpy(arr.copy()).float().div_(255.0)
 
 
-def _coarse_audio_clock(path, label):
-    """第一條 audio stream 的時間戳是否比一個 sample 粗（Matroska / WebM 以 1 ms 計；MP4 / WAV 是 1 / 取樣率）。"""
+def _seek_unsafe(path, sample_rate, label):
+    """輸入端 -ss 會改變 sample 內容嗎：第一條 audio stream 的時間戳比一個 sample 粗（Matroska / WebM 以 1 ms 計），
+    或需要重取樣（seek 後重新起算的重取樣相位與從頭重取樣不同）。"""
     out = run_capture(["ffprobe", "-v", "error"] + ffmpeg_input_args(path)
                       + ["-select_streams", "a:0", "-show_entries", "stream=time_base,sample_rate", "-of", "json"],
                       label, "讀取音訊時間基準")
     stream = json.loads(out)["streams"][0]
-    return Fraction(stream["time_base"]) > Fraction(1, int(stream["sample_rate"]))
+    rate = int(stream["sample_rate"])
+    return rate != sample_rate or Fraction(stream["time_base"]) > Fraction(1, rate)
 
 
 def decode_audio(path, seek, origin, count, sample_rate, channels, source_channels, label):
@@ -184,8 +186,9 @@ def decode_audio(path, seek, origin, count, sample_rate, channels, source_channe
     # -ss 放在素材的 sample 格點上：FFmpeg 把 -ss 截到微秒、再取最近的 sample，不在格點上就會差一個。
     # 時間戳比一個 sample 粗時，seek 後的 sample 依量化過的封包時間戳擺放（FFmpeg 6.1 + MKV 實測差 5–21 個）：
     # 改成一律從檔頭解、只靠 sample 數裁切。async=1 除了起點，只在誤差 > 0.1 s 時補 / 裁，封包時間戳的
-    # 次毫秒誤差不會挪動 sample。代價：解碼量隨目標位置成長（demuxer 要讀過前面整段，含交錯的 video 封包）
-    if first < preroll or _coarse_audio_clock(path, label):
+    # 次毫秒誤差不會挪動 sample。需要重取樣時也從檔頭解：從 seek 點重新起算的重取樣相位與整檔不同。
+    # 代價：解碼量隨目標位置成長（demuxer 要讀過前面整段，含交錯的 video 封包）
+    if first < preroll or _seek_unsafe(path, sample_rate, label):
         ss, skip = 0, math.floor(origin * sample_rate + Fraction(1, 2)) + first
     else:
         ss, skip = origin + Fraction(first - preroll, sample_rate), preroll

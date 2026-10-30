@@ -29,7 +29,8 @@ import { S } from "./timeline_strings.js";
 const NODE_TYPE = "MF_EditTimeline";
 const DEFAULT_VIEW = { active: 0, zoom: null, playhead: 0, sel: null };
 const VIEWS = new Map();
-const ROOTS = new Map();  // view key → the editor root last shown for that node
+const MAX_VIEWS = 256;
+const ROOTS = new Map();  // view key → { root, editor } last shown for that node
 const UPLOAD_SUBFOLDER = "mediaforge_timeline";
 const NO_SOURCE = "(none)";
 const EDITOR_HEIGHT = 680;
@@ -61,8 +62,11 @@ function chainCallback(object, property, callback) {
     }
 }
 
+// null until the node belongs to a graph with its final id: LGraphNode.clone() configures before it is added
 function viewKey(node) {
-    return `${node.graph?.id ?? ""}:${node.id}`;
+    if (!node.graph || !(node.id >= 0)) return null;
+    const workflow = app.extensionManager?.workflow?.activeWorkflow;
+    return `${workflow?.instanceId ?? workflow?.path ?? ""}:${node.graph.id}:${node.id}`;
 }
 
 function findWidget(node, name) {
@@ -421,13 +425,21 @@ class TimelineEditor {
     // editor's root is never mounted and the destroyed editor's root stays on screen: put ours in its place.
     adoptMount() {
         const key = viewKey(this.node);
+        if (!key) return;
         const old = ROOTS.get(key);
-        if (old && old !== this.root && old.isConnected && !this.root.isConnected) old.replaceWith(this.root);
-        ROOTS.set(key, this.root);
+        // only take over from an editor the reload destroyed, never from a live one
+        if (old && old.editor !== this && old.editor.destroyed && old.root.isConnected && !this.root.isConnected) {
+            old.root.replaceWith(this.root);
+        }
+        ROOTS.set(key, { root: this.root, editor: this });
     }
 
     saveView() {
-        VIEWS.set(viewKey(this.node), { ...this.view });
+        const key = viewKey(this.node);
+        if (!key) return;
+        VIEWS.delete(key);  // re-insert so the map stays in least-recently-saved order
+        VIEWS.set(key, { ...this.view });
+        if (VIEWS.size > MAX_VIEWS) VIEWS.delete(VIEWS.keys().next().value);
     }
 
     select(sel) {
@@ -1771,6 +1783,10 @@ class TimelineEditor {
             video.removeAttribute("src");
             video.load();
         }
+        // a reload re-creates the node synchronously and adoptMount() takes over the entry; a real removal
+        // must not keep the detached editor DOM alive
+        const key = viewKey(this.node);
+        if (key) setTimeout(() => ROOTS.get(key)?.editor === this && ROOTS.delete(key), 0);
     }
 }
 
