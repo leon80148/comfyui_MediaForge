@@ -9,7 +9,7 @@ from fractions import Fraction
 
 import torch
 
-from .timeline_materials import LOCK_POLICY
+from .timeline_materials import LOCK_POLICY, audio_sample_count
 from .timeline_media import (decode_audio, load_audio_slice, load_image, load_video_slice, material_origin,
                              material_path, pad_audio, scale_filter)
 from .timeline_messages import TimelineError
@@ -83,6 +83,39 @@ def lock_context(lock, fps, rate):
     return a, left, right
 
 
+def material_decode_bytes(materials, fps, rate, width, height, ref_video_short_edge):
+    """encode_segment 每次素材解碼的大小（Sample Segments report 的估算）：與 timeline_media._check_decode
+    同一算式——圖片 float32 RGB、影片 raw rgb24、音訊 float32 雙聲道；鎖音是 ctx_v1 的 metadata 視窗。"""
+    per_token = rate // TOKENS_PER_SECOND
+    out = []
+
+    def add(role, kind, item, nbytes):
+        out.append({"role": role, "kind": kind, "name": item["name"], "bytes": nbytes})
+
+    def audio_bytes(start, frames):
+        return audio_sample_count(start, frames, rate, fps, per_token) * 2 * 4
+
+    for p in materials["pictures"]:
+        add("pictures", "image", p, p["snapshot"]["width"] * p["snapshot"]["height"] * 3 * 4)
+    for v in materials["videos"]:
+        size = _ref_video_size(v["snapshot"]["display_size"], ref_video_short_edge)[1] or v["snapshot"]["display_size"]
+        add("videos", "video", v, v["effective_frames"] * size[0] * size[1] * 3)
+        if v["soundtrack"]:
+            add("videos", "audio", v, audio_bytes(v["source_start"], v["effective_frames"]))
+    for a in materials["audios"]:
+        add("audios", "audio", a, audio_bytes(a["source_start"], a["frames"]))
+    for k in materials["keyframes"]:
+        add("keyframes", "image", k, k["snapshot"]["width"] * k["snapshot"]["height"] * 3 * 4)
+    for g in materials["guides"]:
+        add("guides", "video", g, g["frames"] * width * height * 3)
+        if g["soundtrack"]:
+            add("guides", "audio", g, audio_bytes(g["frame_idx"], g["frames"]))
+    for x in materials["locks"]:
+        k0, k1 = x["tokens"]
+        add("locks", "audio", x, (k1 - k0 + sum(lock_context(x, fps, rate)[1:])) * per_token * 2 * 4)
+    return out
+
+
 def write_locks(latent, locks, fps, audio_vae):
     """把鎖音原聲編碼寫進 AV latent 的 audio stream，該範圍 noise_mask = 0（§7.1）。"""
     samples = latent["samples"]
@@ -101,8 +134,12 @@ def write_locks(latent, locks, fps, audio_vae):
         start = Fraction(a - per_token * left, rate)
         wave = decode_audio(material_path(lock, LABEL), origin + start, origin, (k + left + right) * per_token, rate, 2,
                             snap["audio_channels"], LABEL)
-        # 素材比 metadata 短：先截短右側上下文（上下文不補零）；連目標區都不夠時才補靜音
-        right = min(right, max(0, wave.shape[-1] // per_token - left - k))
+        # 素材比 metadata 短：上下文只截短、不補零，只有目標區補靜音。右側截到真的有的部分；
+        # 連目標起點都沒到時左側也整個捨棄——它與目標之間會隔著補的靜音
+        real = wave.shape[-1]
+        right = min(right, max(0, real // per_token - left - k))
+        if real < left * per_token:
+            wave, left = wave[..., :0], 0
         count = (k + left + right) * per_token  # 800 的整數倍：core 公共 VAE.encode 不會再置中裁切
         wave = pad_audio(wave[..., :count], count, LABEL)
         z = audio_vae.encode(wave.movedim(1, -1))

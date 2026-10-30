@@ -102,10 +102,13 @@ def spec_id(spec):
     return _digest(canonical_json(spec)) if spec is not None else None
 
 
-def _fail(reason, location, code=None):
-    """code 是機器原因碼（只有分段幾何與 widget 選項有；結構錯誤以 location / field 定位）。"""
+def _fail(reason, location, code):
+    """code 是機器原因碼（§4.2.5 原因碼表）；reason 是給人看的說明。"""
     raise TimelineError(NODE_LABEL, "E_TIMELINE_JSON", reason=reason, location=location,
                         detail=timeline_materials.json_detail(location, reason=code))
+
+
+_MISSING = object()  # 必填欄位不存在；明寫 null 則照型別檢查失敗
 
 
 def _reject_duplicate_keys(pairs):
@@ -122,14 +125,16 @@ def _reject_constant(name):
 
 
 def _int(value, location, minimum=None, maximum=JS_SAFE_MAX):
+    if value is _MISSING:
+        _fail("缺少此欄位", location, "missing_key")
     if isinstance(value, bool) or not isinstance(value, int):
-        _fail("必須是整數", location)
+        _fail("必須是整數", location, "not_integer")
     if abs(value) > JS_SAFE_MAX:
-        _fail("整數超出可安全表示的範圍", location)
+        _fail("整數超出可安全表示的範圍", location, "out_of_range")
     if minimum is not None and value < minimum:
-        _fail(f"必須 ≥ {minimum}", location)
+        _fail(f"必須 ≥ {minimum}", location, "out_of_range")
     if value > maximum:
-        _fail(f"必須 ≤ {maximum}", location)
+        _fail(f"必須 ≤ {maximum}", location, "out_of_range")
     return value
 
 
@@ -140,16 +145,18 @@ def _frame(value, location, minimum=0):
 
 def _keys(obj, allowed, location):
     if not isinstance(obj, dict):
-        _fail("必須是物件", location)
+        _fail("必須是物件", location, "not_object")
     extra = sorted(set(obj) - set(allowed))
     if extra:
-        _fail(f"不認得的欄位 {extra}", location)
+        _fail(f"不認得的欄位 {extra}", location, "unknown_key")
 
 
 def _string(value, location):
     # a lone surrogate parses fine but can't be UTF-8 encoded for the plan hash
-    if not isinstance(value, str) or any("\ud800" <= ch <= "\udfff" for ch in value):
-        _fail("必須是字串", location)
+    if not isinstance(value, str):
+        _fail("必須是字串", location, "not_string")
+    if any("\ud800" <= ch <= "\udfff" for ch in value):
+        _fail("不可含未成對的 surrogate 字元", location, "lone_surrogate")
     return value
 
 
@@ -158,31 +165,35 @@ def parse_timeline_data(text):
     try:
         data = json.loads(text, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_constant)
     except ValueError as e:
-        _fail(str(e), "timeline_data")
+        _fail(str(e), "timeline_data", "invalid_json")
     if not isinstance(data, dict):
-        _fail("必須是物件", "timeline_data")
+        _fail("必須是物件", "timeline_data", "not_object")
     v2 = data.get("version") == 2
     _keys(data, ("version", "source", "prompt", "segments", "materials", "refs", "anchors") if v2
           else ("version", "source", "segments"), "timeline_data")
-    if _int(data.get("version"), "version") not in (1, 2):
-        _fail("只支援 version 1 / 2", "version")
+    if _int(data.get("version", _MISSING), "version") not in (1, 2):
+        _fail("只支援 version 1 / 2", "version", "unsupported_version")
 
     source = data.get("source", {})
     _keys(source, ("origin_frame",), "source")
     origin = _frame(source.get("origin_frame", 0), "source.origin_frame", minimum=-MAX_FRAME)
     prompt = _string(data.get("prompt", ""), "prompt")
 
-    segments = data.get("segments")
-    if not isinstance(segments, list) or not segments:
-        _fail("至少需要一段", "segments")
+    segments = data.get("segments", _MISSING)
+    if segments is _MISSING:
+        _fail("缺少此欄位", "segments", "missing_key")
+    if not isinstance(segments, list):
+        _fail("必須是陣列", "segments", "not_array")
+    if not segments:
+        _fail("至少需要一段", "segments", "no_segments")
     if len(segments) > MAX_SEGMENTS:
-        _fail(f"最多 {MAX_SEGMENTS} 段", "segments")
+        _fail(f"最多 {MAX_SEGMENTS} 段", "segments", "too_many_segments")
     out = []
     for i, seg in enumerate(segments):
         loc = f"segments[{i}]"
         _keys(seg, ("start", "end", "prompt", "seam_in", "seed") if v2 else ("start", "end", "prompt", "seam_in"), loc)
-        start = _frame(seg.get("start"), f"{loc}.start")
-        end = _frame(seg.get("end"), f"{loc}.end")
+        start = _frame(seg.get("start", _MISSING), f"{loc}.start")
+        end = _frame(seg.get("end", _MISSING), f"{loc}.end")
         seg_prompt = _string(seg.get("prompt", ""), f"{loc}.prompt")
         seed = seg.get("seed")
         if seed is not None:
@@ -198,17 +209,19 @@ def parse_timeline_data(text):
 
 def _parse_seam(seam, location):
     _keys(seam, ("kind", "frames", "audio_curve"), location)
-    kind = seam.get("kind")
+    kind = seam.get("kind", _MISSING)
+    if kind is _MISSING:
+        _fail("缺少此欄位", f"{location}.kind", "missing_key")
     if kind not in SEAM_KINDS:
-        _fail(f"kind 必須是 {list(SEAM_KINDS)}", f"{location}.kind")
+        _fail(f"kind 必須是 {list(SEAM_KINDS)}", f"{location}.kind", "bad_enum")
     if kind == "cut":
         if set(seam) != {"kind"}:
-            _fail("cut 不接受 frames / audio_curve", location)
+            _fail("cut 不接受 frames / audio_curve", location, "unknown_key")
         return {"kind": "cut"}
     curve = seam.get("audio_curve", "auto")
     if curve not in AUDIO_CURVES:
-        _fail(f"audio_curve 必須是 {list(AUDIO_CURVES)}", f"{location}.audio_curve")
-    return {"kind": "crossfade", "frames": _frame(seam.get("frames"), f"{location}.frames", minimum=1),
+        _fail(f"audio_curve 必須是 {list(AUDIO_CURVES)}", f"{location}.audio_curve", "bad_enum")
+    return {"kind": "crossfade", "frames": _frame(seam.get("frames", _MISSING), f"{location}.frames", minimum=1),
             "audio_curve": curve}
 
 
@@ -287,7 +300,8 @@ def compile_plan(data, mode, fps_key, grid, source=None, snapshots=None):
     fps = FPS_PRESETS[fps_key]
     effective_grid = "free" if mode == "cut" else grid
     if effective_grid == H3_GRID and fps != H3_FPS:
-        raise TimelineError(NODE_LABEL, "E_H3_FPS")
+        raise TimelineError(NODE_LABEL, "E_H3_FPS", location="fps",
+                            detail=timeline_materials.json_detail("fps", reason="h3_fps"))
     segments = data["segments"]
     origin = data["source"]["origin_frame"]
     if mode == "generate":
@@ -467,15 +481,22 @@ def require_segment(segment, views, label):
     """消費端入口檢查：MF_SEGMENT v2、view 被接受（full 一律接受）、必要欄位齊全（full 也要齊）。"""
     if not isinstance(segment, dict) or segment.get("type") != "MF_SEGMENT":
         raise ValueError(f"[{label}] segment 必須來自 Select Segment，請檢查接線。")
+    index = segment.get("index")
+
+    def fail(code, field, reason):
+        detail = {"reason": code, "field": field}
+        if isinstance(index, int) and not isinstance(index, bool):
+            detail["entity"] = {"kind": "segment", "id": index}
+        raise TimelineError(label, "E_VIEW", reason=reason, detail=detail)
+
     if segment.get("version") != 2:
-        raise TimelineError(label, "E_VIEW", reason="segment 是舊版格式，請重新執行 Edit Timeline",
-                            detail={"reason": "stale_version"})
+        fail("stale_version", "version", "segment 是舊版格式，請重新執行 Edit Timeline")
     view = segment.get("view")
     if view != "full" and view not in views:
-        raise TimelineError(label, "E_VIEW", reason=f"不接受 {view} view", detail={"reason": "view_not_accepted"})
+        fail("view_not_accepted", "view", f"不接受 {view} view")
     missing = [k for k in (FULL_REQUIRED if view == "full" else VIEW_FIELDS[view]) if k not in segment]
     if missing:
-        raise TimelineError(label, "E_VIEW", reason=f"缺少欄位 {missing}", detail={"reason": "missing_fields"})
+        fail("missing_fields", missing[0], f"缺少欄位 {missing}")
     return segment
 
 
@@ -483,7 +504,8 @@ def segment_spec(plan, index):
     """MF_SEGMENT（full view）：Extend / Append / Load / Encode 共用的不可變衍生快照。"""
     specs = plan["specs"]
     if not 0 <= index < len(specs):
-        raise TimelineError("Select Segment", "E_SEGMENT_INDEX", count=len(specs), index=index)
+        raise TimelineError("Select Segment", "E_SEGMENT_INDEX", count=len(specs), index=index,
+                            detail={"reason": "out_of_range", "field": "segment_index"})
     return copy.deepcopy(specs[index])
 
 

@@ -44,37 +44,51 @@ def _entity(kind, obj, seen):
     return {"kind": kind, "id": oid} if isinstance(oid, str) and _ID_RE.fullmatch(oid) and oid not in seen else None
 
 
-def _fail(reason, location, entity=None):
+def _fail(reason, location, code, entity=None):
+    """code 是機器原因碼（§4.2.5 原因碼表）；reason 是給人看的說明。"""
     raise TimelineError(NODE_LABEL, "E_TIMELINE_JSON", reason=reason, location=location,
-                        detail=json_detail(location, entity))
+                        detail=json_detail(location, entity, code))
+
+
+_MISSING = object()  # 必填欄位不存在；明寫 null 則照型別檢查失敗
+
+
+def _present(value, location, entity=None):
+    if value is _MISSING:
+        _fail("缺少此欄位", location, "missing_key", entity)
+    return value
 
 
 def _frame(value, location, minimum=0, entity=None):
+    _present(value, location, entity)
     if isinstance(value, bool) or not isinstance(value, int):
-        _fail("必須是整數", location, entity)
+        _fail("必須是整數", location, "not_integer", entity)
     if not minimum <= value <= MAX_FRAME:
-        _fail(f"必須在 {minimum}…{MAX_FRAME} 之間", location, entity)
+        _fail(f"必須在 {minimum}…{MAX_FRAME} 之間", location, "out_of_range", entity)
     return value
 
 
 def _keys(obj, allowed, location, entity=None):
     if not isinstance(obj, dict):
-        _fail("必須是物件", location)
+        _fail("必須是物件", location, "not_object")
     extra = sorted(set(obj) - set(allowed))
     if extra:
-        _fail(f"不認得的欄位 {extra}", location, entity)
+        _fail(f"不認得的欄位 {extra}", location, "unknown_key", entity)
 
 
 def _id(value, seen, location):
-    if not isinstance(value, str) or not _ID_RE.fullmatch(value) or value in seen:
-        _fail("id 必須是 1–32 個英數 / _ / - 且不重複", location)
+    _present(value, location)
+    if not isinstance(value, str) or not _ID_RE.fullmatch(value):
+        _fail("id 必須是 1–32 個英數 / _ / -", location, "bad_id")
+    if value in seen:
+        _fail("id 不可重複", location, "duplicate_id")
     seen.add(value)
     return value
 
 
 def _bool(value, location, entity):
     if not isinstance(value, bool):
-        _fail("必須是 true / false", location, entity)
+        _fail("必須是 true / false", location, "not_boolean", entity)
     return value
 
 
@@ -87,96 +101,101 @@ def name_ok(name):
 def parse_materials(raw, check_ref):
     """check_ref(rel) 驗證 input/ 相對路徑的字面規則（timeline_source.check_relative_name），不碰檔案。"""
     if not isinstance(raw, list):
-        _fail("必須是陣列", "materials")
+        _fail("必須是陣列", "materials", "not_array")
     if len(raw) > MAX_MATERIALS:
-        _fail(f"最多 {MAX_MATERIALS} 個素材", "materials")
+        _fail(f"最多 {MAX_MATERIALS} 個素材", "materials", "too_many_materials")
     out, ids, names = [], set(), set()
     for i, m in enumerate(raw):
         loc = f"materials[{i}]"
         entity = _entity("material", m, ids)
         _keys(m, ("id", "kind", "ref", "name"), loc, entity)
-        mid = _id(m.get("id"), ids, f"{loc}.id")
-        if m.get("kind") not in KINDS:
-            _fail(f"kind 必須是 {list(KINDS)}", f"{loc}.kind", entity)
+        mid = _id(m.get("id", _MISSING), ids, f"{loc}.id")
+        if _present(m.get("kind", _MISSING), f"{loc}.kind", entity) not in KINDS:
+            _fail(f"kind 必須是 {list(KINDS)}", f"{loc}.kind", "bad_enum", entity)
+        # 在 try 外取值：缺欄位的 TimelineError 也是 ValueError，不能被當成 bad_ref
+        ref = _present(m.get("ref", _MISSING), f"{loc}.ref", entity)
         try:
-            check_ref(m.get("ref"))
+            check_ref(ref)
         except ValueError as e:
-            _fail(str(e), f"{loc}.ref", entity)
-        name = m.get("name")
-        if not name_ok(name) or name in names:
-            _fail("name 只能用英數、_、-、中日韓文字（1–32 字、NFC）且不重複", f"{loc}.name", entity)
+            _fail(str(e), f"{loc}.ref", "bad_ref", entity)
+        name = _present(m.get("name", _MISSING), f"{loc}.name", entity)
+        if not name_ok(name):
+            _fail("name 只能用英數、_、-、中日韓文字（1–32 字、NFC）", f"{loc}.name", "bad_name", entity)
+        if name in names:
+            _fail("name 不可重複", f"{loc}.name", "duplicate_name", entity)
         names.add(name)
         out.append({"id": mid, "kind": m["kind"], "ref": m["ref"].replace("\\", "/"), "name": name})
     return out
 
 
 def _material(by_id, value, location, entity):
+    _present(value, location, entity)
     m = by_id.get(value) if isinstance(value, str) else None
     if m is None:
-        _fail("material 必須是已存在的素材 id", location, entity)
+        _fail("material 必須是已存在的素材 id", location, "unknown_material", entity)
     return m
 
 
 def parse_refs(raw, materials):
     if not isinstance(raw, list):
-        _fail("必須是陣列", "refs")
+        _fail("必須是陣列", "refs", "not_array")
     if len(raw) > MAX_REFS:
-        _fail(f"最多 {MAX_REFS} 個參考", "refs")
+        _fail(f"最多 {MAX_REFS} 個參考", "refs", "too_many_refs")
     by_id = {m["id"]: m for m in materials}
     out, ids = [], set()
     for i, r in enumerate(raw):
         loc = f"refs[{i}]"
         if not isinstance(r, dict):
-            _fail("必須是物件", loc)
+            _fail("必須是物件", loc, "not_object")
         entity = _entity("ref", r, ids)
-        m = _material(by_id, r.get("material"), f"{loc}.material", entity)
+        m = _material(by_id, r.get("material", _MISSING), f"{loc}.material", entity)
         kind = m["kind"]
         mode = r.get("mode", "follow") if kind == "video" else None
         if kind == "video" and mode not in REF_MODES:
-            _fail(f"mode 必須是 {list(REF_MODES)}", f"{loc}.mode", entity)
+            _fail(f"mode 必須是 {list(REF_MODES)}", f"{loc}.mode", "bad_enum", entity)
         allowed = {"image": ("id", "material", "from", "to"),
                    "video": ("id", "material", "from", "to", "mode", "in", "audio") + (("length",) if mode == "fixed" else ()),
                    "audio": ("id", "material", "from", "to", "in", "length")}[kind]
         _keys(r, allowed, loc, entity)
-        ref = {"id": _id(r.get("id"), ids, f"{loc}.id"), "material": m["id"],
-               "from": _frame(r.get("from"), f"{loc}.from", entity=entity)}
-        ref["to"] = _frame(r.get("to"), f"{loc}.to", ref["from"] + 1, entity)
+        ref = {"id": _id(r.get("id", _MISSING), ids, f"{loc}.id"), "material": m["id"],
+               "from": _frame(r.get("from", _MISSING), f"{loc}.from", entity=entity)}
+        ref["to"] = _frame(r.get("to", _MISSING), f"{loc}.to", ref["from"] + 1, entity)
         if kind == "video":
             ref.update(mode=mode, **{"in": _frame(r.get("in", 0), f"{loc}.in", entity=entity)},
                        audio=_bool(r.get("audio", False), f"{loc}.audio", entity))
         if kind == "audio":
             ref["in"] = _frame(r.get("in", 0), f"{loc}.in", entity=entity)
         if kind == "audio" or mode == "fixed":
-            ref["length"] = _frame(r.get("length"), f"{loc}.length", 1, entity)
+            ref["length"] = _frame(r.get("length", _MISSING), f"{loc}.length", 1, entity)
         out.append(ref)
     return out
 
 
 def parse_anchors(raw, materials):
     if not isinstance(raw, list):
-        _fail("必須是陣列", "anchors")
+        _fail("必須是陣列", "anchors", "not_array")
     if len(raw) > MAX_ANCHORS:
-        _fail(f"最多 {MAX_ANCHORS} 個錨定", "anchors")
+        _fail(f"最多 {MAX_ANCHORS} 個錨定", "anchors", "too_many_anchors")
     by_id = {m["id"]: m for m in materials}
     out, ids = [], set()
     for i, a in enumerate(raw):
         loc = f"anchors[{i}]"
         if not isinstance(a, dict):
-            _fail("必須是物件", loc)
+            _fail("必須是物件", loc, "not_object")
         entity = _entity("anchor", a, ids)
-        m = _material(by_id, a.get("material"), f"{loc}.material", entity)
+        m = _material(by_id, a.get("material", _MISSING), f"{loc}.material", entity)
         role = ANCHOR_ROLE[m["kind"]]
-        if a.get("role") != role:
-            _fail(f"{m['kind']} 素材的錨定角色必須是 {role}", f"{loc}.role", entity)
+        if _present(a.get("role", _MISSING), f"{loc}.role", entity) != role:
+            _fail(f"{m['kind']} 素材的錨定角色必須是 {role}", f"{loc}.role", "wrong_role", entity)
         allowed = {"keyframe": ("id", "material", "role", "at"),
                    "guide": ("id", "material", "role", "at", "in", "length", "audio"),
                    "lock": ("id", "material", "role", "at", "in", "length")}[role]
         _keys(a, allowed, loc, entity)
-        anchor = {"id": _id(a.get("id"), ids, f"{loc}.id"), "material": m["id"], "role": role,
-                  "at": _frame(a.get("at"), f"{loc}.at", entity=entity)}
+        anchor = {"id": _id(a.get("id", _MISSING), ids, f"{loc}.id"), "material": m["id"], "role": role,
+                  "at": _frame(a.get("at", _MISSING), f"{loc}.at", entity=entity)}
         if role != "keyframe":
             anchor["in"] = _frame(a.get("in", 0), f"{loc}.in", entity=entity)
-            anchor["length"] = _frame(a.get("length"), f"{loc}.length", 1, entity)
+            anchor["length"] = _frame(a.get("length", _MISSING), f"{loc}.length", 1, entity)
         if role == "guide":
             anchor["audio"] = _bool(a.get("audio", False), f"{loc}.audio", entity)
         out.append(anchor)
@@ -250,7 +269,7 @@ def validate_geometry(refs, anchors, snapshots, segments, h3):
         for (first, first_id), (second, second_id) in zip(spans, spans[1:]):
             if second[0] < first[1]:
                 raise TimelineError(NODE_LABEL, "E_ANCHOR_OVERLAP", stream=stream, first=first_id, second=second_id,
-                                    detail=_detail(entity={"kind": "anchor", "id": second_id}, field="at"))
+                                    detail=_detail("overlap", {"kind": "anchor", "id": second_id}, "at"))
 
 
 def _item(snap, extra):
@@ -285,8 +304,8 @@ def segment_manifest(segments, index, refs, anchors, snapshots, h3, carry_in=Non
                 n = min(requested, length)
                 if n < H3_MIN_REF_FRAMES:
                     raise TimelineError(NODE_LABEL, "E_REF_SHORT", segment=index + 1, name=snap["name"], frames=n,
-                                        detail=_detail(entity={"kind": "ref", "id": r["id"]},
-                                                       field="length" if r["mode"] == "fixed" else None))
+                                        detail=_detail("too_short", {"kind": "ref", "id": r["id"]},
+                                                       "length" if r["mode"] == "fixed" else None))
                 effective = h3_crop(n)
             videos.append(_item(snap, {"binding": r["id"], "mode": r["mode"], "source_start": start,
                                        "requested_frames": requested, "effective_frames": effective,
@@ -356,7 +375,7 @@ def _h3_tags(manifest, index):
         if len(manifest[kind]) > limit:
             raise TimelineError(NODE_LABEL, "E_REF_LIMIT", segment=index + 1, kind=kind,
                                 count=len(manifest[kind]), limit=limit,
-                                detail=_detail(entity={"kind": "segment", "id": index}))
+                                detail=_detail("over_limit", {"kind": "segment", "id": index}))
     for n, p in enumerate(manifest["pictures"], 1):
         p["tag"] = f"<Picture {n}>"
     # core 呈現順序：圖 → 影片（配對音軌的 <Audio j> 緊接在 <Video k> 前）→ 獨立音訊

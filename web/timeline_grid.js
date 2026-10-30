@@ -7,8 +7,8 @@
 // rounding matches Python exactly.
 
 import {
-    FloatToken, MAX_FRAME, jsonErrorDetail, parseAnchors, parseMaterials, parseRefs, resolvePrompt, segmentManifest,
-    validateGeometry,
+    FloatToken, MAX_FRAME, intReason, jsonErrorDetail, objectReason, parseAnchors, parseMaterials, parseRefs,
+    resolvePrompt, segmentManifest, validateGeometry,
 } from "./timeline_materials.js";
 
 export const FPS_PRESETS = {
@@ -110,10 +110,6 @@ function isInt(v) {
     return typeof v === "number" && Number.isSafeInteger(v);
 }
 
-function hasOnlyKeys(v, allowed) {
-    return v !== null && typeof v === "object" && !Array.isArray(v) && Object.keys(v).every((k) => allowed.includes(k));
-}
-
 // Structural rules of parse_timeline_data (v1 and v2), in the same order, so the first failing
 // location matches. canonicalize() would otherwise drop unknown fields / wrong types and the
 // editor would show (and later save) a timeline that Python rejects. JSON.parse cannot see
@@ -133,42 +129,64 @@ export function schemaError(data) {
     return schemaErrorDetail(data)?.location ?? null;
 }
 
-// The same first error as a structured E_TIMELINE_JSON object {code, location, entity?, field?} (§4.2.5), or null.
+function textReason(value) {
+    if (typeof value !== "string") return "not_string";
+    return textOk(value) ? null : "lone_surrogate";
+}
+
+// The same first error as a structured E_TIMELINE_JSON object {code, location, reason, entity?, field?} (§4.2.5),
+// or null. `reason` is the machine code of the Python branch that rejects the same value.
 export function schemaErrorDetail(data) {
-    const at = (location) => ({ code: "E_TIMELINE_JSON", location, ...jsonErrorDetail(location) });
+    const at = (location, reason) => ({ code: "E_TIMELINE_JSON", location, ...jsonErrorDetail(location, null, reason) });
     // Python picks the key set with `version == 2`, which 2.0 satisfies too
     const v2 = data?.version === 2 || (data?.version instanceof FloatToken && Number(data.version.text) === 2);
-    if (!hasOnlyKeys(data, v2 ? ["version", "source", "prompt", "segments", "materials", "refs", "anchors"]
-        : ["version", "source", "segments"])) return at("timeline_data");
-    if (data.version !== 1 && data.version !== 2) return at("version");
+    let why = objectReason(data, v2 ? ["version", "source", "prompt", "segments", "materials", "refs", "anchors"]
+        : ["version", "source", "segments"]);
+    if (why) return at("timeline_data", why);
+    why = intReason(data.version, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)
+        ?? (data.version === 1 || data.version === 2 ? null : "unsupported_version");
+    if (why) return at("version", why);
     const source = data.source === undefined ? {} : data.source;
-    if (!hasOnlyKeys(source, ["origin_frame"])) return at("source");
-    if (source.origin_frame !== undefined && !frameOk(source.origin_frame, -MAX_FRAME)) return at("source.origin_frame");
-    if (data.prompt !== undefined && !textOk(data.prompt)) return at("prompt");
+    why = objectReason(source, ["origin_frame"]);
+    if (why) return at("source", why);
+    why = source.origin_frame === undefined ? null : intReason(source.origin_frame, -MAX_FRAME, MAX_FRAME);
+    if (why) return at("source.origin_frame", why);
+    why = data.prompt === undefined ? null : textReason(data.prompt);
+    if (why) return at("prompt", why);
     const segs = data.segments;
-    if (!Array.isArray(segs) || segs.length === 0 || segs.length > MAX_SEGMENTS) return at("segments");
+    if (segs === undefined) return at("segments", "missing_key");
+    if (!Array.isArray(segs)) return at("segments", "not_array");
+    if (segs.length === 0) return at("segments", "no_segments");
+    if (segs.length > MAX_SEGMENTS) return at("segments", "too_many_segments");
     const segmentKeys = v2 ? ["start", "end", "prompt", "seam_in", "seed"] : ["start", "end", "prompt", "seam_in"];
     for (let i = 0; i < segs.length; i++) {
         const loc = `segments[${i}]`;
         const s = segs[i];
-        if (!hasOnlyKeys(s, segmentKeys)) return at(loc);
+        why = objectReason(s, segmentKeys);
+        if (why) return at(loc, why);
         for (const key of ["start", "end"]) {
-            if (!frameOk(s[key])) return at(`${loc}.${key}`);
+            why = intReason(s[key], 0, MAX_FRAME);
+            if (why) return at(`${loc}.${key}`, why);
         }
-        if (s.prompt !== undefined && !textOk(s.prompt)) return at(`${loc}.prompt`);
-        if (s.seed !== undefined && s.seed !== null && !(isInt(s.seed) && s.seed >= 0)) return at(`${loc}.seed`);
+        why = s.prompt === undefined ? null : textReason(s.prompt);
+        if (why) return at(`${loc}.prompt`, why);
+        why = s.seed === undefined || s.seed === null ? null : intReason(s.seed, 0, Number.MAX_SAFE_INTEGER);
+        if (why) return at(`${loc}.seed`, why);
         if (s.seam_in === undefined) continue;
         const seam = s.seam_in;
-        if (!hasOnlyKeys(seam, ["kind", "frames", "audio_curve"])) return at(`${loc}.seam_in`);
-        if (seam.kind !== "cut" && seam.kind !== "crossfade") return at(`${loc}.seam_in.kind`);
+        why = objectReason(seam, ["kind", "frames", "audio_curve"]);
+        if (why) return at(`${loc}.seam_in`, why);
+        if (seam.kind === undefined) return at(`${loc}.seam_in.kind`, "missing_key");
+        if (seam.kind !== "cut" && seam.kind !== "crossfade") return at(`${loc}.seam_in.kind`, "bad_enum");
         if (seam.kind === "cut") {
-            if (Object.keys(seam).length !== 1) return at(`${loc}.seam_in`);
+            if (Object.keys(seam).length !== 1) return at(`${loc}.seam_in`, "unknown_key");
             continue;
         }
         if (seam.audio_curve !== undefined && !["auto", "linear", "equal_power"].includes(seam.audio_curve)) {
-            return at(`${loc}.seam_in.audio_curve`);
+            return at(`${loc}.seam_in.audio_curve`, "bad_enum");
         }
-        if (!frameOk(seam.frames, 1)) return at(`${loc}.seam_in.frames`);
+        why = intReason(seam.frames, 1, MAX_FRAME);
+        if (why) return at(`${loc}.seam_in.frames`, why);
     }
     // absent → []; an explicit null still fails, like Python's data.get(key, [])
     const listOf = (key) => (data[key] === undefined ? [] : data[key]);
@@ -182,8 +200,10 @@ export function schemaErrorDetail(data) {
 
 // Same check order as the Python validators, so the first reported location matches.
 export function validate(data, mode, fpsKey, grid, sourceFrames = null, hasSource = false) {
+    if (!MODES.includes(mode)) return fail("mode", "unknown_mode");
+    if (!Object.hasOwn(FPS_PRESETS, fpsKey)) return fail("fps", "unknown_fps");
+    if (!GRIDS.includes(grid)) return fail("grid", "unknown_grid");
     const fps = FPS_PRESETS[fpsKey];
-    if (!fps) return fail("fps", "unknown_fps");
     const effectiveGrid = mode === "cut" ? "free" : grid;
     const segs = data.segments;
     if (!Array.isArray(segs) || segs.length === 0) return fail("segments", "no_segments");
@@ -193,7 +213,7 @@ export function validate(data, mode, fpsKey, grid, sourceFrames = null, hasSourc
         if (!frameOk(segs[i].end)) return fail(`segments[${i}].end`, "not_frame_index");
     }
     if (effectiveGrid === H3_GRID && (fps[0] !== 24 || fps[1] !== 1)) {
-        return { ok: false, error: { code: "E_H3_FPS", location: "fps", reason: "h3_fps" } };
+        return { ok: false, error: { code: "E_H3_FPS", location: "fps", ...jsonErrorDetail("fps", null, "h3_fps") } };
     }
     if (mode === "generate") {
         if (segs[0].start !== 0) return fail("segments[0].start", "first_start_zero");

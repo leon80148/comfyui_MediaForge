@@ -228,7 +228,7 @@ Verified with ComfyUI core 0.42.5 and frontend 1.55.18 (Nodes 2.0 and classic) o
 | No model (frames path) | Works | Load Segment Frames → Append `frames` / `audio` → Assemble with Start / End Loop, in all four core cache modes (classic / lru / none / ram_pressure, the default) |
 | MiniMax H3 — Sample Segments (single node) | **Supported** | 832×480 and 320×192, turbo 4-step. Same seed / sampler / sigmas as the loop path → identical sampled latents (max diff 0) and the same 260 frames / 346,667 samples. Core received the resolved `<Picture N>` / `<Video N>` / `<Audio N>` prompt, image order and cropped reference frames from the timeline; keyframe / guide frame indices matched. Locked audio tokens stayed within 2.4e-7 of the encoded original after sampling; the `lock_audio = original` master equals the original PCM sample for sample in the lock ranges; envelope correlation of the decoded generated audio vs. the original 0.997–1.000. 2 → 6 segments at 832×480: observed peak RSS +0.15 GiB (one segment of RGB is 0.48 GiB). Changing one segment's seed re-sampled only that segment and the next; adding a segment sampled only the new one |
 
-Encode H3 Segment (references, keyframes, guides, latent audio lock — used by both paths) is covered by contract tests against core's `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` classes with stand-in CLIP / VAE, and Sample Segments' expansion and caching by tests on the real core executor with stand-ins for the H3 model nodes (CPU). Neither has been measured with real H3 models yet.
+Verified on 2026-10-30 (RTX 5090, ComfyUI 0.42.5, H3 fl2va fp8 + turbo 4-step LoRA): the Sample Segments row above was measured with the real H3 models. Besides that, Encode H3 Segment is covered by contract tests against core's `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` classes, and Sample Segments' expansion and caching by tests on the real core executor with stand-ins for the H3 model nodes (every invalidation case, eviction in LRU / RAM-pressure modes, interruption during encode / sampling / append). The loop path with Encode H3 Segment shares that code but was not run end-to-end on GPU on its own.
 
 Rejected (the run stops with an error): VACE reference extra tokens, uncropped guides, batch > 1, latents whose layout doesn't match the plan, audio carry on non-H3 latents, Sample Segments / Encode H3 Segment on anything but `generate` + `grid = h3_5+17n` + 24 fps.
 
@@ -1392,7 +1392,7 @@ Low-memory single-node sampler for a MiniMax H3 timeline. When it runs it expand
 | `audio_vae` *(optional)* | VAE | H3 audio VAE — decodes the audio and encodes audio materials; required when the timeline has audio references, soundtracks or locks. Without it the result has no audio track |
 | `negative` *(optional)* | CONDITIONING | Connect to sample with `CFGGuider` and `cfg`; without it `BasicGuider` (turbo models) |
 
-**Outputs**: `state` (MF_SEGMENT_STATE) → Assemble Segments; `report` STRING (JSON per segment: effective seed, whether it starts a shot, its three identities, tags, reference-video requested / effective frames, anchors, latent lock tokens, whether audio carry was skipped; plus `effective` entries for `cfg` and audio decoding).
+**Outputs**: `state` (MF_SEGMENT_STATE) → Assemble Segments; `report` STRING (JSON per segment: effective seed, whether it starts a shot, its three identities, tags, reference-video requested / effective frames, anchors, latent lock tokens, whether audio carry was skipped, material fingerprints, each lock's encoding policy (`ctx_v1`) and planned context tokens, a planned per-segment `effective` list (seed, audio carry, taper, lock — verified later by Append's drift check — and reference crops) and `estimates` (decoded RGB bytes, spill bytes, reference-material decode sizes); plus `effective` entries for `cfg` and audio decoding). Estimates are sizes, not a memory guarantee.
 
 **Notes**: every model input is wired from your own nodes into the group; each segment's spec goes in as a constant, so unchanged segments come from the cache. Errors inside the group show on this node, labelled with the inner node's name. Batch 1 only.
 
@@ -1696,7 +1696,7 @@ node --test tests/js/timeline_grid.test.mjs tests/js/timeline_edit.test.mjs
 - **Phase 5** 🚧 AI — WhisperTranscribe / TranslateSubtitle (experimental schema)
 - **Phase 6** 🚧 Standalone Audio domain — `MF_ExtractAudio` ships first; file-level denoise, normalize-file, audio cut/trim, ducking still planned (the Compose chain audio ops in Phase 4.5 are a subset)
 - **Timeline** ✅ Timeline & long video — Edit Timeline editor, segment loop, latent tail-carry, spill-to-disk assembly (MiniMax H3 AV supported; LTX-2 / Wan 2.2 experimental)
-- **Timeline v2** 🚧 Director — material library, references / keyframes / guides / lock audio, Encode H3 Segment, Load Segment Media, single-node H3 Sample Segments (GPU verification pending)
+- **Timeline v2** ✅ Director — material library, references / keyframes / guides / lock audio, Encode H3 Segment, Load Segment Media, single-node H3 Sample Segments (GPU-verified with H3 turbo 4-step, see [Compatibility](#compatibility))
 - **Phase 7** ⏳ Net domain — yt-dlp ingest, HTTP fetch (lazy-import)
 
 ## License

@@ -52,8 +52,8 @@ class TimelineError(ValueError):
     """帶穩定 key 的 ValueError；`str(err)` 就是完整的使用者訊息。
 
     `fields` 是訊息參數（其中 `reason` 是中文說明）；`detail` 是不進訊息的機器欄位（§4.2.5）：
-    `reason` 原因碼、`entity` = {"kind", "id"}（素材 / 參考 / 錨定用合法 id，段落用 index）、`field` 欄位名，
-    沒有的就不放。web/timeline_*.js 的錯誤物件帶同樣的鍵。
+    `reason` 原因碼（timeline_plan / timeline_materials 的錯誤一律帶；碼表在 §4.2.5）、`entity` = {"kind", "id"}
+    （素材 / 參考 / 錨定用合法 id，段落用 index）、`field` 欄位名，沒有的就不放。web/timeline_*.js 的錯誤物件帶同樣的鍵。
     """
 
     def __init__(self, node_label, key, *, detail=None, **fields):

@@ -8,9 +8,10 @@ Append 內解碼後落盤，不進快取。
 """
 import json
 
-from ..utils.h3_adapter import lock_context, needs_audio_vae
+from ..utils.h3_adapter import lock_context, material_decode_bytes, needs_audio_vae
+from ..utils.segment_spill import FFV1_BYTES_PER_PIXEL
 from ..utils.timeline_materials import H3_AUDIO_RATE, LOCK_POLICY
-from ..utils.timeline_plan import H3_FPS, H3_GRID, segment_view
+from ..utils.timeline_plan import H3_FPS, H3_GRID, sample_index, segment_view
 
 LABEL = "Sample Segments"
 MANIFEST_KINDS = ("pictures", "videos", "audios", "keyframes", "guides", "locks")
@@ -34,7 +35,19 @@ def _effective(spec, carry_audio, mask, tapers):
     return out
 
 
-def _report(plan, noise_seed, audio_vae, negative, cfg, carry_audio, mask, tapers):
+def _estimates(spec, rate, has_audio, width, height, ref_video_short_edge):
+    """估算（bytes），不是保證：Append 解碼的整段 RGB float32（E_RAM 預檢同一量級）、本段 emit 區間的 spill
+    （FFV1 + float32 雙聲道 WAV；Append 的 E_DISK 預檢要求可用空間 2 倍）、Encode 每次素材解碼的大小。"""
+    fps = tuple(spec["fps"])
+    a, e = spec["emit_interval"]
+    samples = sample_index(e, rate, fps) - sample_index(a, rate, fps) if has_audio else 0
+    return {"rgb_decode_bytes": spec["length"] * width * height * 3 * 4,
+            "spill_bytes": {"video": round((e - a) * width * height * FFV1_BYTES_PER_PIXEL), "audio": samples * 2 * 4},
+            "material_decode_bytes": material_decode_bytes(spec["materials"], fps, rate, width, height,
+                                                           ref_video_short_edge)}
+
+
+def _report(plan, noise_seed, audio_vae, negative, cfg, carry_audio, mask, tapers, width, height, ref_video_short_edge):
     rate = getattr(audio_vae, "audio_sample_rate", H3_AUDIO_RATE)  # 與 h3_adapter.write_locks 相同的取樣率
     segments = []
     for spec in plan["specs"]:
@@ -56,6 +69,7 @@ def _report(plan, noise_seed, audio_vae, negative, cfg, carry_audio, mask, taper
                                "context_tokens": list(lock_context(x, tuple(spec["fps"]), rate)[1:])}
                               for x in m["locks"]],
             "effective": _effective(spec, carry_audio, mask, tapers),
+            "estimates": _estimates(spec, rate, audio_vae is not None, width, height, ref_video_short_edge),
         })
     return {"version": 2, "node": LABEL, "plan_id": plan["plan_id"], "segments": segments,
             "effective": [{"feature": "cfg", "requested": cfg, "applied": negative is not None,
@@ -147,7 +161,7 @@ class MF_SampleSegments:
                              latent=smp.out(0), vae=links["vae"], **audio, **state)
             prev_smp, prev_app = smp, app
         report = _report(segment_plan, noise_seed, audio_vae, negative, cfg, carry_audio, mask,
-                         {"video": video_taper_tokens, "audio": audio_taper_tokens})
+                         {"video": video_taper_tokens, "audio": audio_taper_tokens}, width, height, ref_video_short_edge)
         return {"result": (prev_app.out(0), json.dumps(report, ensure_ascii=False)), "expand": graph.finalize()}
 
 

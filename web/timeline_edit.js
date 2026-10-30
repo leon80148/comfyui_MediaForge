@@ -233,6 +233,7 @@ export function probeIssue(body, kind) {
     const positive = (v) => Number.isSafeInteger(v) && v > 0;
     if (body?.version !== 2) return "probe_version";
     if (body.kind !== kind) return "kind_mismatch";
+    if (typeof body.fingerprint !== "string" || !body.fingerprint) return "probe_fields";
     if (kind === "image") return positive(body.width) && positive(body.height) ? null : "probe_fields";
     if (!positive(body.duration_us)) return "no_duration";
     if (kind === "video" && typeof body.has_audio !== "boolean") return "probe_fields";

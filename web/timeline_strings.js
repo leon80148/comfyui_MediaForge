@@ -8,6 +8,11 @@ export const S = {
     upload: "上傳影片",
     uploading: "上傳中…",
     uploadFailed: "上傳失敗",
+    sourceUploadDropped: "上傳期間來源影片已被復原、重新載入或改選，剛上傳的影片未套用（檔案仍在 input/）",
+    sourceProbing: "讀取中",
+    sourceProbeFailed: "無法讀取來源影片資訊",
+    sourceUnverified: (why) => `來源影片尚未驗證（${why}）`,
+    sourceRangeUnknown: "還不能確認各段是否在來源影片範圍內",
     play: "播放",
     pause: "暫停",
     fit: "全覽",
@@ -154,6 +159,8 @@ export const S = {
     // reason codes returned by timeline_grid.js
     reasons: {
         unknown_fps: "不支援的 fps",
+        unknown_mode: "不支援的 mode",
+        unknown_grid: "不支援的 grid",
         no_segments: "至少需要一段",
         too_many_segments: "最多 256 段",
         not_frame_index: "必須是 ≥ 0 的整數幀",

@@ -7,6 +7,7 @@ FFmpeg 自動判斷。不沿用 `resolve_output_path()`（刻意允許跳出 out
 """
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -81,9 +82,11 @@ def _rate(text):
 
 def _micros(text):
     try:
-        return round(float(text) * 1_000_000)
+        us = float(text) * 1_000_000
     except (TypeError, ValueError):
         return None
+    # inf / nan（或乘完溢位）＝ 未知（§9）
+    return round(us) if math.isfinite(us) else None
 
 
 def _timing(video):

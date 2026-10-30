@@ -3,8 +3,8 @@
 // Mirrors utils/timeline_materials.py (Python stays the authority and re-validates on every
 // run); both sides are checked against tests/golden/timeline_materials_vectors.json. Failures
 // come back as {ok: false, error: {code, ...fields}}: the message fields of Python's TimelineError
-// plus its machine `detail` (§4.2.5) — `reason` code, `entity` {kind, id} and `field`, each only when
-// it applies. Frame fields are capped at MAX_FRAME (2^31−1), so plain Number math on them is exact.
+// plus its machine `detail` (§4.2.5) — a `reason` code on every error, `entity` {kind, id} and `field` only
+// when they apply. Frame fields are capped at MAX_FRAME (2^31−1), so plain Number math on them is exact.
 
 export const KINDS = ["image", "video", "audio"];
 export const ANCHOR_ROLE = { image: "keyframe", video: "guide", audio: "lock" };
@@ -135,6 +135,9 @@ export function strictParse(text) {
     return out;
 }
 
+// Python's error for any text strictParse() throws on (raw level, §4.2.5).
+export const RAW_JSON_ERROR = Object.freeze({ code: "E_TIMELINE_JSON", location: "timeline_data", reason: "invalid_json" });
+
 // ---- structure (parse_materials / parse_refs / parse_anchors; same check order and locations) ----
 
 const LOCATION_RE = /^(segments|materials|refs|anchors)\[([0-9]+)\](?:\.(.+))?$/;
@@ -159,24 +162,44 @@ function entityOf(kind, obj, seen) {
     return isObject(obj) && idOk(obj.id, seen) ? { kind, id: obj.id } : null;
 }
 
-function fail(location, entity = null) {
-    return { ok: false, error: { code: "E_TIMELINE_JSON", location, ...jsonErrorDetail(location, entity) } };
+function fail(location, reason, entity = null) {
+    return { ok: false, error: { code: "E_TIMELINE_JSON", location, ...jsonErrorDetail(location, entity, reason) } };
 }
 
 function isObject(v) {
     return v !== null && typeof v === "object" && !Array.isArray(v) && !(v instanceof FloatToken);
 }
 
-function onlyKeys(v, allowed) {
-    return isObject(v) && Object.keys(v).every((k) => allowed.includes(k));
+// The *Reason() checks return null or the machine reason Python's parser raises for the same branch.
+// JSON has no undefined, so undefined = key absent (missing_key); an explicit null fails the type check.
+export function objectReason(v, allowed) {
+    if (!isObject(v)) return "not_object";
+    return Object.keys(v).every((k) => allowed.includes(k)) ? null : "unknown_key";
 }
 
-function frameOk(v, minimum = 0) {
-    return Number.isInteger(v) && minimum <= v && v <= MAX_FRAME;
+// strictParse() turns an integer token past ±1.8e308 into ±Infinity; Python keeps it an int (out of range).
+export function intReason(v, minimum, maximum) {
+    if (v === undefined) return "missing_key";
+    if (typeof v !== "number" || (Number.isFinite(v) && !Number.isInteger(v))) return "not_integer";
+    return minimum <= v && v <= maximum ? null : "out_of_range";
+}
+
+function frameReason(v, minimum = 0) {
+    return intReason(v, minimum, MAX_FRAME);
+}
+
+// a required field: absent → missing_key, present but rejected by ok() → code
+function requiredReason(v, ok, code) {
+    if (v === undefined) return "missing_key";
+    return ok(v) ? null : code;
+}
+
+function idReason(v, seen) {
+    return requiredReason(v, (x) => typeof x === "string" && ID_RE.test(x), "bad_id") ?? (seen.has(v) ? "duplicate_id" : null);
 }
 
 function idOk(v, seen) {
-    return typeof v === "string" && ID_RE.test(v) && !seen.has(v);
+    return idReason(v, seen) === null;
 }
 
 function orDefault(v, fallback) {
@@ -202,19 +225,25 @@ export function refOk(rel) {
 }
 
 export function parseMaterials(raw) {
-    if (!Array.isArray(raw) || raw.length > MAX_MATERIALS) return fail("materials");
+    if (!Array.isArray(raw)) return fail("materials", "not_array");
+    if (raw.length > MAX_MATERIALS) return fail("materials", "too_many_materials");
     const out = [];
     const ids = new Set();
     const names = new Set();
     for (const [i, m] of raw.entries()) {
         const loc = `materials[${i}]`;
         const entity = entityOf("material", m, ids);
-        if (!onlyKeys(m, ["id", "kind", "ref", "name"])) return fail(loc, entity);
-        if (!idOk(m.id, ids)) return fail(`${loc}.id`);
+        let why = objectReason(m, ["id", "kind", "ref", "name"]);
+        if (why) return fail(loc, why, entity);
+        why = idReason(m.id, ids);
+        if (why) return fail(`${loc}.id`, why);
         ids.add(m.id);
-        if (!KINDS.includes(m.kind)) return fail(`${loc}.kind`, entity);
-        if (!refOk(m.ref)) return fail(`${loc}.ref`, entity);
-        if (!nameOk(m.name) || names.has(m.name)) return fail(`${loc}.name`, entity);
+        why = requiredReason(m.kind, (k) => KINDS.includes(k), "bad_enum");
+        if (why) return fail(`${loc}.kind`, why, entity);
+        why = requiredReason(m.ref, refOk, "bad_ref");
+        if (why) return fail(`${loc}.ref`, why, entity);
+        why = requiredReason(m.name, nameOk, "bad_name") ?? (names.has(m.name) ? "duplicate_name" : null);
+        if (why) return fail(`${loc}.name`, why, entity);
         names.add(m.name);
         out.push({ id: m.id, kind: m.kind, ref: m.ref.replaceAll("\\", "/"), name: m.name });
     }
@@ -222,42 +251,50 @@ export function parseMaterials(raw) {
 }
 
 export function parseRefs(raw, materials) {
-    if (!Array.isArray(raw) || raw.length > MAX_REFS) return fail("refs");
+    if (!Array.isArray(raw)) return fail("refs", "not_array");
+    if (raw.length > MAX_REFS) return fail("refs", "too_many_refs");
     const byId = new Map(materials.map((m) => [m.id, m]));
     const out = [];
     const ids = new Set();
     for (const [i, r] of raw.entries()) {
         const loc = `refs[${i}]`;
-        if (!isObject(r)) return fail(loc);
+        if (!isObject(r)) return fail(loc, "not_object");
         const entity = entityOf("ref", r, ids);
+        let why = requiredReason(r.material, (v) => byId.has(v), "unknown_material");
+        if (why) return fail(`${loc}.material`, why, entity);
         const m = byId.get(r.material);
-        if (m === undefined) return fail(`${loc}.material`, entity);
         const mode = m.kind === "video" ? orDefault(r.mode, "follow") : null;
-        if (m.kind === "video" && !REF_MODES.includes(mode)) return fail(`${loc}.mode`, entity);
+        if (m.kind === "video" && !REF_MODES.includes(mode)) return fail(`${loc}.mode`, "bad_enum", entity);
         const allowed = {
             image: ["id", "material", "from", "to"],
             video: ["id", "material", "from", "to", "mode", "in", "audio", ...(mode === "fixed" ? ["length"] : [])],
             audio: ["id", "material", "from", "to", "in", "length"],
         }[m.kind];
-        if (!onlyKeys(r, allowed)) return fail(loc, entity);
-        if (!idOk(r.id, ids)) return fail(`${loc}.id`);
+        why = objectReason(r, allowed);
+        if (why) return fail(loc, why, entity);
+        why = idReason(r.id, ids);
+        if (why) return fail(`${loc}.id`, why);
         ids.add(r.id);
-        if (!frameOk(r.from)) return fail(`${loc}.from`, entity);
-        if (!frameOk(r.to, r.from + 1)) return fail(`${loc}.to`, entity);
+        why = frameReason(r.from);
+        if (why) return fail(`${loc}.from`, why, entity);
+        why = frameReason(r.to, r.from + 1);
+        if (why) return fail(`${loc}.to`, why, entity);
         const ref = { id: r.id, material: m.id, from: r.from, to: r.to };
         if (m.kind !== "image") {
             const start = orDefault(r.in, 0);
-            if (!frameOk(start)) return fail(`${loc}.in`, entity);
+            why = frameReason(start);
+            if (why) return fail(`${loc}.in`, why, entity);
             if (m.kind === "video") {
                 const audio = orDefault(r.audio, false);
-                if (typeof audio !== "boolean") return fail(`${loc}.audio`, entity);
+                if (typeof audio !== "boolean") return fail(`${loc}.audio`, "not_boolean", entity);
                 Object.assign(ref, { mode, in: start, audio });
             } else {
                 ref.in = start;
             }
         }
         if (m.kind === "audio" || mode === "fixed") {
-            if (!frameOk(r.length, 1)) return fail(`${loc}.length`, entity);
+            why = frameReason(r.length, 1);
+            if (why) return fail(`${loc}.length`, why, entity);
             ref.length = r.length;
         }
         out.push(ref);
@@ -266,37 +303,45 @@ export function parseRefs(raw, materials) {
 }
 
 export function parseAnchors(raw, materials) {
-    if (!Array.isArray(raw) || raw.length > MAX_ANCHORS) return fail("anchors");
+    if (!Array.isArray(raw)) return fail("anchors", "not_array");
+    if (raw.length > MAX_ANCHORS) return fail("anchors", "too_many_anchors");
     const byId = new Map(materials.map((m) => [m.id, m]));
     const out = [];
     const ids = new Set();
     for (const [i, a] of raw.entries()) {
         const loc = `anchors[${i}]`;
-        if (!isObject(a)) return fail(loc);
+        if (!isObject(a)) return fail(loc, "not_object");
         const entity = entityOf("anchor", a, ids);
+        let why = requiredReason(a.material, (v) => byId.has(v), "unknown_material");
+        if (why) return fail(`${loc}.material`, why, entity);
         const m = byId.get(a.material);
-        if (m === undefined) return fail(`${loc}.material`, entity);
         const role = ANCHOR_ROLE[m.kind];
-        if (a.role !== role) return fail(`${loc}.role`, entity);
+        why = requiredReason(a.role, (v) => v === role, "wrong_role");
+        if (why) return fail(`${loc}.role`, why, entity);
         const allowed = {
             keyframe: ["id", "material", "role", "at"],
             guide: ["id", "material", "role", "at", "in", "length", "audio"],
             lock: ["id", "material", "role", "at", "in", "length"],
         }[role];
-        if (!onlyKeys(a, allowed)) return fail(loc, entity);
-        if (!idOk(a.id, ids)) return fail(`${loc}.id`);
+        why = objectReason(a, allowed);
+        if (why) return fail(loc, why, entity);
+        why = idReason(a.id, ids);
+        if (why) return fail(`${loc}.id`, why);
         ids.add(a.id);
-        if (!frameOk(a.at)) return fail(`${loc}.at`, entity);
+        why = frameReason(a.at);
+        if (why) return fail(`${loc}.at`, why, entity);
         const anchor = { id: a.id, material: m.id, role, at: a.at };
         if (role !== "keyframe") {
             const start = orDefault(a.in, 0);
-            if (!frameOk(start)) return fail(`${loc}.in`, entity);
-            if (!frameOk(a.length, 1)) return fail(`${loc}.length`, entity);
+            why = frameReason(start);
+            if (why) return fail(`${loc}.in`, why, entity);
+            why = frameReason(a.length, 1);
+            if (why) return fail(`${loc}.length`, why, entity);
             Object.assign(anchor, { in: start, length: a.length });
         }
         if (role === "guide") {
             const audio = orDefault(a.audio, false);
-            if (typeof audio !== "boolean") return fail(`${loc}.audio`, entity);
+            if (typeof audio !== "boolean") return fail(`${loc}.audio`, "not_boolean", entity);
             anchor.audio = audio;
         }
         out.push(anchor);
@@ -354,7 +399,7 @@ export function validateGeometry(refs, anchors, snapshots, segments, h3) {
         for (let k = 1; k < spans.length; k++) {
             if (spans[k][0] < spans[k - 1][1]) {
                 return { code: "E_ANCHOR_OVERLAP", stream, first: spans[k - 1][2], second: spans[k][2],
-                    ...detail(null, { kind: "anchor", id: spans[k][2] }, "at") };
+                    ...detail("overlap", { kind: "anchor", id: spans[k][2] }, "at") };
             }
         }
     }
@@ -395,7 +440,7 @@ export function segmentManifest(segments, index, refs, anchors, snapshots, h3, c
                 const n = Math.min(requested, length);
                 if (n < H3_MIN_REF_FRAMES) {
                     return { ok: false, error: { code: "E_REF_SHORT", segment: index + 1, name: snap.name, frames: n,
-                        ...detail(null, { kind: "ref", id: r.id }, r.mode === "fixed" ? "length" : null) } };
+                        ...detail("too_short", { kind: "ref", id: r.id }, r.mode === "fixed" ? "length" : null) } };
                 }
                 effective = h3Crop(n);
             }
@@ -459,7 +504,7 @@ function h3Samples(manifest) {
 function h3Tags(manifest, index) {
     for (const [kind, limit] of Object.entries(H3_LIMITS)) {
         const count = manifest[kind].length;
-        if (count > limit) return { code: "E_REF_LIMIT", segment: index + 1, kind, count, limit, ...detail(null, { kind: "segment", id: index }) };
+        if (count > limit) return { code: "E_REF_LIMIT", segment: index + 1, kind, count, limit, ...detail("over_limit", { kind: "segment", id: index }) };
     }
     manifest.pictures.forEach((p, n) => {
         p.tag = `<Picture ${n + 1}>`;

@@ -228,7 +228,7 @@ Sample Segments 以常數把每段規格傳進該段的節點組，ComfyUI 的�
 | 不用模型（frames 路徑） | 可用 | Load Segment Frames → Append 的 `frames` / `audio` → Assemble，搭配 Start / End Loop，在 core 四種快取模式（classic / lru / none / ram_pressure 預設）都通過 |
 | MiniMax H3 — Sample Segments（單節點） | **支援** | 832×480 與 320×192、turbo 4-step。與 loop 路徑同 seed / sampler / sigmas → 取樣後 latent 完全相同（最大差 0），同樣 260 幀 / 346,667 samples。core 收到的 `<Picture N>` / `<Video N>` / `<Audio N>` prompt、圖片順序與裁切後的參考幀數與時間軸一致；keyframe / guide 的 frame index 正確。鎖定的音訊 token 取樣後與原聲編碼差 ≤ 2.4e-7；`lock_audio = original` 的母帶在鎖音區間與原聲 PCM 逐 sample 相同；解碼後生成音訊與原聲的包絡相關 0.997–1.000。832×480 從 2 段到 6 段：觀測峰值 RSS 只多 0.15 GiB（一段 RGB 是 0.48 GiB）。改一段 seed 只重跑該段與下一段；加段只取樣新的一段 |
 
-Encode H3 Segment（參考、關鍵幀、錨定片段、latent 鎖音 —— 兩條路徑共用）有針對 core `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` 類別的契約測試（CLIP / VAE 用替身）；Sample Segments 的展開與快取有真 core executor 測試（CPU，H3 模型節點用替身）。兩者都還沒用真的 H3 模型量測。
+2026-10-30 驗證（RTX 5090、ComfyUI 0.42.5、H3 fl2va fp8 + turbo 4-step LoRA）：上表 Sample Segments 一列是以真的 H3 模型量測。此外，Encode H3 Segment 有針對 core `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` 類別的契約測試；Sample Segments 的展開與快取有在真 core executor 上的測試（H3 模型節點用替身：每一種失效情況、LRU / RAM-pressure 模式的實際逐出、編碼 / 取樣 / 附加時中斷）。loop 路徑的 Encode H3 Segment 與它共用程式碼，但沒有單獨在 GPU 上端到端跑過。
 
 拒絕執行（直接報錯停止）：VACE reference 額外 token、未裁除的 guide、batch > 1、layout 與計畫不符的 latent、非 H3 latent 的音訊續接、Sample Segments / Encode H3 Segment 用在 `generate` + `grid = h3_5+17n` + 24 fps 以外的計畫。
 
@@ -1392,7 +1392,7 @@ MiniMax H3 時間軸的低記憶體單節點取樣器。執行時逐段展開成
 | `audio_vae` *(選用)* | VAE | H3 audio VAE —— 解碼音訊、編碼音訊類素材；時間軸有參考音訊、配對音軌或鎖定原音時必接。沒接時成品沒有音軌 |
 | `negative` *(選用)* | CONDITIONING | 接上時以 `CFGGuider` 與 `cfg` 取樣；不接時用 `BasicGuider`（turbo 模型） |
 
-**輸出**：`state`（MF_SEGMENT_STATE）→ Assemble Segments；`report` STRING（逐段 JSON：有效 seed、是否為鏡頭起點、三種身分、標籤、參考影片的要求 / 有效幀數、錨定、latent 鎖音 token、是否略過音訊續接；另有 `cfg` 與音訊解碼的 `effective` 欄位）。
+**輸出**：`state`（MF_SEGMENT_STATE）→ Assemble Segments；`report` STRING（逐段 JSON：有效 seed、是否為鏡頭起點、三種身分、標籤、參考影片的要求 / 有效幀數、錨定、latent 鎖音 token、是否略過音訊續接、素材指紋、各鎖音的編碼政策（`ctx_v1`）與規劃的上下文 token、逐段 planned `effective` 清單（seed、音訊續接、taper、鎖音——之後由 Append 的漂移檢查驗證——與參考裁切），以及 `estimates`（解碼後 RGB 位元組、spill 位元組、參考素材解碼大小）；另有 `cfg` 與音訊解碼的 `effective` 欄位）。估算是大小，不是記憶體保證。
 
 **說明**：所有模型輸入都從你自己的節點連進節點組；每段規格以常數傳入，所以沒變的段直接取自快取。組內節點的錯誤顯示在這個節點上，訊息標籤是內部節點名稱。只支援 batch 1。
 
@@ -1696,7 +1696,7 @@ node --test tests/js/timeline_grid.test.mjs tests/js/timeline_edit.test.mjs
 - **Phase 5** 🚧 AI — WhisperTranscribe / TranslateSubtitle(schema 仍 experimental)
 - **Phase 6** 🚧 獨立 Audio domain — `MF_ExtractAudio` 先上；檔案級 denoise、normalize-file、audio cut/trim、ducking 仍規劃中(Phase 4.5 的 Compose audio chain 是子集)
 - **Timeline** ✅ 時間軸與長片 — Edit Timeline 編輯器、分段迴圈、latent 尾端續接、落盤組裝（MiniMax H3 AV 支援；LTX-2 / Wan 2.2 為實驗性）
-- **Timeline v2** 🚧 Director — 素材庫、參考 / 關鍵幀 / 錨定片段 / 鎖定原音、Encode H3 Segment、Load Segment Media、單節點 H3 Sample Segments（尚待 GPU 驗證）
+- **Timeline v2** ✅ Director — 素材庫、參考 / 關鍵幀 / 錨定片段 / 鎖定原音、Encode H3 Segment、Load Segment Media、單節點 H3 Sample Segments（已用 H3 turbo 4-step 在 GPU 驗證，見[相容性](#相容性)）
 - **Phase 7** ⏳ Net domain — yt-dlp ingest、HTTP fetch(lazy import)
 
 ## License

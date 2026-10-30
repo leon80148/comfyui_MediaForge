@@ -4,6 +4,7 @@ FFmpeg 一律走 timeline_source 的安全輸入旗標。時間軸幀 f ↔ 素�
 video 幀）；先 accurate seek 再以 fps=num/den 重取樣——同 fps 的來源逐幀精確，不同 fps 則是決定
 性的最近幀取樣。
 """
+import math
 import subprocess
 from fractions import Fraction
 
@@ -69,39 +70,42 @@ def audio_fields(info):
 
 
 def describe_material(material, fps, input_dir=None):
-    """素材快照（plan 用，不含絕對路徑）。任何讀不到 / 不支援的狀況都是 E_MATERIAL。"""
-    def fail(reason):
-        raise TimelineError(EDIT_LABEL, "E_MATERIAL", name=material["name"], reason=reason)
+    """素材快照（plan 用，不含絕對路徑）。任何讀不到 / 不支援的狀況都是 E_MATERIAL（detail.reason 是穩定原因碼）。"""
+    def fail(code, reason):
+        raise TimelineError(EDIT_LABEL, "E_MATERIAL", name=material["name"], reason=reason,
+                            detail={"reason": code, "entity": {"kind": "material", "id": material["id"]}, "field": "ref"})
 
     try:
         path = resolve_timeline_source(material["ref"], input_dir)
-    except (ValueError, FileNotFoundError) as e:
-        fail(str(e))
+    except FileNotFoundError as e:
+        fail("not_found", str(e))
+    except ValueError as e:
+        fail("outside_input", str(e))
     snap = {"id": material["id"], "kind": material["kind"], "name": material["name"], "ref": material["ref"],
             "fingerprint": opaque_fingerprint(path)}
     if material["kind"] == "image":
         try:
             snap.update(image_fields(path))
         except ValueError as e:
-            fail(str(e))
+            fail("unreadable_image", str(e))
         return snap
     try:
         stdout = run_probe(path)
     except RuntimeError as e:
-        fail(str(e))
+        fail("probe_failed", str(e))
     if material["kind"] == "video":
         info = parse_probe_output(stdout)
         if info is None:
-            fail("沒有影像串流")
+            fail("no_video_stream", "沒有影像串流")
         snap.update(video_fields(info))
     else:
         info = parse_audio_probe(stdout)
         if info is None or not info["audio_sample_rate"] or not info["audio_channels"]:
-            fail("沒有可用的音訊串流")
+            fail("no_audio_stream", "沒有可用的音訊串流")
         snap.update(audio_fields(info))
     frames = timeline_frames(snap["duration_us"], fps)
     if frames is None or snap["duration_us"] <= 0:
-        fail("無法取得長度")
+        fail("unknown_length", "無法取得長度")
     snap["frames"] = frames
     return snap
 
@@ -156,18 +160,28 @@ def decode_video(path, seek, count, fps, size, scale, label, stream=0):
     return torch.from_numpy(arr.copy()).float().div_(255.0)
 
 
-def decode_audio(path, seek, video_start, count, sample_rate, channels, source_channels, label):
-    """最多 count 個 sample；來源提早結束時回傳較短的 PCM（尾端不補），由呼叫端決定補靜音或截短上下文。"""
+def decode_audio(path, seek, origin, count, sample_rate, channels, source_channels, label):
+    """最多 count 個 sample；來源提早結束時回傳較短的 PCM（尾端不補），由呼叫端決定補靜音或截短上下文。
+
+    seek / origin 是 -ss 軸（容器起點 = 0）上的時間；素材第 k 個 sample 在 origin + k / sample_rate。
+    第一個 sample = half_up((seek − origin)·sample_rate)，與 audio_sample_count 的端點同一個捨入。
+    """
+    first = math.floor((seek - origin) * sample_rate + Fraction(1, 2))
+    preroll = int(AUDIO_PREROLL * sample_rate)
     # 輸入端 -ss 跳到「不晚於目標的 video 關鍵幀」所在的 cluster：音訊可能晚一個封包才開始，第一個
-    # video 幀之前的音訊則整段讀不到；raw PCM 又沒有時間戳。所以往前多解一段——pre-roll 會落到第一個
-    # video 幀之前時就從檔頭讀——aresample 依 PTS 補齊空白（音軌晚於起點時也靠它），再以 sample 數精確裁掉前段
-    pre = seek if seek - AUDIO_PREROLL < video_start else AUDIO_PREROLL
+    # video 幀之前的音訊則整段讀不到；raw PCM 又沒有時間戳。所以往前多解一段——pre-roll 會落到素材原點
+    # 之前時就從檔頭讀——aresample 依 PTS 補齊空白（音軌晚於起點時也靠它），再以 sample 數精確裁掉前段。
+    # -ss 放在素材的 sample 格點上：FFmpeg 把 -ss 截到微秒、再取最近的 sample，不在格點上就會差一個
+    if first < preroll:
+        ss, skip = 0, math.floor(origin * sample_rate + Fraction(1, 2)) + first
+    else:
+        ss, skip = origin + Fraction(first - preroll, sample_rate), preroll
     # 重取樣放在最前面：atrim 以「進到它的取樣率」計數，-ar 是在 filter chain 最後才插入
-    af = (f"aresample={sample_rate}:async=1:first_pts=0,atrim=start_sample={round(pre * sample_rate)},"
+    af = (f"aresample={sample_rate}:async=1:first_pts=0,atrim=start_sample={skip},"
           f"asetpts=PTS-STARTPTS,atrim=end_sample={count}")
     if source_channels == 1 and channels == 2:
         af += ",pan=stereo|c0=c0|c1=c0"  # -ac 2 would upmix mono at -3 dB; the spec duplicates it
-    head = ["-ss", f"{float(seek - pre):.9f}"] if seek > pre else []
+    head = ["-ss", f"{float(ss):.9f}"] if ss > 0 else []
     out = run_capture(["ffmpeg", "-v", "error", "-nostdin"] + head + ffmpeg_input_args(path)
                       + ["-map", "0:a:0", "-af", af, "-ac", str(channels), "-ar", str(sample_rate), "-f", "f32le", "pipe:1"],
                       label, "解碼音訊")

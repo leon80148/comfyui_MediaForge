@@ -244,6 +244,7 @@ class TimelineEditor {
         this.probeChain = Promise.resolve();
         this.uploads = [];               // editor-wide queue: {file, kind, batch, status: queued|uploading|done|failed, ref, error}
         this.uploading = 0;
+        this.sourceUpload = null;        // the latest 上傳影片 pick; only that one may land (see upload())
         this.deferredBatches = [];       // batches that finished during a gesture; committed after it
         this.previewKey = null;          // material shown in the preview slot instead of the source
         this.destroyed = false;
@@ -647,12 +648,9 @@ class TimelineEditor {
             const card = el("div", {
                 class: `mf-tl-card${this.view.sel?.type === "material" && this.view.sel.id === m.id ? " selected" : ""}`,
                 tabindex: "0", title: `${S.kinds[m.kind]}：${m.ref}`,
-                onclick: () => {
-                    this.select({ type: "material", id: m.id });
-                    this.render();
-                },
             }, [thumb, el("span", { class: "name", text: m.name }),
                 el("span", { class: `state${status === "error" ? " error" : ""}`, text: status === "error" ? `⚠ ${state}` : state })]);
+            card.dataset.id = m.id;
             card.addEventListener("pointerdown", (e) => this.startCardDrag(e, m, card));
             card.addEventListener("keydown", (e) => {
                 if (e.key !== "Enter" && e.key !== " ") return;
@@ -1083,12 +1081,15 @@ class TimelineEditor {
     }
 
     // Green only after the full check (structure, segments, geometry, every manifest and prompt)
-    // passed with every material verified; otherwise the first problem, with its segment, and a
-    // click on the line selects where it is.
+    // passed with every material and the source verified; otherwise the first problem, with its
+    // segment, and a click on the line selects where it is.
     renderStatus(st) {
         const r = this.result;
         const [first] = this.check.list;
         const failed = this.data.materials.find((m) => this.media.get(m.id)?.status === "error");
+        // until the source is verified its length is unknown, so cut ranges went unchecked
+        const source = st.hasSource && !this.source
+            ? S.sourceUnverified(this.sourceError ?? S.sourceProbing) + (st.mode === "cut" ? `：${S.sourceRangeUnknown}` : "") : null;
         let className = "bad";
         let text;
         this.statusTarget = null;
@@ -1098,13 +1099,16 @@ class TimelineEditor {
         } else if (failed) {
             text = `⚠ ${S.materialFailed(failed.name, this.media.get(failed.id).error)}`;
             this.statusTarget = { type: "material", id: failed.id };
+        } else if (source) {
+            className = this.sourceError ? "bad" : "warn";
+            text = `${source} · ${S.total(r.totalFrames, (r.totalFrames * st.fps[1]) / st.fps[0])}`;
         } else {
             className = this.check.verified ? "good" : "warn";
             text = `${this.check.verified ? S.valid : S.unverified} · ${S.total(r.totalFrames, (r.totalFrames * st.fps[1]) / st.fps[0])}`;
         }
         if (className === "bad" && !text.startsWith("⚠")) text = `⚠ ${text}`;
         if (this.notice) text += ` · ${this.notice}`;
-        if (this.sourceError) text += ` · ${this.sourceError}`;
+        if (this.sourceError && source && !text.includes(source)) text += ` · ${source}`;
         this.statusBase = { className: `mf-tl-status ${className}${this.statusTarget ? " locate" : ""}`, text };
         this.status.title = this.statusTarget ? S.locate : "";
         this.gestureStatus();
@@ -1273,24 +1277,40 @@ class TimelineEditor {
         return subfolder ? `${subfolder}/${name}` : name;  // the server may have renamed the file
     }
 
+    // 上傳影片: only the latest pick lands, and only while its source is still the one it replaces
+    // (undo / configure / another choice all reload the source and bump `revision`), the editor
+    // lives (removing the node or loading another workflow destroys it) and the same workflow is
+    // active — a late answer never overwrites a restored value or writes another workflow's undo.
     async upload(file) {
+        const lease = { rev: this.revision, tracker: changeTracker() };
+        this.sourceUpload = lease;
+        const current = () => !this.destroyed && this.sourceUpload === lease && lease.rev === this.revision && lease.tracker === changeTracker();
         this.previewLabel.textContent = S.uploading;
+        let value;
         try {
-            const value = await this.uploadFile(file);
-            const values = this.w.video.options?.values;
-            if (Array.isArray(values) && !values.includes(value)) values.push(value);
-            const tracker = changeTracker();
-            tracker?.beforeChange?.();
-            try {
-                this.w.video.value = value;
-                this.w.video.callback?.(value);
-            } finally {
-                tracker?.afterChange?.();
-            }
+            value = await this.uploadFile(file);
         } catch (e) {
-            this.previewLabel.textContent = `${S.uploadFailed}（${e.message}）`;
+            if (current()) this.previewLabel.textContent = `${S.uploadFailed}（${e.message}）`;
+            return;
         } finally {
             this.fileInput.value = "";
+        }
+        if (!current()) {
+            // a newer pick owns the label and lands by itself; otherwise say why nothing changed
+            if (!this.destroyed && this.sourceUpload === lease) {
+                this.notice = S.sourceUploadDropped;
+                this.render();
+            }
+            return;
+        }
+        const values = this.w.video.options?.values;
+        if (Array.isArray(values) && !values.includes(value)) values.push(value);
+        lease.tracker?.beforeChange?.();
+        try {
+            this.w.video.value = value;
+            this.w.video.callback?.(value);
+        } finally {
+            lease.tracker?.afterChange?.();
         }
     }
 
@@ -1448,6 +1468,13 @@ class TimelineEditor {
         e.stopPropagation();
         // a new press means the old pointer is gone (its pointerup missed us): discard that gesture
         this.endGesture();
+        // focus first, as for bars: a pending inspector change commits here, before the gesture records
+        // its generation. That commit rebuilds the library, so the material and its card are looked up again.
+        const id = m.id;
+        this.root.focus({ preventScroll: true });
+        m = this.data.materials.find((x) => x.id === id);
+        card = [...this.lib.children].find((c) => c.dataset.id === id);
+        if (!m || !card) return;
         const label = `${KIND_ICON[m.kind]} ${m.name}`;
         const ghost = el("div", { class: "mf-tl-ghost", text: label, style: { left: `${e.clientX}px`, top: `${e.clientY}px` } });
         document.body.append(ghost);
@@ -1483,6 +1510,9 @@ class TimelineEditor {
     onCardUp(g, ev) {
         const lane = this.cardLane(g, ev);
         this.endGesture();
+        // a press without movement is a click; selecting here (not in `click`) also works when the press
+        // committed a pending inspector edit and rebuilt the library under the pointer
+        if (!g.moved) this.select({ type: "material", id: g.id });
         if (!lane) return this.render();
         if (g.gen !== this.editGen) {
             this.notice = S.dragStale;
@@ -1666,16 +1696,18 @@ class TimelineEditor {
         this.previewLabel.textContent = S.sourcePreview;
         this.request("/mediaforge/timeline/probe", { version: 1, source: { type: "input", ...this.sourceRef } })
             .then(({ ok, body }) => {
-                if (rev !== this.revision) return;
-                this.source = ok && body.kind === "video" ? body : null;
-                this.sourceError = ok ? (body.kind === "video" ? null : S.previewError) : body?.error?.message ?? S.previewError;
+                if (rev !== this.revision) return;  // the source was switched / reloaded meanwhile
+                // the same v2 check as materials: version, kind, a known length, the fingerprint the proxy needs
+                const issue = ok ? probeIssue(body, "video") : null;
+                this.source = ok && !issue ? body : null;
+                this.sourceError = !ok ? body?.error?.message ?? S.sourceProbeFailed : issue ? S.probeIssues[issue] : null;
                 this.render();
                 // the <video> may have failed before the probe answered; the proxy needs its fingerprint
                 if (this.source && this.proxyWanted) this.makeProxy();
             })
             .catch((e) => {
                 if (e.name !== "AbortError" && rev === this.revision) {
-                    this.sourceError = S.previewError;
+                    this.sourceError = S.sourceProbeFailed;
                     this.render();
                 }
             });
