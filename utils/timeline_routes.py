@@ -220,7 +220,8 @@ async def _probe(path):
 
 
 async def _probe_any(path):
-    """→ (kind, 與 Edit Timeline 快照共用的欄位, video 的額外資訊)。圖片只讀檔頭，不啟動 FFmpeg。"""
+    """→ (kind, 與 Edit Timeline 快照共用的欄位, video 的額外資訊)。圖片只讀檔頭，不啟動 FFmpeg。
+    沒有可用的畫面 / 音訊串流 → 422（§9；415 只留給 proxy 不支援的音訊 / 圖片）。"""
     try:
         return "image", await asyncio.get_running_loop().run_in_executor(None, image_fields, path), None
     except ValueError:
@@ -232,7 +233,7 @@ async def _probe_any(path):
     audio = parse_audio_probe(out) if out is not None else None
     if audio is not None and audio["audio_sample_rate"] and audio["audio_channels"]:
         return "audio", audio_fields(audio), None
-    raise RouteError(415, "unsupported_media", "無法讀取這個檔案（格式不在允許清單或檔案損毀）。")
+    raise RouteError(422, "no_usable_stream", "這個檔案沒有可用的畫面或音訊（格式不在允許清單或檔案損毀）。")
 
 
 async def handle_probe(raw, headers, scheme, host):

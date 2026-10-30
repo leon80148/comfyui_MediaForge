@@ -9,12 +9,15 @@ from fractions import Fraction
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .ffmpeg import resolve_ffmpeg_cmd
-from .timeline_messages import TimelineError
+from .timeline_materials import audio_sample_count
+from .timeline_messages import TimelineError, format_message
 from .timeline_source import (ffmpeg_input_args, opaque_fingerprint, parse_audio_probe, parse_probe_output,
                               resolve_timeline_source, run_probe)
+from .video_io import MAX_DECODE_BYTES
 
 AUDIO_PREROLL = Fraction(1)  # 秒；遠大於常見音訊封包（AAC ≈ 21 ms、PCM-in-MKV ≈ 85 ms）
 EDIT_LABEL = "Edit Timeline"
@@ -113,6 +116,24 @@ def scale_filter(resize, width, height):
     return None
 
 
+def resize_image(image, mode, width, height):
+    """IMAGE 版的 scale_filter（fit / fill / stretch）：單張圖走 FFmpeg 會多一次編解碼，這裡直接用 torch 雙三次縮放。"""
+    x = image.movedim(-1, 1)
+    h, w = x.shape[-2:]
+    if mode == "stretch":
+        return F.interpolate(x, size=(height, width), mode="bicubic", align_corners=False).clamp(0, 1).movedim(1, -1)
+    scale = min(width / w, height / h) if mode == "fit" else max(width / w, height / h)
+    nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
+    x = F.interpolate(x, size=(nh, nw), mode="bicubic", align_corners=False).clamp(0, 1)
+    if mode == "fill":
+        top, left = (nh - height) // 2, (nw - width) // 2
+        return x[..., top:top + height, left:left + width].movedim(1, -1)
+    out = x.new_zeros(x.shape[0], x.shape[1], height, width)
+    top, left = (height - nh) // 2, (width - nw) // 2
+    out[..., top:top + nh, left:left + nw] = x
+    return out.movedim(1, -1)
+
+
 def run_capture(cmd, label, what):
     proc = subprocess.run(resolve_ffmpeg_cmd(cmd), capture_output=True)
     if proc.returncode != 0:
@@ -132,17 +153,18 @@ def decode_video(path, seek, count, fps, size, scale, label, stream=0):
     w, h = size
     n = len(out) // (w * h * 3)
     arr = np.frombuffer(out[: n * w * h * 3], dtype=np.uint8).reshape(n, h, w, 3)
-    return torch.from_numpy(arr.copy()).float() / 255.0
+    return torch.from_numpy(arr.copy()).float().div_(255.0)
 
 
 def decode_audio(path, seek, video_start, count, sample_rate, channels, source_channels, label):
+    """最多 count 個 sample；來源提早結束時回傳較短的 PCM（尾端不補），由呼叫端決定補靜音或截短上下文。"""
     # 輸入端 -ss 跳到「不晚於目標的 video 關鍵幀」所在的 cluster：音訊可能晚一個封包才開始，第一個
     # video 幀之前的音訊則整段讀不到；raw PCM 又沒有時間戳。所以往前多解一段——pre-roll 會落到第一個
     # video 幀之前時就從檔頭讀——aresample 依 PTS 補齊空白（音軌晚於起點時也靠它），再以 sample 數精確裁掉前段
     pre = seek if seek - AUDIO_PREROLL < video_start else AUDIO_PREROLL
-    # 重取樣放在最前面：atrim / apad 以「進到它們的取樣率」計數，-ar 是在 filter chain 最後才插入
+    # 重取樣放在最前面：atrim 以「進到它的取樣率」計數，-ar 是在 filter chain 最後才插入
     af = (f"aresample={sample_rate}:async=1:first_pts=0,atrim=start_sample={round(pre * sample_rate)},"
-          f"asetpts=PTS-STARTPTS,apad=whole_len={count},atrim=end_sample={count}")
+          f"asetpts=PTS-STARTPTS,atrim=end_sample={count}")
     if source_channels == 1 and channels == 2:
         af += ",pan=stereo|c0=c0|c1=c0"  # -ac 2 would upmix mono at -3 dB; the spec duplicates it
     head = ["-ss", f"{float(seek - pre):.9f}"] if seek > pre else []
@@ -153,9 +175,24 @@ def decode_audio(path, seek, video_start, count, sample_rate, channels, source_c
     return torch.from_numpy(pcm.copy()).unsqueeze(0)
 
 
+def pad_audio(wave, count, label):
+    """素材音訊提早結束（實際解碼比 metadata 短）→ 尾端補靜音到 count 並 W_AUDIO_PAD（§4.3）。"""
+    missing = count - wave.shape[-1]
+    if missing <= 0:
+        return wave
+    print(format_message(label, "W_AUDIO_PAD", samples=missing))
+    return F.pad(wave, (0, missing))
+
+
 # ---- 素材切片（manifest item → IMAGE / AUDIO；EncodeH3Segment 與 LoadSegmentMedia 共用）----
 
 IMAGE_MAX_SHORT_EDGE = 2048  # core H3 `max` 模式的上限；更大的圖先在這裡縮，避免整張高解析度進 RAM
+
+
+def _check_decode(nbytes, label, what, hint):
+    # 與 Load Segment Frames 同一個上限（raw bytes）；在配置任何記憶體之前拒絕
+    if nbytes > MAX_DECODE_BYTES:
+        raise ValueError(f"[{label}] {what}解碼需 {nbytes / 2 ** 30:.2f} GiB，超過上限 {MAX_DECODE_BYTES / 2 ** 30:.0f} GiB。{hint}")
 
 
 def material_path(item, label):
@@ -173,6 +210,8 @@ def material_origin(snapshot, key):
 def load_image(item, label, max_short_edge=IMAGE_MAX_SHORT_EDGE):
     """→ IMAGE [1,H,W,3]（套用 EXIF 方向；短邊超過上限時等比縮小，資源政策）。"""
     with Image.open(material_path(item, label)) as img:
+        # img.size 只讀檔頭；float32 RGB 是解碼後最大的那份
+        _check_decode(img.width * img.height * 3 * 4, label, f"圖片 {img.width}x{img.height} ", "請先縮小圖片。")
         img = ImageOps.exif_transpose(img).convert("RGB")
         short = min(img.size)
         if max_short_edge and short > max_short_edge:
@@ -189,20 +228,25 @@ def load_video_slice(item, start, count, fps, label, segment, scale=None, size=N
     num, den = fps
     seek = material_origin(snap, "source_start_us") + Fraction(start * den, num)
     size = tuple(size) if size else tuple(snap["display_size"])
+    # raw rgb24 計上限（同 Load Segment Frames）；float32 tensor 再多 4 倍
+    _check_decode(count * size[0] * size[1] * 3, label, f"素材影片 {count} 幀 × {size[0]}x{size[1]} 的 rgb24 ",
+                  "請降低 ref_video_short_edge 或 resize 尺寸，或縮短參考範圍。")
     frames = decode_video(path, seek, count, fps, size, scale, label, snap["video_ordinal"])
     if frames.shape[0] < count:
         raise TimelineError(label, "E_SOURCE_SHORTFALL", segment=segment)
     return frames
 
 
-def load_audio_slice(item, start, count_frames, fps, label, sample_rate=None, multiple=1, origin_key="audio_start_us"):
-    """素材音訊：第 start 幀起 count_frames 幀 → AUDIO（雙聲道）；multiple > 1 時從起點往後裁到整數倍。"""
+def load_audio_slice(item, dst_start, frames, fps, label, sample_rate=None, multiple=1, origin_key="audio_start_us"):
+    """素材音訊 → AUDIO（雙聲道）：自 source_start 起連續取樣，長度 = 目的區間 [dst_start, dst_start + frames)
+    的全域端點差（§4.3，與 manifest 的 samples 同一算式），multiple > 1 時往後裁到整數倍；提早結束補靜音。"""
     snap = item["snapshot"]
     path = material_path(item, label)
     num, den = fps
     rate = sample_rate or snap["audio_sample_rate"]
-    count = (2 * count_frames * rate * den + num) // (2 * num)
-    count -= count % multiple
+    count = audio_sample_count(dst_start, frames, rate, fps, multiple)
+    _check_decode(count * 2 * 4, label, f"素材音訊 {count} samples（{rate} Hz）", "請縮短參考範圍。")
     origin = material_origin(snap, origin_key)
-    wave = decode_audio(path, origin + Fraction(start * den, num), origin, count, rate, 2, snap["audio_channels"], label)
-    return {"waveform": wave, "sample_rate": rate}
+    wave = decode_audio(path, origin + Fraction(item["source_start"] * den, num), origin, count, rate, 2,
+                        snap["audio_channels"], label)
+    return {"waveform": pad_audio(wave, count, label), "sample_rate": rate}

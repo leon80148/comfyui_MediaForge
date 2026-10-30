@@ -2,9 +2,9 @@
 //
 // Mirrors utils/timeline_materials.py (Python stays the authority and re-validates on every
 // run); both sides are checked against tests/golden/timeline_materials_vectors.json. Failures
-// come back as {ok: false, error: {code, ...fields}} carrying the same code and entity fields as
-// Python's TimelineError; where Python only has message text, `reason` is a machine code. Ref /
-// anchor frame fields are capped at MAX_FRAME (2^31−1), so plain Number math on them is exact.
+// come back as {ok: false, error: {code, ...fields}}: the message fields of Python's TimelineError
+// plus its machine `detail` (§4.2.5) — `reason` code, `entity` {kind, id} and `field`, each only when
+// it applies. Frame fields are capped at MAX_FRAME (2^31−1), so plain Number math on them is exact.
 
 export const KINDS = ["image", "video", "audio"];
 export const ANCHOR_ROLE = { image: "keyframe", video: "guide", audio: "lock" };
@@ -137,8 +137,30 @@ export function strictParse(text) {
 
 // ---- structure (parse_materials / parse_refs / parse_anchors; same check order and locations) ----
 
-function fail(location) {
-    return { ok: false, error: { code: "E_TIMELINE_JSON", location } };
+const LOCATION_RE = /^(segments|materials|refs|anchors)\[([0-9]+)\](?:\.(.+))?$/;
+
+function detail(reason, entity, field) {
+    const out = {};
+    if (reason != null) out.reason = reason;
+    if (entity != null) out.entity = entity;
+    if (field != null) out.field = field;
+    return out;
+}
+
+// Python's json_detail: `field` = the location inside its object; segments have no id, so their entity is the index.
+export function jsonErrorDetail(location, entity = null, reason = null) {
+    const m = LOCATION_RE.exec(location);
+    if (m && m[1] === "segments") entity = { kind: "segment", id: Number(m[2]) };
+    return detail(reason, entity, m ? m[3] : location === "timeline_data" ? null : location);
+}
+
+// no entity when the id itself is bad or repeats an earlier one: the GUI would locate a different object
+function entityOf(kind, obj, seen) {
+    return isObject(obj) && idOk(obj.id, seen) ? { kind, id: obj.id } : null;
+}
+
+function fail(location, entity = null) {
+    return { ok: false, error: { code: "E_TIMELINE_JSON", location, ...jsonErrorDetail(location, entity) } };
 }
 
 function isObject(v) {
@@ -186,12 +208,13 @@ export function parseMaterials(raw) {
     const names = new Set();
     for (const [i, m] of raw.entries()) {
         const loc = `materials[${i}]`;
-        if (!onlyKeys(m, ["id", "kind", "ref", "name"])) return fail(loc);
+        const entity = entityOf("material", m, ids);
+        if (!onlyKeys(m, ["id", "kind", "ref", "name"])) return fail(loc, entity);
         if (!idOk(m.id, ids)) return fail(`${loc}.id`);
         ids.add(m.id);
-        if (!KINDS.includes(m.kind)) return fail(`${loc}.kind`);
-        if (!refOk(m.ref)) return fail(`${loc}.ref`);
-        if (!nameOk(m.name) || names.has(m.name)) return fail(`${loc}.name`);
+        if (!KINDS.includes(m.kind)) return fail(`${loc}.kind`, entity);
+        if (!refOk(m.ref)) return fail(`${loc}.ref`, entity);
+        if (!nameOk(m.name) || names.has(m.name)) return fail(`${loc}.name`, entity);
         names.add(m.name);
         out.push({ id: m.id, kind: m.kind, ref: m.ref.replaceAll("\\", "/"), name: m.name });
     }
@@ -206,34 +229,35 @@ export function parseRefs(raw, materials) {
     for (const [i, r] of raw.entries()) {
         const loc = `refs[${i}]`;
         if (!isObject(r)) return fail(loc);
+        const entity = entityOf("ref", r, ids);
         const m = byId.get(r.material);
-        if (m === undefined) return fail(`${loc}.material`);
+        if (m === undefined) return fail(`${loc}.material`, entity);
         const mode = m.kind === "video" ? orDefault(r.mode, "follow") : null;
-        if (m.kind === "video" && !REF_MODES.includes(mode)) return fail(`${loc}.mode`);
+        if (m.kind === "video" && !REF_MODES.includes(mode)) return fail(`${loc}.mode`, entity);
         const allowed = {
             image: ["id", "material", "from", "to"],
             video: ["id", "material", "from", "to", "mode", "in", "audio", ...(mode === "fixed" ? ["length"] : [])],
             audio: ["id", "material", "from", "to", "in", "length"],
         }[m.kind];
-        if (!onlyKeys(r, allowed)) return fail(loc);
+        if (!onlyKeys(r, allowed)) return fail(loc, entity);
         if (!idOk(r.id, ids)) return fail(`${loc}.id`);
         ids.add(r.id);
-        if (!frameOk(r.from)) return fail(`${loc}.from`);
-        if (!frameOk(r.to, r.from + 1)) return fail(`${loc}.to`);
+        if (!frameOk(r.from)) return fail(`${loc}.from`, entity);
+        if (!frameOk(r.to, r.from + 1)) return fail(`${loc}.to`, entity);
         const ref = { id: r.id, material: m.id, from: r.from, to: r.to };
         if (m.kind !== "image") {
             const start = orDefault(r.in, 0);
-            if (!frameOk(start)) return fail(`${loc}.in`);
+            if (!frameOk(start)) return fail(`${loc}.in`, entity);
             if (m.kind === "video") {
                 const audio = orDefault(r.audio, false);
-                if (typeof audio !== "boolean") return fail(`${loc}.audio`);
+                if (typeof audio !== "boolean") return fail(`${loc}.audio`, entity);
                 Object.assign(ref, { mode, in: start, audio });
             } else {
                 ref.in = start;
             }
         }
         if (m.kind === "audio" || mode === "fixed") {
-            if (!frameOk(r.length, 1)) return fail(`${loc}.length`);
+            if (!frameOk(r.length, 1)) return fail(`${loc}.length`, entity);
             ref.length = r.length;
         }
         out.push(ref);
@@ -249,29 +273,30 @@ export function parseAnchors(raw, materials) {
     for (const [i, a] of raw.entries()) {
         const loc = `anchors[${i}]`;
         if (!isObject(a)) return fail(loc);
+        const entity = entityOf("anchor", a, ids);
         const m = byId.get(a.material);
-        if (m === undefined) return fail(`${loc}.material`);
+        if (m === undefined) return fail(`${loc}.material`, entity);
         const role = ANCHOR_ROLE[m.kind];
-        if (a.role !== role) return fail(`${loc}.role`);
+        if (a.role !== role) return fail(`${loc}.role`, entity);
         const allowed = {
             keyframe: ["id", "material", "role", "at"],
             guide: ["id", "material", "role", "at", "in", "length", "audio"],
             lock: ["id", "material", "role", "at", "in", "length"],
         }[role];
-        if (!onlyKeys(a, allowed)) return fail(loc);
+        if (!onlyKeys(a, allowed)) return fail(loc, entity);
         if (!idOk(a.id, ids)) return fail(`${loc}.id`);
         ids.add(a.id);
-        if (!frameOk(a.at)) return fail(`${loc}.at`);
+        if (!frameOk(a.at)) return fail(`${loc}.at`, entity);
         const anchor = { id: a.id, material: m.id, role, at: a.at };
         if (role !== "keyframe") {
             const start = orDefault(a.in, 0);
-            if (!frameOk(start)) return fail(`${loc}.in`);
-            if (!frameOk(a.length, 1)) return fail(`${loc}.length`);
+            if (!frameOk(start)) return fail(`${loc}.in`, entity);
+            if (!frameOk(a.length, 1)) return fail(`${loc}.length`, entity);
             Object.assign(anchor, { in: start, length: a.length });
         }
         if (role === "guide") {
             const audio = orDefault(a.audio, false);
-            if (typeof audio !== "boolean") return fail(`${loc}.audio`);
+            if (typeof audio !== "boolean") return fail(`${loc}.audio`, entity);
             anchor.audio = audio;
         }
         out.push(anchor);
@@ -296,26 +321,27 @@ function span(a) {
 
 // null when valid, else the first error in Python's order (refs → anchors → stream occupancy).
 export function validateGeometry(refs, anchors, snapshots, segments, h3) {
-    const refError = (r, reason) => ({ code: "E_REF", ref: r.id, reason });
-    const anchorError = (a, reason) => ({ code: "E_ANCHOR", anchor: a.id, reason });
+    const refError = (r, reason, field) => ({ code: "E_REF", ref: r.id, ...detail(reason, { kind: "ref", id: r.id }, field) });
+    const anchorError = (a, reason, field) => ({ code: "E_ANCHOR", anchor: a.id, ...detail(reason, { kind: "anchor", id: a.id }, field) });
     const total = segments[segments.length - 1].end;
     for (const r of refs) {
         const snap = snapshots[r.material];
-        if (r.from >= total) return refError(r, "past_timeline");
+        if (r.from >= total) return refError(r, "past_timeline", "from");
         if (snap.kind === "image") continue;
-        if (r.in + (r.mode === "follow" ? r.to - r.from : r.length) > snap.frames) return refError(r, "past_end");
-        if (r.audio && !snap.has_audio) return refError(r, "no_audio");
+        const follow = r.mode === "follow";
+        if (r.in + (follow ? r.to - r.from : r.length) > snap.frames) return refError(r, "past_end", follow ? "to" : "length");
+        if (r.audio && !snap.has_audio) return refError(r, "no_audio", "audio");
     }
     const emits = emitIntervals(segments);
     for (const a of anchors) {
         const snap = snapshots[a.material];
-        if (a.at >= total) return anchorError(a, "past_timeline");
-        if (a.role !== "keyframe" && a.in + a.length > snap.frames) return anchorError(a, "past_end");
-        if (a.audio && !snap.has_audio) return anchorError(a, "no_audio");
+        if (a.at >= total) return anchorError(a, "past_timeline", "at");
+        if (a.role !== "keyframe" && a.in + a.length > snap.frames) return anchorError(a, "past_end", "length");
+        if (a.audio && !snap.has_audio) return anchorError(a, "no_audio", "audio");
         if (a.role === "guide") {
             const [lo, hi] = span(a);
-            if (!emits.some(([ea, ee]) => ea <= lo && hi <= ee)) return anchorError(a, "crosses_emit");
-            if (h3 && h3Crop(a.length) !== a.length) return anchorError(a, "h3_length");
+            if (!emits.some(([ea, ee]) => ea <= lo && hi <= ee)) return anchorError(a, "crosses_emit", "at");
+            if (h3 && h3Crop(a.length) !== a.length) return anchorError(a, "h3_length", "length");
         }
     }
     const streams = [
@@ -327,7 +353,8 @@ export function validateGeometry(refs, anchors, snapshots, segments, h3) {
             .sort((x, y) => x[0] - y[0] || x[1] - y[1] || (x[2] < y[2] ? -1 : 1));
         for (let k = 1; k < spans.length; k++) {
             if (spans[k][0] < spans[k - 1][1]) {
-                return { code: "E_ANCHOR_OVERLAP", stream, first: spans[k - 1][2], second: spans[k][2] };
+                return { code: "E_ANCHOR_OVERLAP", stream, first: spans[k - 1][2], second: spans[k][2],
+                    ...detail(null, { kind: "anchor", id: spans[k][2] }, "at") };
             }
         }
     }
@@ -367,7 +394,8 @@ export function segmentManifest(segments, index, refs, anchors, snapshots, h3, c
             if (h3) {
                 const n = Math.min(requested, length);
                 if (n < H3_MIN_REF_FRAMES) {
-                    return { ok: false, error: { code: "E_REF_SHORT", segment: index + 1, name: snap.name, frames: n } };
+                    return { ok: false, error: { code: "E_REF_SHORT", segment: index + 1, name: snap.name, frames: n,
+                        ...detail(null, { kind: "ref", id: r.id }, r.mode === "fixed" ? "length" : null) } };
                 }
                 effective = h3Crop(n);
             }
@@ -431,7 +459,7 @@ function h3Samples(manifest) {
 function h3Tags(manifest, index) {
     for (const [kind, limit] of Object.entries(H3_LIMITS)) {
         const count = manifest[kind].length;
-        if (count > limit) return { code: "E_REF_LIMIT", segment: index + 1, kind, count, limit };
+        if (count > limit) return { code: "E_REF_LIMIT", segment: index + 1, kind, count, limit, ...detail(null, { kind: "segment", id: index }) };
     }
     manifest.pictures.forEach((p, n) => {
         p.tag = `<Picture ${n + 1}>`;
@@ -462,7 +490,8 @@ export function tagCounts(manifest) {
 
 // `<@name>` / `<@name:audio>` → this segment's tag; hand-written `<Picture N>`-style tags are range-checked.
 export function resolvePrompt(template, manifest, materials, index, h3) {
-    const fail = (reason) => ({ ok: false, error: { code: "E_PROMPT_REF", segment: index + 1, reason } });
+    const fail = (reason) => ({ ok: false, error: { code: "E_PROMPT_REF", segment: index + 1,
+        ...detail(reason, { kind: "segment", id: index }, "prompt") } });
     if (!h3) return template.search(ALIAS_RE) >= 0 || template.search(TAG_RE) >= 0 ? fail("not_h3") : { ok: true, prompt: template };
     const counts = tagCounts(manifest);
     for (const [, kind, n] of template.matchAll(TAG_RE)) {

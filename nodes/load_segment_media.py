@@ -3,9 +3,7 @@
 H3 請用 🧩 Encode H3 Segment（它會照 core 的規則一次編好所有素材）；這個節點給其他模型取素材，
 例如 Wan / LTX 的參考圖或錨定畫面。kind=lock 在這裡只是「素材音訊」，不會做 latent 鎖音。
 """
-import torch.nn.functional as F
-
-from ..utils.timeline_media import load_audio_slice, load_image, load_video_slice, scale_filter
+from ..utils.timeline_media import load_audio_slice, load_image, load_video_slice, resize_image, scale_filter
 from ..utils.timeline_messages import TimelineError
 from ..utils.timeline_plan import require_segment
 
@@ -21,7 +19,13 @@ class MF_LoadSegmentMedia:
         return {
             "required": {
                 "segment": ("MF_SEGMENT",),
-                "kind": (list(KINDS), {"default": "picture"}),
+                "kind": (list(KINDS), {
+                    "default": "picture",
+                    "tooltip": "各 kind 的有效輸出（其餘為 None，接到不收 None 的節點會在該節點報錯）："
+                               "picture → image；video → image、audio（參考開啟 audio 時）；audio → audio；"
+                               "keyframe → image、frame_idx；guide → image、audio（開啟 audio 時）、frame_idx；"
+                               "lock → audio、frame_idx（只是原聲，不做 latent 鎖定）。count = 本段該 kind 的數量。",
+                }),
                 "ordinal": ("INT", {"default": 1, "min": 1, "max": 512, "step": 1,
                                     "tooltip": "本段該類素材的第幾個（1 起算，順序同 Edit Timeline 的標籤表）。"}),
                 "resize": (list(RESIZE_MODES), {"default": "none",
@@ -51,36 +55,20 @@ class MF_LoadSegmentMedia:
         if kind in ("picture", "keyframe"):
             image = load_image(item, NODE_LABEL, max_short_edge=None)
             if resize != "none":
-                # 單張圖也走 FFmpeg 會多一次編解碼；這裡直接用 torch 的雙三次縮放
-                image = _resize(image, resize, width, height)
+                image = resize_image(image, resize, width, height)
         elif kind in ("video", "guide"):
             frames = item["effective_frames"] if kind == "video" else item["frames"]
             scale = scale_filter(resize, width, height)
             image = load_video_slice(item, item["source_start"], frames, fps, NODE_LABEL, number,
                                      scale, (width, height) if scale else None)
             if item["soundtrack"]:
-                audio = load_audio_slice(item, item["source_start"], frames, fps, NODE_LABEL,
-                                         origin_key="source_start_us")
+                # sample 端點：參考在素材軸上，錨定在段內位置（§4.3）
+                dst = item["source_start"] if kind == "video" else item["frame_idx"]
+                audio = load_audio_slice(item, dst, frames, fps, NODE_LABEL, origin_key="source_start_us")
         else:
-            audio = load_audio_slice(item, item["source_start"], item["frames"], fps, NODE_LABEL)
+            dst = item["source_start"] if kind == "audio" else item["frame_idx"]
+            audio = load_audio_slice(item, dst, item["frames"], fps, NODE_LABEL)
         return (image, audio, item.get("frame_idx", 0), len(items))
-
-
-def _resize(image, mode, width, height):
-    x = image.movedim(-1, 1)
-    h, w = x.shape[-2:]
-    if mode == "stretch":
-        return F.interpolate(x, size=(height, width), mode="bicubic", align_corners=False).clamp(0, 1).movedim(1, -1)
-    scale = min(width / w, height / h) if mode == "fit" else max(width / w, height / h)
-    nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
-    x = F.interpolate(x, size=(nh, nw), mode="bicubic", align_corners=False).clamp(0, 1)
-    if mode == "fill":
-        top, left = (nh - height) // 2, (nw - width) // 2
-        return x[..., top:top + height, left:left + width].movedim(1, -1)
-    out = x.new_zeros(x.shape[0], x.shape[1], height, width)
-    top, left = (height - nh) // 2, (width - nw) // 2
-    out[..., top:top + nh, left:left + nw] = x
-    return out.movedim(1, -1)
 
 
 NODE_CLASS_MAPPINGS = {"MF_LoadSegmentMedia": MF_LoadSegmentMedia}

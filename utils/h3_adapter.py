@@ -11,7 +11,7 @@ import torch
 
 from .timeline_materials import LOCK_POLICY
 from .timeline_media import (decode_audio, load_audio_slice, load_image, load_video_slice, material_origin,
-                             material_path, scale_filter)
+                             material_path, pad_audio, scale_filter)
 from .timeline_messages import TimelineError
 from .timeline_plan import H3_GRID, require_segment
 
@@ -69,6 +69,20 @@ def needs_audio_vae(materials):
                 or any(g["soundtrack"] for g in materials["guides"]))
 
 
+def lock_context(lock, fps, rate):
+    """§7.1 ctx_v1，以 audio VAE 取樣率的 sample 座標定義：A = token K0 在素材中的起點；左 / 右上下文
+    token 數 L / R 只由快照 metadata 決定（Sample Segments 的 report 也用這裡算）。"""
+    k0, k1 = lock["tokens"]
+    per_token = rate // TOKENS_PER_SECOND
+    num, den = fps
+    offset = Fraction((lock["source_start"] - lock["frame_idx"]) * den, num) + Fraction(k0, TOKENS_PER_SECOND)
+    a = math.floor(offset * rate + Fraction(1, 2))
+    n = lock["snapshot"]["duration_us"] * rate // 1_000_000
+    left = min(LOCK_LEFT_TOKENS, a // per_token)
+    right = min(LOCK_RIGHT_TOKENS, max(0, (n - a - per_token * (k1 - k0)) // per_token))
+    return a, left, right
+
+
 def write_locks(latent, locks, fps, audio_vae):
     """把鎖音原聲編碼寫進 AV latent 的 audio stream，該範圍 noise_mask = 0（§7.1）。"""
     samples = latent["samples"]
@@ -77,23 +91,20 @@ def write_locks(latent, locks, fps, audio_vae):
     mask = torch.ones_like(audio, dtype=torch.float32)
     rate = getattr(audio_vae, "audio_sample_rate", 32000)
     per_token = rate // TOKENS_PER_SECOND
-    num, den = fps
     tokens, targets = [], []
     for lock in locks:
         k0, k1 = lock["tokens"]
         snap = lock["snapshot"]
-        # 以 audio VAE 取樣率的 sample 座標定義上下文（§7.1 ctx_v1）：A = token K0 在素材中的起點
-        offset = Fraction((lock["source_start"] - lock["frame_idx"]) * den, num) + Fraction(k0, TOKENS_PER_SECOND)
-        a = math.floor(offset * rate + Fraction(1, 2))
-        n = snap["duration_us"] * rate // 1_000_000
         k = k1 - k0
-        left = min(LOCK_LEFT_TOKENS, a // per_token)
-        right = min(LOCK_RIGHT_TOKENS, max(0, (n - a - per_token * k) // per_token))
-        count = (k + left + right) * per_token  # 800 的整數倍：core 公共 VAE.encode 不會再置中裁切
+        a, left, right = lock_context(lock, fps, rate)
         origin = material_origin(snap, "audio_start_us")
         start = Fraction(a - per_token * left, rate)
-        wave = decode_audio(material_path(lock, LABEL), origin + start, origin, count, rate, 2, snap["audio_channels"],
-                            LABEL)
+        wave = decode_audio(material_path(lock, LABEL), origin + start, origin, (k + left + right) * per_token, rate, 2,
+                            snap["audio_channels"], LABEL)
+        # 素材比 metadata 短：先截短右側上下文（上下文不補零）；連目標區都不夠時才補靜音
+        right = min(right, max(0, wave.shape[-1] // per_token - left - k))
+        count = (k + left + right) * per_token  # 800 的整數倍：core 公共 VAE.encode 不會再置中裁切
+        wave = pad_audio(wave[..., :count], count, LABEL)
         z = audio_vae.encode(wave.movedim(1, -1))
         if z.ndim != audio.ndim or z.shape[-1] != count // per_token or tuple(z.shape[1:-1]) != tuple(audio.shape[1:-1]):
             raise TimelineError(LABEL, "E_H3_NODES", nodes=f"audio VAE（輸出形狀 {tuple(z.shape)}）")
@@ -129,7 +140,7 @@ def encode_segment(segment, clip, vae, width, height, ref_image_size, audio_vae=
         videos[f"ref_video_{k}"] = load_video_slice(v, v["source_start"], v["effective_frames"], fps, LABEL, number,
                                                      scale, size)
         if v["soundtrack"]:
-            # core 以 ref_video_N 的號碼配對 ref_video_audio_N
+            # core 以 ref_video_N 的號碼配對 ref_video_audio_N；參考的 sample 端點在素材軸上
             soundtracks[f"ref_video_audio_{k}"] = load_audio_slice(v, v["source_start"], v["effective_frames"], fps,
                                                                    LABEL, rate, per_token, "source_start_us")
     audios = {f"ref_audio_{k}": load_audio_slice(a, a["source_start"], a["frames"], fps, LABEL, rate, per_token)
@@ -148,7 +159,8 @@ def encode_segment(segment, clip, vae, width, height, ref_image_size, audio_vae=
         else:
             image = load_video_slice(item, item["source_start"], item["frames"], fps, LABEL, number,
                                      scale_filter("fill", width, height), (width, height))
-            audio = (load_audio_slice(item, item["source_start"], item["frames"], fps, LABEL, rate, per_token,
+            # guide 的音訊 token 落在段內 frame_idx：sample 端點以段內位置計
+            audio = (load_audio_slice(item, item["frame_idx"], item["frames"], fps, LABEL, rate, per_token,
                                       "source_start_us") if item["soundtrack"] else None)
         positive = _result(classes[GUIDE_NODE].execute(
             positive=positive, latent=latent, frame_idx=item["frame_idx"], vae=vae, audio_vae=audio_vae,

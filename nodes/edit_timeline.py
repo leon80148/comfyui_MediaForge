@@ -64,7 +64,7 @@ class MF_EditTimeline:
             return float("nan")
         refs = [kwargs.get("video", NO_SOURCE)]
         try:
-            refs += [m["ref"] for m in json.loads(text).get("materials", []) if isinstance(m, dict)]
+            refs += [m.get("ref") for m in json.loads(text).get("materials", []) if isinstance(m, dict)]
         except (ValueError, AttributeError, TypeError):
             pass  # 壞掉的 JSON 交給 edit() 報清楚的錯
         out = []

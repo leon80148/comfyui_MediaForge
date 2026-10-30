@@ -85,7 +85,8 @@ def _owner_alive(session_dir):
     try:
         with open(os.path.join(session_dir, "owner.json"), encoding="utf-8") as f:
             owner = json.load(f)
-        return abs(psutil.Process(owner["pid"]).create_time() - owner["create_time"]) < 1.0
+        # create_time = boot time + start ticks; on WSL processes derive boot time a whole second apart
+        return abs(psutil.Process(owner["pid"]).create_time() - owner["create_time"]) < 2.0
     except psutil.AccessDenied:
         return True
     except (OSError, ValueError, KeyError, TypeError, psutil.Error):

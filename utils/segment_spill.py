@@ -23,7 +23,7 @@ import torch
 from .ffmpeg import resolve_ffmpeg_cmd
 from .output_path import resolve_output_path
 from .plugin_tmp import PLUGIN_TMP_DIR
-from .timeline_media import decode_audio
+from .timeline_media import decode_audio, pad_audio
 from .timeline_messages import TimelineError, format_message
 from .timeline_plan import sample_index
 from .timeline_source import opaque_fingerprint, resolve_timeline_source
@@ -615,7 +615,7 @@ def _lock_pcm(lock, fps, directory, label):
     wave = decode_audio(path, origin + Fraction(lock["in"] * den, num), origin, count, MASTER_RATE, 2,
                         lock["audio_channels"], label)[0]
     out = os.path.join(directory, f"lock_{lock['anchor']}_{uuid.uuid4().hex}.wav")
-    _write_wav(out, wave, MASTER_RATE)
+    _write_wav(out, pad_audio(wave, count, label), MASTER_RATE)
     return out
 
 
@@ -673,6 +673,12 @@ def build_master(state, directory, check_interrupt):
             stderr.print_tail(ASSEMBLE_LABEL)
             _unlink(master)
             raise RuntimeError(f"[{ASSEMBLE_LABEL}] 鎖音母帶組裝失敗（exit {returncode}），請查看上方 stderr 輸出。")
+        # 發布前讀回實際 sample 數（PCM WAV 的 duration_ts 以 1/取樣率 為單位，就是 sample 數）
+        streams = _probe_streams(master, "wav", "duration_ts")
+        written = streams[0].get("duration_ts") if len(streams) == 1 else None
+        if written != total:
+            _unlink(master)
+            raise RuntimeError(f"[{ASSEMBLE_LABEL}] 鎖音母帶長度不符：預期 {total} samples，實際 {written}。請重試。")
         return master, total
     finally:
         for path in scratch:

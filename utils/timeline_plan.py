@@ -26,6 +26,7 @@ SEAM_KINDS = ("cut", "crossfade")
 AUDIO_CURVES = ("auto", "linear", "equal_power")
 MAX_SEGMENTS = 256
 JS_SAFE_MAX = 2 ** 53 - 1
+MAX_FRAME = timeline_materials.MAX_FRAME
 H3_GRID = "h3_5+17n"
 H3_FPS = (24, 1)
 
@@ -101,8 +102,10 @@ def spec_id(spec):
     return _digest(canonical_json(spec)) if spec is not None else None
 
 
-def _fail(reason, location):
-    raise TimelineError(NODE_LABEL, "E_TIMELINE_JSON", reason=reason, location=location)
+def _fail(reason, location, code=None):
+    """code 是機器原因碼（只有分段幾何與 widget 選項有；結構錯誤以 location / field 定位）。"""
+    raise TimelineError(NODE_LABEL, "E_TIMELINE_JSON", reason=reason, location=location,
+                        detail=timeline_materials.json_detail(location, reason=code))
 
 
 def _reject_duplicate_keys(pairs):
@@ -118,14 +121,21 @@ def _reject_constant(name):
     raise ValueError(f"不支援的數值 {name}")
 
 
-def _int(value, location, minimum=None):
+def _int(value, location, minimum=None, maximum=JS_SAFE_MAX):
     if isinstance(value, bool) or not isinstance(value, int):
         _fail("必須是整數", location)
     if abs(value) > JS_SAFE_MAX:
         _fail("整數超出可安全表示的範圍", location)
     if minimum is not None and value < minimum:
         _fail(f"必須 ≥ {minimum}", location)
+    if value > maximum:
+        _fail(f"必須 ≤ {maximum}", location)
     return value
+
+
+def _frame(value, location, minimum=0):
+    # 幀欄位與素材層同一上限（v1 也升成 v2，同樣適用）；seed 不是幀，維持 JS-safe 上限
+    return _int(value, location, minimum, MAX_FRAME)
 
 
 def _keys(obj, allowed, location):
@@ -159,7 +169,7 @@ def parse_timeline_data(text):
 
     source = data.get("source", {})
     _keys(source, ("origin_frame",), "source")
-    origin = _int(source.get("origin_frame", 0), "source.origin_frame")
+    origin = _frame(source.get("origin_frame", 0), "source.origin_frame", minimum=-MAX_FRAME)
     prompt = _string(data.get("prompt", ""), "prompt")
 
     segments = data.get("segments")
@@ -171,8 +181,8 @@ def parse_timeline_data(text):
     for i, seg in enumerate(segments):
         loc = f"segments[{i}]"
         _keys(seg, ("start", "end", "prompt", "seam_in", "seed") if v2 else ("start", "end", "prompt", "seam_in"), loc)
-        start = _int(seg.get("start"), f"{loc}.start", minimum=0)
-        end = _int(seg.get("end"), f"{loc}.end", minimum=0)
+        start = _frame(seg.get("start"), f"{loc}.start")
+        end = _frame(seg.get("end"), f"{loc}.end")
         seg_prompt = _string(seg.get("prompt", ""), f"{loc}.prompt")
         seed = seg.get("seed")
         if seed is not None:
@@ -198,40 +208,41 @@ def _parse_seam(seam, location):
     curve = seam.get("audio_curve", "auto")
     if curve not in AUDIO_CURVES:
         _fail(f"audio_curve 必須是 {list(AUDIO_CURVES)}", f"{location}.audio_curve")
-    return {"kind": "crossfade", "frames": _int(seam.get("frames"), f"{location}.frames", minimum=1),
+    return {"kind": "crossfade", "frames": _frame(seam.get("frames"), f"{location}.frames", minimum=1),
             "audio_curve": curve}
 
 
 def _validate_generate(segments, grid):
     if segments[0]["start"] != 0:
-        _fail("generate 模式首段必須從 0 開始", "segments[0].start")
+        _fail("generate 模式首段必須從 0 開始", "segments[0].start", "first_start_zero")
     for i, seg in enumerate(segments):
         loc = f"segments[{i}]"
         length = seg["end"] - seg["start"]
         if length <= 0:
-            _fail("end 必須大於 start", f"{loc}.end")
+            _fail("end 必須大於 start", f"{loc}.end", "end_before_start")
         if not length_ok(grid, length):
-            _fail(f"段長 {length} 幀不在 {grid} 的合法長度上", loc)
+            _fail(f"段長 {length} 幀不在 {grid} 的合法長度上", loc, "illegal_length")
         if i == 0:
             if seg["seam_in"]["kind"] != "cut":
-                _fail("首段沒有前一段，只能用 cut", f"{loc}.seam_in")
+                _fail("首段沒有前一段，只能用 cut", f"{loc}.seam_in", "first_seam_cut")
             continue
         prev = segments[i - 1]
         if seg["start"] <= prev["start"] or seg["end"] <= prev["end"]:
-            _fail("start 與 end 都必須比前一段嚴格遞增", loc)
+            _fail("start 與 end 都必須比前一段嚴格遞增", loc, "not_increasing")
         if seg["start"] > prev["end"]:
-            _fail("generate 模式段與段之間不能留白", f"{loc}.start")
+            _fail("generate 模式段與段之間不能留白", f"{loc}.start", "gap")
         # start、end 都嚴格遞增已蘊含 overlap < 相鄰兩段長度
         overlap = prev["end"] - seg["start"]
         if not overlap_ok(grid, overlap):
-            _fail(f"重疊 {overlap} 幀不在 {grid} 的合法重疊上", f"{loc}.start")
+            _fail(f"重疊 {overlap} 幀不在 {grid} 的合法重疊上", f"{loc}.start", "illegal_overlap")
         seam = seg["seam_in"]
         if seam["kind"] == "crossfade":
             # pending 只能從前段自己的輸出區間 [end_{i-2}, end_{i-1}) 裡扣留
             prev_emit = prev["end"] - (segments[i - 2]["end"] if i >= 2 else 0)
             limit = min(overlap, prev_emit)
             if overlap == 0 or seam["frames"] > limit:
-                _fail(f"crossfade 幀數必須在 1…{limit}（不超過重疊與前段輸出長度）", f"{loc}.seam_in.frames")
+                _fail(f"crossfade 幀數必須在 1…{limit}（不超過重疊與前段輸出長度）", f"{loc}.seam_in.frames",
+                      "crossfade_limit")
     diagnostics = []
     for i in range(1, len(segments) - 1):
         seg = segments[i]
@@ -246,13 +257,13 @@ def _validate_cut(segments, source_frames, origin):
     for i, seg in enumerate(segments):
         loc = f"segments[{i}]"
         if seg["end"] <= seg["start"]:
-            _fail("end 必須大於 start", f"{loc}.end")
+            _fail("end 必須大於 start", f"{loc}.end", "end_before_start")
         if seg["seam_in"]["kind"] != "cut":
-            _fail("cut 模式只能用 cut 接縫", f"{loc}.seam_in")
+            _fail("cut 模式只能用 cut 接縫", f"{loc}.seam_in", "cut_seam_only")
         if i and seg["start"] < segments[i - 1]["end"]:
-            _fail("cut 模式各段必須依序排列且不重疊", f"{loc}.start")
+            _fail("cut 模式各段必須依序排列且不重疊", f"{loc}.start", "overlapping_cut")
         if seg["start"] < origin or (source_frames is not None and seg["end"] > origin + source_frames):
-            _fail("超出來源影片範圍", loc)
+            _fail("超出來源影片範圍", loc, "outside_source")
     return []
 
 
@@ -268,11 +279,11 @@ def compile_plan(data, mode, fps_key, grid, source=None, snapshots=None):
     """data 是 parse_timeline_data() 的結果；source 是 timeline_source.describe_source() 或 None；
     snapshots 是 {material_id: timeline_media.describe_material()}（沒有素材時可省略）。"""
     if mode not in MODES:
-        _fail(f"mode 必須是 {list(MODES)}", "mode")
+        _fail(f"mode 必須是 {list(MODES)}", "mode", "unknown_mode")
     if fps_key not in FPS_PRESETS:
-        _fail(f"fps 必須是 {list(FPS_PRESETS)}", "fps")
+        _fail(f"fps 必須是 {list(FPS_PRESETS)}", "fps", "unknown_fps")
     if grid not in GRIDS:
-        _fail(f"grid 必須是 {list(GRIDS)}", "grid")
+        _fail(f"grid 必須是 {list(GRIDS)}", "grid", "unknown_grid")
     fps = FPS_PRESETS[fps_key]
     effective_grid = "free" if mode == "cut" else grid
     if effective_grid == H3_GRID and fps != H3_FPS:
@@ -284,9 +295,9 @@ def compile_plan(data, mode, fps_key, grid, source=None, snapshots=None):
         total = segments[-1]["end"]
     else:
         if source is None:
-            _fail("cut 模式需要來源影片", "video")
+            _fail("cut 模式需要來源影片", "video", "needs_source")
         if data["materials"]:
-            _fail("cut 模式不使用素材", "materials")
+            _fail("cut 模式不使用素材", "materials", "cut_no_materials")
         diagnostics = _validate_cut(segments, source_timeline_frames(source, fps), origin)
         total = sum(s["end"] - s["start"] for s in segments)
     snapshots = snapshots or {}
@@ -369,26 +380,33 @@ def _build_specs(plan, data, snapshots, h3):
     generate = plan["mode"] == "generate"
     emits = _emit_intervals(plan)
     source = plan["source"]
+    overlaps_in = [segments[i - 1]["end"] - s["start"] if (generate and i) else 0 for i, s in enumerate(segments)]
+    carry_ins = [carry_spec(grid, segments[i - 1]["end"] - segments[i - 1]["start"], overlaps_in[i]) if i else None
+                 for i in range(count)]
+    # §4.2.4：先驗完所有段的 manifest，再解析所有段的 prompt（web/timeline_grid.js resolveSegments 同序）
+    manifests = [_EMPTY_MANIFEST] * count
+    if generate and plan["materials"]:
+        manifests = [timeline_materials.segment_manifest(segments, i, plan["refs"], plan["anchors"], snapshots, h3,
+                                                         carry_ins[i]) for i in range(count)]
+    templates = [seg["prompt"] or plan["prompt"] for seg in segments]
+    prompts = templates
+    if generate:
+        prompts = [timeline_materials.resolve_prompt(templates[i], manifests[i], data["materials"], i, h3)
+                   for i in range(count)]
     specs, prev_sampling, prev_assembly = [], None, None
     for index, seg in enumerate(segments):
-        prev = segments[index - 1] if index else None
         nxt = segments[index + 1] if index + 1 < count else None
-        overlap_in = prev["end"] - seg["start"] if (generate and prev) else 0
+        overlap_in = overlaps_in[index]
         overlap_out = seg["end"] - nxt["start"] if (generate and nxt) else 0
         length = seg["end"] - seg["start"]
-        carry_in = carry_spec(grid, prev["end"] - prev["start"], overlap_in) if prev else None
+        carry_in = carry_ins[index]
         carry_out = carry_spec(grid, length, overlap_out) if nxt else None
         window = None
         if source is not None:
             window = {"source_ref": source["source_ref"], "source_fingerprint": source["fingerprint"],
                       "source_start_us": source["source_start_us"], "origin_frame": source["origin_frame"],
                       "start_frame": seg["start"], "end_frame": seg["end"]}
-        manifest = _EMPTY_MANIFEST
-        if generate and plan["materials"]:
-            manifest = timeline_materials.segment_manifest(segments, index, plan["refs"], plan["anchors"],
-                                                           snapshots, h3, carry_in)
-        template = seg["prompt"] or plan["prompt"]
-        prompt = timeline_materials.resolve_prompt(template, manifest, data["materials"], index, h3) if generate else template
+        manifest, prompt, template = manifests[index], prompts[index], templates[index]
         spec = {
             "type": "MF_SEGMENT", "version": 2, "view": "full",
             "index": index, "is_first": index == 0, "is_last": index == count - 1,
@@ -433,6 +451,8 @@ VIEW_FIELDS = {
                  "effective_grid", "emit_interval", "overlap_in", "overlap_out", "carry_in", "carry_out",
                  "carry_out_id", "seam_in", "seam_out", "is_last", "audio_locks", "latent_locks", "source_window"),
 }
+# full 被每個消費端接受（LoadSegmentFrames 只收 full），所以要帶齊任何一個 view 會讀的欄位
+FULL_REQUIRED = tuple(dict.fromkeys(k for fields in VIEW_FIELDS.values() for k in fields))
 
 
 def segment_view(spec, view):
@@ -444,18 +464,18 @@ def segment_view(spec, view):
 
 
 def require_segment(segment, views, label):
-    """消費端入口檢查：MF_SEGMENT v2、view 被接受、必要欄位齊全；full 一律接受。"""
+    """消費端入口檢查：MF_SEGMENT v2、view 被接受（full 一律接受）、必要欄位齊全（full 也要齊）。"""
     if not isinstance(segment, dict) or segment.get("type") != "MF_SEGMENT":
         raise ValueError(f"[{label}] segment 必須來自 Select Segment，請檢查接線。")
     if segment.get("version") != 2:
-        raise TimelineError(label, "E_VIEW", reason="segment 是舊版格式，請重新執行 Edit Timeline")
+        raise TimelineError(label, "E_VIEW", reason="segment 是舊版格式，請重新執行 Edit Timeline",
+                            detail={"reason": "stale_version"})
     view = segment.get("view")
     if view != "full" and view not in views:
-        raise TimelineError(label, "E_VIEW", reason=f"不接受 {view} view")
-    if view != "full":
-        missing = [k for k in VIEW_FIELDS[view] if k not in segment]
-        if missing:
-            raise TimelineError(label, "E_VIEW", reason=f"缺少欄位 {missing}")
+        raise TimelineError(label, "E_VIEW", reason=f"不接受 {view} view", detail={"reason": "view_not_accepted"})
+    missing = [k for k in (FULL_REQUIRED if view == "full" else VIEW_FIELDS[view]) if k not in segment]
+    if missing:
+        raise TimelineError(label, "E_VIEW", reason=f"缺少欄位 {missing}", detail={"reason": "missing_fields"})
     return segment
 
 

@@ -8,13 +8,34 @@ Append 內解碼後落盤，不進快取。
 """
 import json
 
-from ..utils.h3_adapter import needs_audio_vae
+from ..utils.h3_adapter import lock_context, needs_audio_vae
+from ..utils.timeline_materials import H3_AUDIO_RATE, LOCK_POLICY
 from ..utils.timeline_plan import H3_FPS, H3_GRID, segment_view
 
 LABEL = "Sample Segments"
+MANIFEST_KINDS = ("pictures", "videos", "audios", "keyframes", "guides", "locks")
 
 
-def _report(plan, noise_seed, audio_vae, negative, cfg):
+def _effective(spec, carry_audio, mask, tapers):
+    """本段的 planned 生效報告；鎖音是否真的保住由 Append 的漂移檢查（verified）決定。"""
+    m, carried = spec["materials"], spec["overlap_in"] > 0
+    out = [{"feature": "seed", "requested": spec["seed"], "applied": True,
+            "reason": "segment_seed" if spec["seed"] is not None else "noise_seed"},
+           {"feature": "audio_carry", "requested": carry_audio, "applied": carry_audio and carried and not spec["carry_conflicts"],
+            "reason": None if not carry_audio else "shot_root" if not carried else "lock_conflict" if spec["carry_conflicts"] else None},
+           {"feature": "taper", "requested": None if mask == "hard" else {"mask": mask, "tokens": tapers},
+            "applied": mask != "hard" and carried, "reason": None if mask == "hard" or carried else "shot_root"}]
+    if spec["latent_locks"]:
+        out.append({"feature": "lock", "requested": spec["latent_locks"], "applied": "planned", "reason": "verified_by_append"})
+    for v in m["videos"]:
+        if v["effective_frames"] != v["requested_frames"]:
+            out.append({"feature": "ref_crop", "requested": v["requested_frames"], "applied": v["effective_frames"],
+                        "reason": "h3_17k_plus_5"})
+    return out
+
+
+def _report(plan, noise_seed, audio_vae, negative, cfg, carry_audio, mask, tapers):
+    rate = getattr(audio_vae, "audio_sample_rate", H3_AUDIO_RATE)  # 與 h3_adapter.write_locks 相同的取樣率
     segments = []
     for spec in plan["specs"]:
         m = spec["materials"]
@@ -27,7 +48,14 @@ def _report(plan, noise_seed, audio_vae, negative, cfg):
                            for v in m["videos"]],
             "anchors": [{"role": role, "name": x["name"], "frame_idx": x["frame_idx"]}
                         for role in ("keyframes", "guides") for x in m[role]],
-            "latent_locks": spec["latent_locks"], "audio_carry_skipped_for_lock": bool(spec["carry_conflicts"]),
+            "latent_locks": spec["latent_locks"],
+            "audio_carry_skipped_for_lock": carry_audio and bool(spec["carry_conflicts"]),
+            "material_fingerprints": {x["name"]: x["fingerprint"] for kind in MANIFEST_KINDS for x in m[kind]},
+            # planned：素材實際比 metadata 短時，編碼會再截短右側上下文
+            "lock_encoding": [{"anchor": x["anchor"], "name": x["name"], "tokens": x["tokens"], "policy": LOCK_POLICY,
+                               "context_tokens": list(lock_context(x, tuple(spec["fps"]), rate)[1:])}
+                              for x in m["locks"]],
+            "effective": _effective(spec, carry_audio, mask, tapers),
         })
     return {"version": 2, "node": LABEL, "plan_id": plan["plan_id"], "segments": segments,
             "effective": [{"feature": "cfg", "requested": cfg, "applied": negative is not None,
@@ -118,7 +146,8 @@ class MF_SampleSegments:
             app = graph.node("MF_AppendSegment", f"app_{i}", segment=segment_view(spec, "assemble"),
                              latent=smp.out(0), vae=links["vae"], **audio, **state)
             prev_smp, prev_app = smp, app
-        report = _report(segment_plan, noise_seed, audio_vae, negative, cfg)
+        report = _report(segment_plan, noise_seed, audio_vae, negative, cfg, carry_audio, mask,
+                         {"video": video_taper_tokens, "audio": audio_taper_tokens})
         return {"result": (prev_app.out(0), json.dumps(report, ensure_ascii=False)), "expand": graph.finalize()}
 
 

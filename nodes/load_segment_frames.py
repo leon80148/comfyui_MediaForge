@@ -84,7 +84,7 @@ class MF_LoadSegmentFrames:
                 raise ValueError(f"[{NODE_LABEL}] 來源音訊規格異常（{sr} Hz × {channels} ch），拒絕解碼。請改用其他來源或先重新轉檔。")
             waveform = (decode_audio(path, seek, offset, need, sr, channels, channels, NODE_LABEL) if need > 0
                         else torch.zeros(1, channels, 0))
-            # seek 超過來源尾端時 FFmpeg 可能一個樣本都不輸出，apad 無從補起
+            # decode_audio 不補尾端：來源提早結束（或 seek 超過尾端、一個樣本都沒有）時在這裡補靜音
             waveform = torch.cat([torch.zeros(1, channels, silent_head), waveform,
                                   torch.zeros(1, channels, need - waveform.shape[-1])], dim=-1)
             audio = {"waveform": waveform, "sample_rate": sr}

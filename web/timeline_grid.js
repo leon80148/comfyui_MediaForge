@@ -6,7 +6,10 @@
 // fps is rational [num, den]; sample math goes through BigInt so the half-up
 // rounding matches Python exactly.
 
-import { FloatToken, parseAnchors, parseMaterials, parseRefs } from "./timeline_materials.js";
+import {
+    FloatToken, MAX_FRAME, jsonErrorDetail, parseAnchors, parseMaterials, parseRefs, resolvePrompt, segmentManifest,
+    validateGeometry,
+} from "./timeline_materials.js";
 
 export const FPS_PRESETS = {
     "16": [16, 1], "24": [24, 1], "25": [25, 1], "30": [30, 1],
@@ -100,7 +103,7 @@ export function canonicalize(data) {
 }
 
 function fail(location, reason) {
-    return { ok: false, error: { code: "E_TIMELINE_JSON", location, reason } };
+    return { ok: false, error: { code: "E_TIMELINE_JSON", location, ...jsonErrorDetail(location, null, reason) } };
 }
 
 function isInt(v) {
@@ -120,49 +123,61 @@ function textOk(value) {
     return typeof value === "string" && !/\p{Cs}/u.test(value);
 }
 
+// Frame fields share the materials' MAX_FRAME (v1 too: it is upgraded to v2); seed is not a frame and stays JS-safe.
+function frameOk(v, minimum = 0) {
+    return isInt(v) && minimum <= v && v <= MAX_FRAME;
+}
+
+// The location of the first structure error, or null (the editor's broken-mode check).
 export function schemaError(data) {
+    return schemaErrorDetail(data)?.location ?? null;
+}
+
+// The same first error as a structured E_TIMELINE_JSON object {code, location, entity?, field?} (§4.2.5), or null.
+export function schemaErrorDetail(data) {
+    const at = (location) => ({ code: "E_TIMELINE_JSON", location, ...jsonErrorDetail(location) });
     // Python picks the key set with `version == 2`, which 2.0 satisfies too
     const v2 = data?.version === 2 || (data?.version instanceof FloatToken && Number(data.version.text) === 2);
     if (!hasOnlyKeys(data, v2 ? ["version", "source", "prompt", "segments", "materials", "refs", "anchors"]
-        : ["version", "source", "segments"])) return "timeline_data";
-    if (data.version !== 1 && data.version !== 2) return "version";
+        : ["version", "source", "segments"])) return at("timeline_data");
+    if (data.version !== 1 && data.version !== 2) return at("version");
     const source = data.source === undefined ? {} : data.source;
-    if (!hasOnlyKeys(source, ["origin_frame"])) return "source";
-    if (source.origin_frame !== undefined && !isInt(source.origin_frame)) return "source.origin_frame";
-    if (data.prompt !== undefined && !textOk(data.prompt)) return "prompt";
+    if (!hasOnlyKeys(source, ["origin_frame"])) return at("source");
+    if (source.origin_frame !== undefined && !frameOk(source.origin_frame, -MAX_FRAME)) return at("source.origin_frame");
+    if (data.prompt !== undefined && !textOk(data.prompt)) return at("prompt");
     const segs = data.segments;
-    if (!Array.isArray(segs) || segs.length === 0 || segs.length > MAX_SEGMENTS) return "segments";
+    if (!Array.isArray(segs) || segs.length === 0 || segs.length > MAX_SEGMENTS) return at("segments");
     const segmentKeys = v2 ? ["start", "end", "prompt", "seam_in", "seed"] : ["start", "end", "prompt", "seam_in"];
     for (let i = 0; i < segs.length; i++) {
         const loc = `segments[${i}]`;
         const s = segs[i];
-        if (!hasOnlyKeys(s, segmentKeys)) return loc;
+        if (!hasOnlyKeys(s, segmentKeys)) return at(loc);
         for (const key of ["start", "end"]) {
-            if (!isInt(s[key]) || s[key] < 0) return `${loc}.${key}`;
+            if (!frameOk(s[key])) return at(`${loc}.${key}`);
         }
-        if (s.prompt !== undefined && !textOk(s.prompt)) return `${loc}.prompt`;
-        if (s.seed !== undefined && s.seed !== null && !(isInt(s.seed) && s.seed >= 0)) return `${loc}.seed`;
+        if (s.prompt !== undefined && !textOk(s.prompt)) return at(`${loc}.prompt`);
+        if (s.seed !== undefined && s.seed !== null && !(isInt(s.seed) && s.seed >= 0)) return at(`${loc}.seed`);
         if (s.seam_in === undefined) continue;
         const seam = s.seam_in;
-        if (!hasOnlyKeys(seam, ["kind", "frames", "audio_curve"])) return `${loc}.seam_in`;
-        if (seam.kind !== "cut" && seam.kind !== "crossfade") return `${loc}.seam_in.kind`;
+        if (!hasOnlyKeys(seam, ["kind", "frames", "audio_curve"])) return at(`${loc}.seam_in`);
+        if (seam.kind !== "cut" && seam.kind !== "crossfade") return at(`${loc}.seam_in.kind`);
         if (seam.kind === "cut") {
-            if (Object.keys(seam).length !== 1) return `${loc}.seam_in`;
+            if (Object.keys(seam).length !== 1) return at(`${loc}.seam_in`);
             continue;
         }
         if (seam.audio_curve !== undefined && !["auto", "linear", "equal_power"].includes(seam.audio_curve)) {
-            return `${loc}.seam_in.audio_curve`;
+            return at(`${loc}.seam_in.audio_curve`);
         }
-        if (!isInt(seam.frames) || seam.frames < 1) return `${loc}.seam_in.frames`;
+        if (!frameOk(seam.frames, 1)) return at(`${loc}.seam_in.frames`);
     }
     // absent → []; an explicit null still fails, like Python's data.get(key, [])
     const listOf = (key) => (data[key] === undefined ? [] : data[key]);
     const materials = parseMaterials(listOf("materials"));
-    if (!materials.ok) return materials.error.location;
+    if (!materials.ok) return materials.error;
     const refs = parseRefs(listOf("refs"), materials.materials);
-    if (!refs.ok) return refs.error.location;
+    if (!refs.ok) return refs.error;
     const anchors = parseAnchors(listOf("anchors"), materials.materials);
-    return anchors.ok ? null : anchors.error.location;
+    return anchors.ok ? null : anchors.error;
 }
 
 // Same check order as the Python validators, so the first reported location matches.
@@ -174,8 +189,8 @@ export function validate(data, mode, fpsKey, grid, sourceFrames = null, hasSourc
     if (!Array.isArray(segs) || segs.length === 0) return fail("segments", "no_segments");
     if (segs.length > MAX_SEGMENTS) return fail("segments", "too_many_segments");
     for (let i = 0; i < segs.length; i++) {
-        if (!isInt(segs[i].start) || segs[i].start < 0) return fail(`segments[${i}].start`, "not_frame_index");
-        if (!isInt(segs[i].end) || segs[i].end < 0) return fail(`segments[${i}].end`, "not_frame_index");
+        if (!frameOk(segs[i].start)) return fail(`segments[${i}].start`, "not_frame_index");
+        if (!frameOk(segs[i].end)) return fail(`segments[${i}].end`, "not_frame_index");
     }
     if (effectiveGrid === H3_GRID && (fps[0] !== 24 || fps[1] !== 1)) {
         return { ok: false, error: { code: "E_H3_FPS", location: "fps", reason: "h3_fps" } };
@@ -259,6 +274,40 @@ export function segmentSpecs(segs, mode, grid) {
             carry_out: n ? carrySpec(effectiveGrid, length, overlapOut) : null,
         };
     });
+}
+
+// compile_plan()'s material pass in §4.2.4 order — geometry, then every segment's manifest, then every
+// segment's prompt — so the first error is the one Python reports. Call it on data that passed validate();
+// snapshots are keyed by material id. Cut mode keeps manifests empty and prompts unresolved, as Python does.
+export function resolveSegments(data, mode, grid, snapshots) {
+    const segs = data.segments;
+    const generate = mode === "generate";
+    const h3 = generate && grid === H3_GRID;
+    if (data.materials.length) {
+        const error = validateGeometry(data.refs, data.anchors, snapshots, segs, h3);
+        if (error) return { ok: false, error };
+    }
+    const manifests = [];
+    for (const [i, spec] of segmentSpecs(segs, mode, grid).entries()) {
+        let manifest = { pictures: [], videos: [], audios: [], keyframes: [], guides: [], locks: [], carry_conflicts: [] };
+        if (generate && data.materials.length) {
+            const m = segmentManifest(segs, i, data.refs, data.anchors, snapshots, h3, spec.carry_in);
+            if (!m.ok) return m;
+            manifest = m.manifest;
+        }
+        manifests.push(manifest);
+    }
+    const out = [];
+    for (const [i, s] of segs.entries()) {
+        let prompt = s.prompt || data.prompt;
+        if (generate) {
+            const p = resolvePrompt(prompt, manifests[i], data.materials, i, h3);
+            if (!p.ok) return p;
+            prompt = p.prompt;
+        }
+        out.push({ prompt, manifest: manifests[i] });
+    }
+    return { ok: true, segments: out };
 }
 
 // ---- editing helpers (used by the editor; pure so node can test them) ----
