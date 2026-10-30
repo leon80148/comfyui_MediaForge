@@ -56,7 +56,7 @@
         "default"
       ],
       "widgets_values_named": {
-        "unet_name": "wanvideo/wan2_2/wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+        "unet_name": "SELECT_WAN22_T2V_HIGH_NOISE_UNET.safetensors",
         "weight_dtype": "default"
       }
     },
@@ -112,7 +112,7 @@
         "default"
       ],
       "widgets_values_named": {
-        "unet_name": "wanvideo/wan2_2/wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+        "unet_name": "SELECT_WAN22_T2V_LOW_NOISE_UNET.safetensors",
         "weight_dtype": "default"
       }
     },
@@ -181,7 +181,7 @@
         "default"
       ],
       "widgets_values_named": {
-        "clip_name": "wanvideo/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "clip_name": "SELECT_UMT5_XXL_TEXT_ENCODER.safetensors",
         "type": "wan",
         "device": "default"
       }
@@ -229,7 +229,7 @@
         "SELECT_WAN21_VAE.safetensors"
       ],
       "widgets_values_named": {
-        "vae_name": "wanvideo/wan_2.1_vae.safetensors"
+        "vae_name": "SELECT_WAN21_VAE.safetensors"
       }
     },
     {
@@ -2273,7 +2273,7 @@
       ],
       "size": [
         320,
-        150
+        174
       ],
       "flags": {},
       "order": 25,
@@ -2327,6 +2327,16 @@
             "name": "preset"
           },
           "link": null
+        },
+        {
+          "localized_name": "lock_audio",
+          "name": "lock_audio",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "lock_audio"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -2350,13 +2360,15 @@
         "MediaForge/timeline_wan22",
         "h264 (libx264)",
         18,
-        "medium"
+        "medium",
+        "original"
       ],
       "widgets_values_named": {
         "filename_prefix": "MediaForge/timeline_wan22",
         "codec": "h264 (libx264)",
         "crf": 18,
-        "preset": "medium"
+        "preset": "medium",
+        "lock_audio": "original"
       }
     },
     {

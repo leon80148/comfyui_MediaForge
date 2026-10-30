@@ -62,7 +62,7 @@ export const S = {
     unverified: "素材尚未驗證：上傳 / 讀取完成前，標籤與有效幀數僅供參考",
     seed: "seed",
     seedAuto: "自動（用 Sample Segments 的 noise_seed）",
-    seedNote: "逐段 seed 只有 🎞️ Sample Segments 會套用",
+    seedNote: "逐段 seed 只有 🎛️ Sample Segments 會套用",
     reroll: "重抽",
     shotCut: "設為新鏡頭（取樣不接前段）",
     shotContinue: "延續前鏡",
@@ -92,6 +92,9 @@ export const S = {
     lockCarry: "本段鎖音落在續接區：音訊不續接",
     refFrames: (eff, req) => (eff === req ? `${eff} 幀` : `${eff} 幀（要求 ${req}，裁掉尾端 ${req - eff}）`),
     uploadFailedNames: (names) => `上傳失敗：${names.join("、")}`,
+    unsupportedNames: (names) => `不支援的檔案類型（只收圖片 / 影片 / 音訊）：${names.join("、")}`,
+    addAtPlayhead: (frame) => `加到播放頭（${frame}f）`,
+    lanes: { refs: "＋參考", visual: "＋畫面錨定", audio: "＋鎖定原音" },
     editReasons: {
         no_material: "找不到素材", not_ready: "素材還在讀取中", material_too_short: "素材太短",
         no_room: "這一段放不下", wrong_lane: "這種素材不能放在這條軌道", empty_range: "範圍不能是空的",

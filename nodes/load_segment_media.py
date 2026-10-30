@@ -1,6 +1,6 @@
 """MF_LoadSegmentMedia — 從 MF_SEGMENT 取出本段的第 N 個素材（圖 / 影片切片 / 音訊），給 loop 路徑自己接線。
 
-H3 請用 🎬 Encode H3 Segment（它會照 core 的規則一次編好所有素材）；這個節點給其他模型取素材，
+H3 請用 🧩 Encode H3 Segment（它會照 core 的規則一次編好所有素材）；這個節點給其他模型取素材，
 例如 Wan / LTX 的參考圖或錨定畫面。kind=lock 在這裡只是「素材音訊」，不會做 latent 鎖音。
 """
 import torch.nn.functional as F
@@ -84,4 +84,4 @@ def _resize(image, mode, width, height):
 
 
 NODE_CLASS_MAPPINGS = {"MF_LoadSegmentMedia": MF_LoadSegmentMedia}
-NODE_DISPLAY_NAME_MAPPINGS = {"MF_LoadSegmentMedia": "🖼️ Load Segment Media"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MF_LoadSegmentMedia": "🗂️ Load Segment Media"}

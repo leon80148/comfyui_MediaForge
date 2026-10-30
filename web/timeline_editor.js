@@ -151,7 +151,8 @@ function installStyle() {
 .mf-tl { box-sizing: border-box; width: 100%; height: 100%; display: flex; flex-direction: column; gap: 5px;
   font: 12px sans-serif; color: var(--fg-color, #ddd); outline: none; overflow: hidden; }
 .mf-tl * { box-sizing: border-box; }
-.mf-tl:focus-visible, .mf-tl button:focus-visible, .mf-tl-card:focus-visible { outline: 2px solid #ffd23f; }
+.mf-tl:focus-visible, .mf-tl button:focus-visible, .mf-tl-card:focus-visible, .mf-tl-item:focus-visible,
+.mf-tl-seg:focus-visible { outline: 2px solid #ffd23f; }
 .mf-tl-bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .mf-tl-bar button, .mf-tl-form button, .mf-tl-lib button { background: var(--comfy-input-bg, #222); color: inherit;
   border: 1px solid var(--border-color, #444); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
@@ -324,6 +325,13 @@ class TimelineEditor {
         this.view.sel = sel;
         if (sel?.type === "segment") this.view.active = sel.index;
         this.saveView();
+    }
+
+    // keyboard focus selects (Tab through bars and segments); pointer selection already happened in onPointerDown
+    focusSelect(sel) {
+        if (this.drag || this.barDrag || JSON.stringify(sel) === JSON.stringify(this.view.sel)) return;
+        this.select(sel);
+        this.render();
     }
 
     setJsonVisible(visible) {
@@ -501,9 +509,13 @@ class TimelineEditor {
     }
 
     renderLibrary(st) {
+        const [num, den] = st.fps;
         const cards = this.data.materials.map((m) => {
             const entry = this.media.get(m.id);
             const status = entry?.status ?? "probing";
+            const seconds = entry?.info?.duration_us != null ? entry.info.duration_us / 1e6 : null;
+            const state = entry?.error ?? (status === "ready" && seconds != null
+                ? `${Math.floor((seconds * num) / den)}f · ${seconds.toFixed(1)}s` : S.status[status]);
             const thumb = m.kind === "image"
                 ? el("img", { src: viewURL({ ...splitSource(m.ref), type: "input" }), alt: "" })
                 : el("div", { class: "icon", text: KIND_ICON[m.kind] });
@@ -515,8 +527,15 @@ class TimelineEditor {
                     this.render();
                 },
             }, [thumb, el("span", { class: "name", text: m.name }),
-                el("span", { class: `state${status === "error" ? " error" : ""}`, text: entry?.error ?? S.status[status] })]);
+                el("span", { class: `state${status === "error" ? " error" : ""}`, text: status === "error" ? `⚠ ${state}` : state })]);
             card.addEventListener("pointerdown", (e) => this.startCardDrag(e, m, card));
+            card.addEventListener("keydown", (e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                e.stopPropagation();
+                this.select({ type: "material", id: m.id });
+                this.render();
+            });
             return card;
         });
         const pending = this.pendingUploads.map((p) => el("div", { class: "mf-tl-card pending" }, [
@@ -559,7 +578,8 @@ class TimelineEditor {
             const handles = ["left", "right"].map((edge) => el("div", { class: "mf-tl-handle", "data-edge": edge }));
             const label = el("span");
             const overlap = el("div", { class: "overlap" });
-            const seg = el("div", { class: "mf-tl-seg" }, [overlap, label, ...handles]);
+            const seg = el("div", { class: "mf-tl-seg", tabindex: "0" }, [overlap, label, ...handles]);
+            seg.addEventListener("focus", () => this.focusSelect({ type: "segment", index: Number(seg.dataset.index) }));
             seg.label = label;
             seg.overlap = overlap;
             this.track.insertBefore(seg, this.playhead);
@@ -569,7 +589,7 @@ class TimelineEditor {
         segs.forEach((s, i) => {
             const e = this.segEls[i];
             e.dataset.index = String(i);
-            e.label.textContent = `GEN${i + 1} · ${s.end - s.start}f${s.seed != null ? " · 🎲" : ""}`;
+            e.label.textContent = `${i === bad ? "⚠ " : ""}GEN${i + 1} · ${s.end - s.start}f${s.seed != null ? " · 🎲" : ""}`;
             // incoming overlap is hatched: those frames belong to the previous segment's output
             const incoming = st.mode === "generate" && i ? Math.max(0, segs[i - 1].end - s.start) : 0;
             e.overlap.style.width = `${incoming * this.px}px`;
@@ -611,9 +631,10 @@ class TimelineEditor {
             seen.add(key);
             let e = this.itemEls.get(key);
             if (!e) {
-                e = el("div", { class: "mf-tl-item" }, [el("span")]);
+                e = el("div", { class: "mf-tl-item", tabindex: "0" }, [el("span")]);
                 e.dataset.kind = kind;
                 e.dataset.id = item.id;
+                e.addEventListener("focus", () => this.focusSelect({ type: kind, id: item.id }));
                 this.track.insertBefore(e, this.playhead);
                 this.itemEls.set(key, e);
             }
@@ -871,6 +892,11 @@ class TimelineEditor {
                 }
                 this.commit({ ...this.data, materials: this.data.materials.map((x) => (x.id === id ? { ...x, ref: e.target.value } : x)) });
             } }),
+            el("span", { text: S.addAtPlayhead(this.view.playhead) }), el("div", { class: "mf-tl-chips" },
+                (m.kind === "audio" ? ["refs", "audio"] : ["refs", "visual"]).map((lane) => el("button", {
+                    text: S.lanes[lane],
+                    onclick: () => this.apply(createFromCard(this.data, id, lane, this.view.playhead, this.snapshot(id), st.h3)),
+                }))),
             el("span"), el("div", { class: "mf-tl-chips" }, [
                 el("button", { text: S.insertAlias, onclick: () => {
                     const p = segs[i].prompt;
@@ -1090,7 +1116,7 @@ class TimelineEditor {
         this.pendingUploads.push(...queue);
         this.render();
         const done = [];
-        const failed = [...unsupported];
+        const failed = [];
         const worker = async () => {
             while (queue.length) {
                 const p = queue.shift();
@@ -1106,7 +1132,8 @@ class TimelineEditor {
         if (this.destroyed || this.broken) return;
         done.sort((a, b) => a.order - b.order);
         if (done.length) this.commit(addMaterials(this.data, done).next);
-        this.notice = failed.length ? S.uploadFailedNames(failed) : "";
+        this.notice = [unsupported.length ? S.unsupportedNames(unsupported) : "", failed.length ? S.uploadFailedNames(failed) : ""]
+            .filter(Boolean).join("；");
         this.render();
     }
 

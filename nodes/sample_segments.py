@@ -64,7 +64,8 @@ class MF_SampleSegments:
                 "negative": ("CONDITIONING", {"tooltip": "接上才用 CFG（cfg 才生效）；不接時以 Basic Guider 取樣（turbo 模型）。"}),
                 "cfg": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.1, "round": 0.01}),
                 "ref_image_size": (["match", "max"], {"default": "match"}),
-                "ref_video_short_edge": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32}),
+                "ref_video_short_edge": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32,
+                                          "tooltip": "同 Encode H3 Segment：0 = 自動縮到短邊 768；否則縮到短邊 ≤ 此值。"}),
                 "video_taper_tokens": ("INT", {"default": 2, "min": 0, "max": 1000000, "step": 1}),
                 "audio_taper_tokens": ("INT", {"default": 2, "min": 0, "max": 1000000, "step": 1}),
                 "on_conflict": (["error", "carry_wins"], {"default": "error"}),
@@ -122,4 +123,4 @@ class MF_SampleSegments:
 
 
 NODE_CLASS_MAPPINGS = {"MF_SampleSegments": MF_SampleSegments}
-NODE_DISPLAY_NAME_MAPPINGS = {"MF_SampleSegments": "🎞️ Sample Segments"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MF_SampleSegments": "🎛️ Sample Segments"}

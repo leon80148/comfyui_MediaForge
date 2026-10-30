@@ -1,0 +1,954 @@
+{
+  "id": "fca195de-ca5a-4ede-8ed4-ba87847468bb",
+  "revision": 0,
+  "last_node_id": 13,
+  "last_link_id": 10,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        320,
+        82
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "unet_name",
+          "name": "unet_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "unet_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "weight_dtype",
+          "name": "weight_dtype",
+          "type": "COMBO",
+          "widget": {
+            "name": "weight_dtype"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "模型",
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_FL2VA_UNET.safetensors",
+        "default"
+      ],
+      "widgets_values_named": {
+        "unet_name": "SELECT_MINIMAX_H3_FL2VA_UNET.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    {
+      "id": 2,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        400,
+        0
+      ],
+      "size": [
+        320,
+        82
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "model",
+          "name": "model",
+          "type": "MODEL",
+          "link": 1
+        },
+        {
+          "localized_name": "lora_name",
+          "name": "lora_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "lora_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "strength_model",
+          "name": "strength_model",
+          "type": "FLOAT",
+          "widget": {
+            "name": "strength_model"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "模型",
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            2,
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_TURBO_LORA.safetensors",
+        1
+      ],
+      "widgets_values_named": {
+        "lora_name": "SELECT_MINIMAX_H3_TURBO_LORA.safetensors",
+        "strength_model": 1
+      }
+    },
+    {
+      "id": 3,
+      "type": "CLIPLoader",
+      "pos": [
+        0,
+        152
+      ],
+      "size": [
+        320,
+        106
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "clip_name",
+          "name": "clip_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "clip_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "type",
+          "name": "type",
+          "type": "COMBO",
+          "widget": {
+            "name": "type"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "device",
+          "name": "device",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "device"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "CLIP",
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            4
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_QWEN3VL_TEXT_ENCODER.safetensors",
+        "minimax",
+        "default"
+      ],
+      "widgets_values_named": {
+        "clip_name": "SELECT_MINIMAX_H3_QWEN3VL_TEXT_ENCODER.safetensors",
+        "type": "minimax",
+        "device": "default"
+      }
+    },
+    {
+      "id": 4,
+      "type": "VAELoader",
+      "pos": [
+        0,
+        328
+      ],
+      "size": [
+        320,
+        58
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "vae_name",
+          "name": "vae_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "vae_name"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "VAE",
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            5
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_VIDEO_VAE.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "SELECT_MINIMAX_H3_VIDEO_VAE.safetensors"
+      }
+    },
+    {
+      "id": 5,
+      "type": "VAELoader",
+      "pos": [
+        0,
+        456
+      ],
+      "size": [
+        320,
+        58
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "vae_name",
+          "name": "vae_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "vae_name"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "VAE",
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            9
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_AUDIO_VAE.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "SELECT_MINIMAX_H3_AUDIO_VAE.safetensors"
+      }
+    },
+    {
+      "id": 6,
+      "type": "KSamplerSelect",
+      "pos": [
+        0,
+        584
+      ],
+      "size": [
+        320,
+        58
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "取樣器名稱",
+          "name": "sampler_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "sampler_name"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "取樣器",
+          "name": "SAMPLER",
+          "type": "SAMPLER",
+          "links": [
+            7
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSamplerSelect"
+      },
+      "widgets_values": [
+        "res_multistep"
+      ],
+      "widgets_values_named": {
+        "sampler_name": "res_multistep"
+      }
+    },
+    {
+      "id": 7,
+      "type": "BasicScheduler",
+      "pos": [
+        400,
+        152
+      ],
+      "size": [
+        320,
+        106
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "model",
+          "name": "model",
+          "type": "MODEL",
+          "link": 2
+        },
+        {
+          "localized_name": "scheduler",
+          "name": "scheduler",
+          "type": "COMBO",
+          "widget": {
+            "name": "scheduler"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "步驟數",
+          "name": "steps",
+          "type": "INT",
+          "widget": {
+            "name": "steps"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "去雜訊強度",
+          "name": "denoise",
+          "type": "FLOAT",
+          "widget": {
+            "name": "denoise"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "Sigma 值",
+          "name": "SIGMAS",
+          "type": "SIGMAS",
+          "links": [
+            8
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BasicScheduler"
+      },
+      "widgets_values": [
+        "simple",
+        4,
+        1
+      ],
+      "widgets_values_named": {
+        "scheduler": "simple",
+        "steps": 4,
+        "denoise": 1
+      }
+    },
+    {
+      "id": 10,
+      "type": "MF_EditTimeline",
+      "pos": [
+        0,
+        712
+      ],
+      "size": [
+        760,
+        900
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "video",
+          "name": "video",
+          "type": "COMBO",
+          "widget": {
+            "name": "video"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "fps",
+          "name": "fps",
+          "type": "COMBO",
+          "widget": {
+            "name": "fps"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "grid",
+          "name": "grid",
+          "type": "COMBO",
+          "widget": {
+            "name": "grid"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mode",
+          "name": "mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "timeline_data",
+          "name": "timeline_data",
+          "type": "STRING",
+          "widget": {
+            "name": "timeline_data"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "segment_plan",
+          "name": "segment_plan",
+          "type": "MF_SEGMENT_PLAN",
+          "links": [
+            6
+          ]
+        },
+        {
+          "localized_name": "ranges",
+          "name": "ranges",
+          "type": "SILENCE_RANGES",
+          "links": null
+        },
+        {
+          "localized_name": "plan_json",
+          "name": "plan_json",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "localized_name": "segment_count",
+          "name": "segment_count",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "localized_name": "total_frames",
+          "name": "total_frames",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_EditTimeline"
+      },
+      "widgets_values": [
+        "(none)",
+        "24",
+        "h3_5+17n",
+        "generate",
+        "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"prompt\": \"<@nurse> stands in a bright clinic room and talks to the patient.\", \"materials\": [{\"id\": \"m1\", \"kind\": \"image\", \"ref\": \"mediaforge_timeline/nurse.png\", \"name\": \"nurse\"}, {\"id\": \"m2\", \"kind\": \"video\", \"ref\": \"mediaforge_timeline/walk.mp4\", \"name\": \"walk\"}, {\"id\": \"m3\", \"kind\": \"audio\", \"ref\": \"mediaforge_timeline/line1.wav\", \"name\": \"line1\"}], \"refs\": [{\"id\": \"r1\", \"material\": \"m1\", \"from\": 0, \"to\": 192}, {\"id\": \"r2\", \"material\": \"m2\", \"from\": 0, \"to\": 107, \"mode\": \"follow\", \"in\": 0, \"audio\": false}], \"anchors\": [{\"id\": \"a1\", \"material\": \"m2\", \"role\": \"guide\", \"at\": 120, \"in\": 30, \"length\": 22, \"audio\": false}, {\"id\": \"a2\", \"material\": \"m3\", \"role\": \"lock\", \"at\": 12, \"in\": 0, \"length\": 60}], \"segments\": [{\"start\": 0, \"end\": 107, \"prompt\": \"<@nurse> walks into the clinic, moving like <@walk>, and greets the patient.\"}, {\"start\": 85, \"end\": 192, \"prompt\": \"\"}]}"
+      ],
+      "widgets_values_named": {
+        "video": "(none)",
+        "fps": "24",
+        "grid": "h3_5+17n",
+        "mode": "generate",
+        "timeline_data": "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"prompt\": \"<@nurse> stands in a bright clinic room and talks to the patient.\", \"materials\": [{\"id\": \"m1\", \"kind\": \"image\", \"ref\": \"mediaforge_timeline/nurse.png\", \"name\": \"nurse\"}, {\"id\": \"m2\", \"kind\": \"video\", \"ref\": \"mediaforge_timeline/walk.mp4\", \"name\": \"walk\"}, {\"id\": \"m3\", \"kind\": \"audio\", \"ref\": \"mediaforge_timeline/line1.wav\", \"name\": \"line1\"}], \"refs\": [{\"id\": \"r1\", \"material\": \"m1\", \"from\": 0, \"to\": 192}, {\"id\": \"r2\", \"material\": \"m2\", \"from\": 0, \"to\": 107, \"mode\": \"follow\", \"in\": 0, \"audio\": false}], \"anchors\": [{\"id\": \"a1\", \"material\": \"m2\", \"role\": \"guide\", \"at\": 120, \"in\": 30, \"length\": 22, \"audio\": false}, {\"id\": \"a2\", \"material\": \"m3\", \"role\": \"lock\", \"at\": 12, \"in\": 0, \"length\": 60}], \"segments\": [{\"start\": 0, \"end\": 107, \"prompt\": \"<@nurse> walks into the clinic, moving like <@walk>, and greets the patient.\"}, {\"start\": 85, \"end\": 192, \"prompt\": \"\"}]}"
+      }
+    },
+    {
+      "id": 11,
+      "type": "MF_SampleSegments",
+      "pos": [
+        850,
+        300
+      ],
+      "size": [
+        340,
+        430
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "model",
+          "name": "model",
+          "type": "MODEL",
+          "link": 3
+        },
+        {
+          "localized_name": "clip",
+          "name": "clip",
+          "type": "CLIP",
+          "link": 4
+        },
+        {
+          "localized_name": "vae",
+          "name": "vae",
+          "type": "VAE",
+          "link": 5
+        },
+        {
+          "localized_name": "segment_plan",
+          "name": "segment_plan",
+          "type": "MF_SEGMENT_PLAN",
+          "link": 6
+        },
+        {
+          "localized_name": "sampler",
+          "name": "sampler",
+          "type": "SAMPLER",
+          "link": 7
+        },
+        {
+          "localized_name": "sigmas",
+          "name": "sigmas",
+          "type": "SIGMAS",
+          "link": 8
+        },
+        {
+          "localized_name": "audio_vae",
+          "name": "audio_vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": 9
+        },
+        {
+          "localized_name": "negative",
+          "name": "negative",
+          "shape": 7,
+          "type": "CONDITIONING",
+          "link": null
+        },
+        {
+          "localized_name": "noise_seed",
+          "name": "noise_seed",
+          "type": "INT",
+          "widget": {
+            "name": "noise_seed"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "width",
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "height",
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mask",
+          "name": "mask",
+          "type": "COMBO",
+          "widget": {
+            "name": "mask"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "carry_audio",
+          "name": "carry_audio",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "carry_audio"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "cfg",
+          "name": "cfg",
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "cfg"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "ref_image_size",
+          "name": "ref_image_size",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "ref_image_size"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "ref_video_short_edge",
+          "name": "ref_video_short_edge",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "ref_video_short_edge"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "video_taper_tokens",
+          "name": "video_taper_tokens",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "video_taper_tokens"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "audio_taper_tokens",
+          "name": "audio_taper_tokens",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "audio_taper_tokens"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "on_conflict",
+          "name": "on_conflict",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "on_conflict"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "state",
+          "name": "state",
+          "type": "MF_SEGMENT_STATE",
+          "links": [
+            10
+          ]
+        },
+        {
+          "localized_name": "report",
+          "name": "report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_SampleSegments"
+      },
+      "widgets_values": [
+        42,
+        "fixed",
+        832,
+        480,
+        "hard",
+        true,
+        1.0,
+        "match",
+        0,
+        2,
+        2,
+        "error"
+      ],
+      "widgets_values_named": {
+        "noise_seed": 42,
+        "control_after_generate": "fixed",
+        "width": 832,
+        "height": 480,
+        "mask": "hard",
+        "carry_audio": true,
+        "cfg": 1.0,
+        "ref_image_size": "match",
+        "ref_video_short_edge": 0,
+        "video_taper_tokens": 2,
+        "audio_taper_tokens": 2,
+        "on_conflict": "error"
+      }
+    },
+    {
+      "id": 12,
+      "type": "MF_AssembleSegments",
+      "pos": [
+        1280,
+        300
+      ],
+      "size": [
+        320,
+        174
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "state",
+          "name": "state",
+          "type": "MF_SEGMENT_STATE",
+          "link": 10
+        },
+        {
+          "localized_name": "audio",
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "localized_name": "filename_prefix",
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": {
+            "name": "filename_prefix"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "codec",
+          "name": "codec",
+          "type": "COMBO",
+          "widget": {
+            "name": "codec"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "crf",
+          "name": "crf",
+          "type": "INT",
+          "widget": {
+            "name": "crf"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "preset",
+          "name": "preset",
+          "type": "COMBO",
+          "widget": {
+            "name": "preset"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "lock_audio",
+          "name": "lock_audio",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "lock_audio"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "final_video_path",
+          "name": "final_video_path",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "localized_name": "report",
+          "name": "report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_AssembleSegments"
+      },
+      "widgets_values": [
+        "MediaForge/timeline_h3_director",
+        "h264 (libx264)",
+        18,
+        "medium",
+        "original"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "MediaForge/timeline_h3_director",
+        "codec": "h264 (libx264)",
+        "crf": 18,
+        "preset": "medium",
+        "lock_audio": "original"
+      }
+    },
+    {
+      "id": 13,
+      "type": "MarkdownNote",
+      "pos": [
+        -760,
+        0
+      ],
+      "size": [
+        700,
+        640
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## MediaForge Timeline — MiniMax H3 director (single node)\n\n1. Pick your H3 models in the loaders: fl2va UNet (+ optional turbo LoRA), the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE. Sample Segments needs `audio_vae` here because the timeline locks an audio clip.\n2. The three materials in **⏱️ Edit Timeline** are placeholders: put your own `nurse.png`, `walk.mp4` and `line1.wav` into `input/mediaforge_timeline/`, or select a card in the material library and point its file at one of yours. Plan: `nurse` (image) is a reference in both segments, `walk` (video) is a reference in segment 1 and a 22-frame guide in segment 2, `line1` (audio) is locked at frames 12–72. Segment 2 has an empty prompt, so it uses the global prompt.\n3. Queue. 🎛️ Sample Segments expands into Encode H3 Segment → Extend Latent → core guider + SamplerCustomAdvanced → Append Segment for each segment; 🧵 Assemble Segments writes one MP4 and, with `lock_audio = original`, puts the original `line1` audio back over frames 12–72.\n\nPlan: 2 × 107 frames, overlap 22 → **192 frames**. Batch 1 only. Seams are not guaranteed to be invisible.\n\n---\n1. 在載入器選好 H3 模型：fl2va UNet（可加 turbo LoRA）、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。時間軸上有鎖定原音，所以 Sample Segments 必須接 `audio_vae`。\n2. **⏱️ Edit Timeline** 的三個素材是佔位：把自己的 `nurse.png`、`walk.mp4`、`line1.wav` 放進 `input/mediaforge_timeline/`，或在素材庫選取卡片、把檔案改成自己的。計畫：`nurse`（圖片）是兩段的參考，`walk`（影片）是第 1 段的參考與第 2 段 22 幀的錨定片段，`line1`（音訊）鎖定在第 12–72 幀。第 2 段 prompt 空白，沿用全域 prompt。\n3. 執行。🎛️ Sample Segments 逐段展開成 Encode H3 Segment → Extend Latent → core guider + SamplerCustomAdvanced → Append Segment；🧵 Assemble Segments 輸出一個 MP4，`lock_audio = original` 時第 12–72 幀換回 `line1` 原聲。\n\n計畫：2 × 107 幀、重疊 22 → **192 幀**。只支援 batch 1；不保證接縫無痕。"
+      ],
+      "widgets_values_named": {
+        "text": "## MediaForge Timeline — MiniMax H3 director (single node)\n\n1. Pick your H3 models in the loaders: fl2va UNet (+ optional turbo LoRA), the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE. Sample Segments needs `audio_vae` here because the timeline locks an audio clip.\n2. The three materials in **⏱️ Edit Timeline** are placeholders: put your own `nurse.png`, `walk.mp4` and `line1.wav` into `input/mediaforge_timeline/`, or select a card in the material library and point its file at one of yours. Plan: `nurse` (image) is a reference in both segments, `walk` (video) is a reference in segment 1 and a 22-frame guide in segment 2, `line1` (audio) is locked at frames 12–72. Segment 2 has an empty prompt, so it uses the global prompt.\n3. Queue. 🎛️ Sample Segments expands into Encode H3 Segment → Extend Latent → core guider + SamplerCustomAdvanced → Append Segment for each segment; 🧵 Assemble Segments writes one MP4 and, with `lock_audio = original`, puts the original `line1` audio back over frames 12–72.\n\nPlan: 2 × 107 frames, overlap 22 → **192 frames**. Batch 1 only. Seams are not guaranteed to be invisible.\n\n---\n1. 在載入器選好 H3 模型：fl2va UNet（可加 turbo LoRA）、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。時間軸上有鎖定原音，所以 Sample Segments 必須接 `audio_vae`。\n2. **⏱️ Edit Timeline** 的三個素材是佔位：把自己的 `nurse.png`、`walk.mp4`、`line1.wav` 放進 `input/mediaforge_timeline/`，或在素材庫選取卡片、把檔案改成自己的。計畫：`nurse`（圖片）是兩段的參考，`walk`（影片）是第 1 段的參考與第 2 段 22 幀的錨定片段，`line1`（音訊）鎖定在第 12–72 幀。第 2 段 prompt 空白，沿用全域 prompt。\n3. 執行。🎛️ Sample Segments 逐段展開成 Encode H3 Segment → Extend Latent → core guider + SamplerCustomAdvanced → Append Segment；🧵 Assemble Segments 輸出一個 MP4，`lock_audio = original` 時第 12–72 幀換回 `line1` 原聲。\n\n計畫：2 × 107 幀、重疊 22 → **192 幀**。只支援 batch 1；不保證接縫無痕。"
+      },
+      "color": "#432",
+      "bgcolor": "#653"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "MODEL"
+    ],
+    [
+      2,
+      2,
+      0,
+      7,
+      0,
+      "MODEL"
+    ],
+    [
+      3,
+      2,
+      0,
+      11,
+      0,
+      "MODEL"
+    ],
+    [
+      4,
+      3,
+      0,
+      11,
+      1,
+      "CLIP"
+    ],
+    [
+      5,
+      4,
+      0,
+      11,
+      2,
+      "VAE"
+    ],
+    [
+      6,
+      10,
+      0,
+      11,
+      3,
+      "MF_SEGMENT_PLAN"
+    ],
+    [
+      7,
+      6,
+      0,
+      11,
+      4,
+      "SAMPLER"
+    ],
+    [
+      8,
+      7,
+      0,
+      11,
+      5,
+      "SIGMAS"
+    ],
+    [
+      9,
+      5,
+      0,
+      11,
+      6,
+      "VAE"
+    ],
+    [
+      10,
+      11,
+      0,
+      12,
+      0,
+      "MF_SEGMENT_STATE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

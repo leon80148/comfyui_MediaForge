@@ -577,7 +577,7 @@
       ],
       "size": [
         320,
-        150
+        174
       ],
       "flags": {},
       "order": 7,
@@ -631,6 +631,16 @@
             "name": "preset"
           },
           "link": null
+        },
+        {
+          "localized_name": "lock_audio",
+          "name": "lock_audio",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "lock_audio"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -654,13 +664,15 @@
         "MediaForge/timeline_cut",
         "h264 (libx264)",
         18,
-        "medium"
+        "medium",
+        "original"
       ],
       "widgets_values_named": {
         "filename_prefix": "MediaForge/timeline_cut",
         "codec": "h264 (libx264)",
         "crf": 18,
-        "preset": "medium"
+        "preset": "medium",
+        "lock_audio": "original"
       }
     },
     {

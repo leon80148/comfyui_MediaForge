@@ -61,7 +61,7 @@
         "SELECT_LTX2_CHECKPOINT.safetensors"
       ],
       "widgets_values_named": {
-        "ckpt_name": "ltx-2-19b-dev-fp8.safetensors"
+        "ckpt_name": "SELECT_LTX2_CHECKPOINT.safetensors"
       }
     },
     {
@@ -123,7 +123,7 @@
         1
       ],
       "widgets_values_named": {
-        "lora_name": "LTX/ltx-2-19b-distilled-lora-384.safetensors",
+        "lora_name": "SELECT_LTX2_DISTILLED_LORA.safetensors",
         "strength_model": 1
       }
     },
@@ -190,8 +190,8 @@
         "default"
       ],
       "widgets_values_named": {
-        "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
-        "ckpt_name": "ltx-2-19b-dev-fp8.safetensors",
+        "text_encoder": "SELECT_GEMMA3_12B_TEXT_ENCODER.safetensors",
+        "ckpt_name": "SELECT_LTX2_CHECKPOINT.safetensors",
         "device": "default"
       }
     },
@@ -240,7 +240,7 @@
         "SELECT_LTX2_CHECKPOINT.safetensors"
       ],
       "widgets_values_named": {
-        "ckpt_name": "ltx-2-19b-dev-fp8.safetensors"
+        "ckpt_name": "SELECT_LTX2_CHECKPOINT.safetensors"
       }
     },
     {
@@ -2061,7 +2061,7 @@
       ],
       "size": [
         320,
-        150
+        174
       ],
       "flags": {},
       "order": 31,
@@ -2115,6 +2115,16 @@
             "name": "preset"
           },
           "link": null
+        },
+        {
+          "localized_name": "lock_audio",
+          "name": "lock_audio",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "lock_audio"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -2138,13 +2148,15 @@
         "MediaForge/timeline_ltx2",
         "h264 (libx264)",
         18,
-        "medium"
+        "medium",
+        "original"
       ],
       "widgets_values_named": {
         "filename_prefix": "MediaForge/timeline_ltx2",
         "codec": "h264 (libx264)",
         "crf": 18,
-        "preset": "medium"
+        "preset": "medium",
+        "lock_audio": "original"
       }
     },
     {

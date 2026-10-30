@@ -26,7 +26,7 @@ class MF_EncodeH3Segment:
                 "audio_vae": ("VAE", {"tooltip": "H3 audio VAE：參考音訊、配對音軌與鎖定原音需要。"}),
                 "ref_video_short_edge": ("INT", {
                     "default": 0, "min": 0, "max": 4096, "step": 32,
-                    "tooltip": "0 = 交給 core 決定；否則先把參考影片縮到短邊 ≤ 此值，降低參考 token 與記憶體。",
+                    "tooltip": "0 = 自動：先縮到 H3 畫面的短邊 768（core 會再對齊）；否則縮到短邊 ≤ 此值（32 對齊），降低參考 token 與記憶體。",
                 }),
             },
         }
@@ -41,4 +41,4 @@ class MF_EncodeH3Segment:
 
 
 NODE_CLASS_MAPPINGS = {"MF_EncodeH3Segment": MF_EncodeH3Segment}
-NODE_DISPLAY_NAME_MAPPINGS = {"MF_EncodeH3Segment": "🎬 Encode H3 Segment"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MF_EncodeH3Segment": "🧩 Encode H3 Segment"}
