@@ -1,13 +1,15 @@
 """MF_WhisperTranscribe — AUDIO dict 或 path + AI_CONFIG → SRT_TEXT.
 
 兩種 provider:
-- openai_compatible：POST <base_url>/audio/transcriptions，回 SRT
+- openai_compatible：POST <base_url>/audio/transcriptions，要 verbose_json、自己組 SRT
 - faster_whisper_local：lazy import faster_whisper、本機推論
 
 雙模式選擇來自 AI_CONFIG.provider，使用者切 provider 就換 backend，不必動下游節點。
 """
+import json
 import os
 import tempfile
+from urllib.parse import urlparse
 
 from ..utils.cache_key import path_fingerprint
 from ..utils.ffmpeg import ensure_ffmpeg, resolve_ffmpeg_cmd
@@ -39,6 +41,9 @@ class MF_WhisperTranscribe:
                 f"但拿到 {type(ai_config).__name__}（請接 MF_AIConfig 節點）"
             )
         provider = ai_config.get("provider")
+        # 先解析模型：不支援語音辨識的服務要在抽音訊前就報錯
+        effective_model = _resolve_stt_model(ai_config)
+        print(f"[Whisper Transcribe] 使用模型：{effective_model}")
 
         cleanup = None
         try:
@@ -53,19 +58,6 @@ class MF_WhisperTranscribe:
                     raise RuntimeError("[Whisper Transcribe] FFmpeg 不在 PATH。")
                 source = _extract_wav(audio_path)
                 cleanup = source
-
-            # STT 跟 chat completion 用不同 model id (Codex R2 P2 finding)：OpenAI
-            # /audio/transcriptions 要 'whisper-1'、/chat/completions 要 'gpt-4o-mini'。
-            # 同一個 AIConfig 若要餵 Whisper + Translate，cfg.model 不能兩端通吃 —
-            # 用 STT-shape heuristic 判斷 cfg.model 是否像 STT 模型 id；不像就退回
-            # backend 預設 ('base' for faster_whisper_local, 'whisper-1' for openai_compatible)。
-            cfg_model = (ai_config.get("model") or "").strip()
-            if _looks_like_stt_model(cfg_model):
-                effective_model = cfg_model
-            elif provider == "faster_whisper_local":
-                effective_model = "base"
-            else:  # openai_compatible
-                effective_model = "whisper-1"
 
             if provider == "openai_compatible":
                 srt = _transcribe_openai_compatible(source, ai_config, language, effective_model)
@@ -117,6 +109,32 @@ def _looks_like_stt_model(name: str) -> bool:
     if any(low.startswith(p) for p in _NON_STT_MODEL_PREFIXES):
         return False
     return any(low.startswith(p) for p in _STT_MODEL_PREFIXES)
+
+
+# web/ai_config_services.js 標成僅翻譯的雲端服務：沒有可用的語音辨識端點。
+_HOSTS_WITHOUT_STT = {"openrouter.ai", "generativelanguage.googleapis.com"}
+_STT_FALLBACK_BY_HOST = {"api.groq.com": "whisper-large-v3-turbo"}
+
+
+def _resolve_stt_model(cfg):
+    """決定實際送出的語音模型。
+
+    STT 跟 chat completion 用不同 model id (Codex R2 P2 finding)：同一個 AIConfig 若要
+    餵 Whisper + Translate，cfg.model 不能兩端通吃。不像 STT id 就退回該服務的語音模型。
+    """
+    provider = cfg.get("provider")
+    host = (urlparse(cfg.get("base_url") or "").hostname or "").lower()
+    if provider == "openai_compatible" and host in _HOSTS_WITHOUT_STT:
+        raise ValueError(
+            f"[Whisper Transcribe] {host} 不支援語音辨識，只能用來翻譯。"
+            "請在 AI Config 改選 OpenAI、Groq 或 faster-whisper。"
+        )
+    cfg_model = (cfg.get("model") or "").strip()
+    if _looks_like_stt_model(cfg_model):
+        return cfg_model
+    if provider == "faster_whisper_local":
+        return "base"
+    return _STT_FALLBACK_BY_HOST.get(host, "whisper-1")
 
 
 def _input_has_audio_stream(path):
@@ -236,9 +254,11 @@ def _transcribe_openai_compatible(wav_path, cfg, language, model):
     headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg.get("api_key") else {}
     with open(wav_path, "rb") as f:
         files = {"file": (os.path.basename(wav_path), f, "audio/wav")}
+        # verbose_json 而不是 srt：Groq 不接受 srt；OpenAI whisper-1 和 Groq 都回 segments
         data = {
             "model": model,
-            "response_format": "srt",
+            "response_format": "verbose_json",
+            "timestamp_granularities[]": "segment",
             "language": language,
         }
         # allow_redirects=False：redirect 目的地不在 AIConfig 的 host allowlist
@@ -255,9 +275,17 @@ def _transcribe_openai_compatible(wav_path, cfg, language, model):
             + ("（端點回應 redirect — 基於 key 安全不跟隨，請直接填最終 base_url）"
                if 300 <= resp.status_code < 400 else "")
         )
-    # R5-4:不用 resp.text — 端點常回 text/plain 不帶 charset,requests 會退 ISO-8859-1
-    # 把 UTF-8 中文 SRT 解成亂碼。SRT API 合約就是 UTF-8,顯式解;utf-8-sig 順手吃 BOM。
-    return resp.content.decode("utf-8-sig", errors="replace")
+    # R5-4:不用 resp.text — 端點回應不帶 charset 時 requests 會退 ISO-8859-1 把 UTF-8
+    # 中文解成亂碼。顯式解 UTF-8;utf-8-sig 順手吃 BOM。
+    body = resp.content.decode("utf-8-sig", errors="replace")
+    try:
+        segments = json.loads(body)["segments"]
+        return _segments_to_srt((s["start"], s["end"], s["text"]) for s in segments)
+    except (ValueError, KeyError, TypeError) as e:
+        raise RuntimeError(
+            f"[Whisper Transcribe] 模型 {model} 的回應沒有可用的時間軸（segments），"
+            f"無法產生字幕。回應開頭：{body[:200]}"
+        ) from e
 
 
 def _transcribe_faster_whisper(wav_path, cfg, language, model):
@@ -281,12 +309,16 @@ def _transcribe_faster_whisper(wav_path, cfg, language, model):
     model = WhisperModel(model_size, device=device, compute_type="auto")
     segments, _info = model.transcribe(wav_path, language=language or None)
 
-    # 自己組 SRT (faster-whisper segments → SRT)
+    return _segments_to_srt((seg.start, seg.end, seg.text) for seg in segments)
+
+
+def _segments_to_srt(segments):
+    """(start_sec, end_sec, text) 序列 → SRT 字串。"""
     parts = []
-    for i, seg in enumerate(segments, start=1):
+    for i, (start, end, text) in enumerate(segments, start=1):
         parts.append(f"{i}")
-        parts.append(f"{_format_srt_time(seg.start)} --> {_format_srt_time(seg.end)}")
-        parts.append(seg.text.strip())
+        parts.append(f"{_format_srt_time(start)} --> {_format_srt_time(end)}")
+        parts.append(text.strip())
         parts.append("")
     return "\n".join(parts)
 
