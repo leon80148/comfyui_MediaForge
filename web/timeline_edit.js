@@ -8,9 +8,11 @@
 // material-geometry problem the input did not already have (§8.2); prompt and manifest problems are
 // reported by timelineProblems() instead. Python re-validates everything on the next run.
 
-import { carrySpec, resolveSegments, schemaErrorDetail, validate } from "./timeline_grid.js";
 import {
-    MAX_ANCHORS, MAX_MATERIALS, MAX_REFS, nameOk, resolvePrompt, segmentManifest, validateGeometry,
+    autoFill, carrySpec, crossfadeLimit, editGenerate, lengthOk, overlapOk, resolveSegments, schemaErrorDetail, validate,
+} from "./timeline_grid.js";
+import {
+    H3_LIMITS, MAX_ANCHORS, MAX_MATERIALS, MAX_REFS, nameOk, resolvePrompt, segmentManifest, validateGeometry,
 } from "./timeline_materials.js";
 
 export const H3_DEFAULT_GUIDE = 22;
@@ -33,8 +35,8 @@ function isH3GuideLength(n) {
     return n >= 5 && (n - 5) % 17 === 0;
 }
 
-function fail(reason) {
-    return { ok: false, reason };
+function fail(reason, extra = {}) {
+    return { ok: false, reason, ...extra };
 }
 
 function done(data, next, ctx, affected, warnings = []) {
@@ -560,4 +562,250 @@ export function setShotBoundary(data, index, cut, overlap, ctx) {
     }));
     const { refs, anchors, warnings } = shiftItems(data, boundary, delta);
     return done(data, { ...data, segments, refs, anchors }, ctx, [String(index)], warnings);
+}
+
+// ---- material tag buttons (segment form, H3 only) ----
+
+const TAG_CATEGORY = { image: "pictures", video: "videos", audio: "audios" };
+
+function referenced(manifest, id) {
+    return ["pictures", "videos", "audios"].some((k) => manifest[k].some((x) => x.material === id));
+}
+
+function problemAt(stage, error, index) {
+    return { ok: false, reason: "breaks", problem: { stage, error, segment: index } };
+}
+
+// What each material's button can do, from one look at the current segment. "add" means it can be tried:
+// useRefTag() validates the full result when clicked, and a refusal there says why and changes nothing.
+// {hidden} off H3 (tags do not exist there); {blocked} when the segment cannot be read, so the row never
+// pretends that nothing is a reference.
+export function tagButtons(data, index, ctx) {
+    if (!ctx.h3) return { hidden: true };
+    const view = segmentInputs(data, index, ctx);
+    if (!view) return { blocked: "not_ready" };
+    if (!view.ok) return { blocked: "manifest", error: view.error };
+    const snaps = verifiedSnapshots(data, ctx.snapshots);
+    const items = {};
+    for (const m of data.materials) {
+        if (referenced(view.manifest, m.id)) {
+            const r = resolvePrompt(`<@${m.name}>`, view.manifest, data.materials, index, true);
+            items[m.id] = r.ok ? { state: "insert" } : { state: "blocked", reason: r.error.reason };
+        } else if (!snaps[m.id]) {
+            items[m.id] = { state: "blocked", reason: "not_ready" };
+        } else {
+            const category = TAG_CATEGORY[m.kind];
+            items[m.id] = view.manifest[category].length >= H3_LIMITS[category]
+                ? { state: "blocked", reason: "tag_full", category, limit: H3_LIMITS[category] } : { state: "add" };
+        }
+    }
+    return { blocked: null, items };
+}
+
+// One click: the material becomes this segment's reference and its tag lands in the prompt, as one commit.
+// The new tag itself must resolve; other unresolved tags may stay, so a shared prompt that needs two
+// references can be completed one at a time.
+export function useRefTag(data, index, materialId, ctx) {
+    const m = material(data, materialId);
+    if (!m) return fail("no_material");
+    if (!ctx.h3) return fail("not_h3");
+    const view = segmentInputs(data, index, ctx);
+    if (!view || !snapOf(data, ctx, m.id)) return fail("not_ready");
+    if (!view.ok) return problemAt("manifest", view.error, index);
+    const tag = `<@${m.name}>`;
+    const inherited = !data.segments[index].prompt && !!data.prompt;
+    const isNew = !referenced(view.manifest, m.id);
+    let next = data;
+    if (isNew) {
+        // a new reference renumbers the tags: numbered ones are first pinned to what they mean now
+        if (view.template.search(RAW_TAG) >= 0) {
+            const pinned = aliasRawTags(next, index, ctx);
+            if (!pinned.ok) return fail("raw_tags_block");
+            next = pinned.next;
+        }
+        const added = createFromCard(next, m.id, "refs", emitIntervals(next.segments)[index][0], ctx);
+        if (!added.ok) return added;
+        next = added.next;
+    }
+    const template = templateOf(next, index);
+    // pressing ＋ for a tag the prompt already has only adds what it was missing: the reference
+    const write = !(isNew && template.includes(tag));
+    if (write) {
+        const prompt = `${template}${template && !template.endsWith(" ") ? " " : ""}${tag}`;
+        next = { ...next, segments: next.segments.map((s, i) => (i === index ? { ...s, prompt } : s)) };
+    }
+    const after = segmentInputs(next, index, ctx);
+    if (!after) return fail("not_ready");
+    if (!after.ok) return problemAt("manifest", after.error, index);
+    const resolved = resolvePrompt(tag, after.manifest, next.materials, index, true);
+    if (!resolved.ok) return problemAt("prompt", resolved.error, index);
+    const nowOwn = !!next.segments[index].prompt;
+    return done(data, next, ctx, [m.id, String(index)], inherited && nowOwn ? ["copied_shared"] : []);
+}
+
+// ---- what an edit did to each segment's references ----
+
+function tagTable(data, index, ctx) {
+    const view = segmentInputs(data, index, ctx);
+    if (!view?.ok) return null;
+    const m = view.manifest;
+    const names = new Map(data.materials.map((x) => [x.id, x.name]));
+    const tags = new Map();
+    const note = (tag, x, suffix = "") => tags.set(tag, { binding: x.binding, material: x.material, start: x.source_start ?? null,
+        length: x.effective_frames ?? x.frames ?? null, name: `${names.get(x.material)}${suffix}` });
+    for (const x of [...m.pictures, ...m.videos, ...m.audios]) note(x.tag, x);
+    for (const x of m.videos) if (x.audio_tag) note(x.audio_tag, x, ":audio");
+    return {
+        tags,
+        used: new Set([...m.pictures, ...m.videos, ...m.audios].map((x) => names.get(x.material))),
+        written: new Set([...view.template.matchAll(RAW_TAG)].map(([, kind, n]) => `<${kind} ${Number(n)}>`)),
+    };
+}
+
+// A timeline can pass every check and still mean something else: a segment's reference moved away, or a
+// numbered tag now names another material. Those stay legal, so the editor reports them instead of refusing.
+export function refChanges(before, after, ctx) {
+    if (!ctx.h3) return [];
+    const out = [];
+    const count = Math.min(before.segments.length, after.segments.length);
+    for (let i = 0; i < count; i++) {
+        const a = tagTable(before, i, ctx);
+        const b = tagTable(after, i, ctx);
+        if (!a || !b) continue;
+        for (const [tag, was] of a.tags) {
+            const now = b.tags.get(tag);
+            if (!now || !b.written.has(tag) || now.binding === was.binding) continue;
+            // another reference with the same content (a split, say) reads the same
+            if (now.material === was.material && now.start === was.start && now.length === was.length) continue;
+            out.push({ kind: "tag", segment: i, tag, from: was.name, to: now.name, fromStart: was.start, toStart: now.start, fromLength: was.length, toLength: now.length });
+        }
+        for (const name of a.used) if (!b.used.has(name)) out.push({ kind: "gone", segment: i, name });
+        for (const name of b.used) if (!a.used.has(name)) out.push({ kind: "added", segment: i, name });
+    }
+    return out;
+}
+
+// ---- segment lengths and overlaps ----
+
+// Fixed order, front to back: each segment's length, then its overlap, always on the latest candidate. Only
+// illegal values change (later segments still shift with them), so this is not a global optimum. A fade that no
+// longer fits is shortened. Prompt-level problems this causes are not refused: they are reported once the
+// lengths are legal, and an undo restores everything.
+export function conformSegments(data, ctx) {
+    let segs = data.segments;
+    let changed = false;
+    for (let i = 0; i < segs.length; i++) {
+        for (const [edge, illegal, frame] of [
+            ["right", () => !lengthOk(ctx.grid, segs[i].end - segs[i].start), () => segs[i].end],
+            ["left", () => i > 0 && !overlapOk(ctx.grid, segs[i - 1].end - segs[i].start), () => segs[i].start],
+        ]) {
+            if (!illegal()) continue;
+            const r = editGenerate(segs, i, edge, frame(), ctx.grid);
+            if (!r.ok) return fail(r.reason);
+            segs = r.segments;
+            changed = true;
+        }
+    }
+    if (!changed) return fail("unchanged");
+    const fades = [];
+    segs = segs.map((s, i) => {
+        if (i === 0 || s.seam_in?.kind !== "crossfade") return s;
+        const limit = crossfadeLimit(segs, i);
+        if (s.seam_in.frames <= limit) return s;
+        fades.push(i);
+        return { ...s, seam_in: limit < 1 ? { kind: "cut" } : { ...s.seam_in, frames: limit } };
+    });
+    const next = { ...data, segments: segs };
+    const valid = validate(next, ctx.mode, ctx.fpsKey, ctx.grid, ctx.sourceFrames ?? null, !!ctx.hasSource);
+    if (!valid.ok) return problemAt("grid", valid.error, segmentOf(valid.error.location));
+    const result = done(data, next, ctx, segs.map((_, i) => String(i)));
+    return result.ok ? { ...result, fades } : result;
+}
+
+// Auto-fill keeps what the user wrote: prompts and seeds by position, fades that still fit. Materials are not
+// moved; if that breaks a placement the gate refuses, and prompt problems are for the preview to report.
+export function refillSegments(data, count, length, overlap, ctx) {
+    const filled = autoFill(count, length, overlap, ctx.grid);
+    if (!filled.ok) return fail(filled.reason);
+    const old = data.segments;
+    const segs = filled.segments.map((s, i) => ({ ...s, prompt: old[i]?.prompt ?? "", seed: old[i]?.seed ?? null }));
+    const seamReset = [];
+    for (const [i, s] of segs.entries()) {
+        const seam = old[i]?.seam_in;
+        if (seam?.kind !== "crossfade") continue;
+        if (i > 0 && seam.frames <= crossfadeLimit(segs, i)) s.seam_in = seam;
+        else seamReset.push(i);
+    }
+    const removed = old.slice(count).map((_, k) => count + k);
+    const result = done(data, { ...data, segments: segs }, ctx, segs.map((_, i) => String(i)));
+    return result.ok ? { ...result, seamReset, removed } : result;
+}
+
+// ---- cut mode: mark in / out, add, delete (ranges of one source, in source order) ----
+
+function sourceBounds(data, ctx) {
+    if (!ctx.hasSource) return { error: fail("needs_source") };
+    if (ctx.sourceFrames == null) return { error: fail("source_unknown") };
+    const origin = data.source.origin_frame;
+    return { origin, end: origin + ctx.sourceFrames };
+}
+
+// Marks commit directly, one undo each: there is no pending range to forget to apply. A start past the current
+// end moves the whole range and keeps its length where there is room.
+export function markCut(data, index, edge, frame, ctx) {
+    const segs = data.segments;
+    const s = segs[index];
+    if (!s) return fail("no_item");
+    const bounds = sourceBounds(data, ctx);
+    if (bounds.error) return bounds.error;
+    const f = Math.round(frame);
+    const prev = segs[index - 1];
+    const after = segs[index + 1];
+    let range;
+    let moved = false;
+    if (edge === "left") {
+        if (f < bounds.origin) return fail("before_source");
+        if (f >= bounds.end) return fail("at_source_end");
+        if (prev && f < prev.end) return fail("overlaps_segment", { segment: index - 1 });
+        if (after && f >= after.start) return fail("overlaps_segment", { segment: index + 1 });
+        moved = f >= s.end;
+        range = { start: f, end: moved ? Math.min(f + (s.end - s.start), after ? after.start : bounds.end, bounds.end) : s.end };
+    } else {
+        if (f <= s.start) return fail("end_before_start");
+        if (f > bounds.end) return fail("past_source_end");
+        if (after && f > after.start) return fail("overlaps_segment", { segment: index + 1 });
+        range = { start: s.start, end: f };
+    }
+    const next = { ...data, segments: segs.map((x, i) => (i === index ? { ...x, ...range } : x)) };
+    const result = done(data, next, ctx, [String(index)]);
+    return result.ok ? { ...result, moved, shortened: moved && range.end - range.start < s.end - s.start } : result;
+}
+
+export function insertCut(data, frame, length, ctx) {
+    const segs = data.segments;
+    const bounds = sourceBounds(data, ctx);
+    if (bounds.error) return bounds.error;
+    const f = Math.round(frame);
+    if (f < bounds.origin) return fail("before_source");
+    if (f >= bounds.end) return fail("at_source_end");
+    const inside = segs.findIndex((s) => f >= s.start && f < s.end);
+    if (inside >= 0) return fail("inside_segment", { segment: inside });
+    const later = segs.findIndex((s) => s.start > f);
+    const index = later < 0 ? segs.length : later;
+    const end = Math.min(f + length, later < 0 ? bounds.end : segs[later].start, bounds.end);
+    const added = { start: f, end, prompt: "", seam_in: { kind: "cut" }, seed: null };
+    const result = done(data, { ...data, segments: [...segs.slice(0, index), added, ...segs.slice(index)] }, ctx, [String(index)]);
+    return result.ok ? { ...result, index } : result;
+}
+
+export function deleteCut(data, index, ctx) {
+    if (data.segments.length <= 1) return fail("last_segment");
+    if (!data.segments[index]) return fail("no_item");
+    return done(data, { ...data, segments: data.segments.filter((_, i) => i !== index) }, ctx, [String(index)]);
+}
+
+// Cut mode refuses materials, but hides the library: this is the way out. Files stay in input/; prompts are
+// left alone (cut does not resolve them, and generate reports what is missing if the user goes back).
+export function removeAllMaterials(data, ctx) {
+    return done(data, { ...data, materials: [], refs: [], anchors: [] }, ctx, data.materials.map((m) => m.id));
 }

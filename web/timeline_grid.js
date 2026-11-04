@@ -379,6 +379,54 @@ export function editCut(segs, index, edge, frame) {
     return { ok: true, segments: segs.map((x, i) => (i === index ? { ...x, [edge === "left" ? "start" : "end"]: f } : x)) };
 }
 
+// Offered in the auto-fill dropdowns: about 1–10 s, thinned so the list stays short. An illegal current
+// value is never offered (it would fail the moment it is applied); free grids use a number field instead.
+export function commonLengths(grid, perSecond, current = null) {
+    if (grid === "free") return [];
+    const out = [];
+    for (const f of legalLengths(grid, Math.ceil(perSecond), Math.floor(10 * perSecond))) {
+        if (!out.length || (f - out[out.length - 1]) / perSecond >= 0.5) out.push(f);
+    }
+    if (current !== null && lengthOk(grid, current) && !out.includes(current)) out.push(current);
+    return out.sort((a, b) => a - b);
+}
+
+export function commonOverlaps(grid, perSecond) {
+    if (grid === "free") return [];
+    const out = [0];
+    for (let f = 1; f <= 3 * perSecond; f++) {
+        if (overlapOk(grid, f) && (out.length === 1 || (f - out[out.length - 1]) / perSecond >= 0.25)) out.push(f);
+    }
+    return out;
+}
+
+// The next legal length up or down, or null below the smallest. Free grids step about a second.
+export function stepLength(grid, length, dir, perSecond) {
+    if (grid === "free") return Math.max(1, length + dir * Math.round(perSecond));
+    const [base, step] = GRID_STEPS[grid];
+    const k = (length - base) / step;
+    const target = base + step * (dir > 0 ? Math.floor(k) + 1 : Math.ceil(k) - 1);
+    return target < base ? null : target;
+}
+
+export function stepOverlap(grid, overlap, dir, perSecond) {
+    if (grid === "free") {
+        const target = overlap + dir * Math.round(perSecond / 4);
+        return dir < 0 && overlap === 0 ? null : Math.max(0, target);
+    }
+    const [base, step] = GRID_STEPS[grid];
+    if (dir < 0) {
+        if (overlap === 0) return null;
+        return overlap <= base ? 0 : base + step * (Math.ceil((overlap - base) / step) - 1);
+    }
+    return overlap < base ? base : base + step * (Math.floor((overlap - base) / step) + 1);
+}
+
+export function overlapAtMost(grid, limit) {
+    for (let f = Math.max(0, limit); f > 0; f--) if (overlapOk(grid, f)) return f;
+    return 0;
+}
+
 export function autoFill(count, length, overlap, grid) {
     if (!lengthOk(grid, length)) return { ok: false, reason: "illegal_length" };
     if (count > 1 && (!overlapOk(grid, overlap) || overlap >= length)) return { ok: false, reason: "illegal_overlap" };

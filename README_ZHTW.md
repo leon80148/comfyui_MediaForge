@@ -157,43 +157,65 @@ ComfyUI 會在範本瀏覽器列出 plugin 的 `example_workflows/` 目錄。模
 
 ### 時間軸編輯器
 
-Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。
+Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。四個原生 widget 顯示白話標籤（`來源影片（video）`、`每秒幀數（fps）`、`段長規則（grid）`、`用途（mode）`，以及 `MiniMax H3 段長規則（h3_5+17n）`、`生成新影片（generate）` 這類選項），只改顯示：存檔與 API 用的名稱和值不變。
 
-分段：
+版面由上而下：預覽與素材庫、工具列、軌道（左欄標示分段 / 參考 / 指定畫面 / 保留原音，空軌道有用途提示）、狀態列、inspector。時間一律秒數在前，例如 `4.46 秒（107 幀）`。`？` 開啟名詞說明與快捷鍵。
 
-- 拖曳分段邊界。`generate` 模式：右邊界改段長、左邊界改與前段的重疊，後續各段跟著平移（ripple），邊界會吸附到該 grid 的合法值；`cut` 模式：邊界以整數幀在相鄰兩段之間移動。
-- 接縫：每段的 incoming seam 可選 `cut` 或 `crossfade`（淡化幀數 + 音訊曲線）。
-- 自動分段（段數、段長、重疊）；`cut` 模式可匯入 🎞️ Detect Scenes 的 `ranges_json`。
-- 預覽選定的來源影片；瀏覽器無法播放的 codec 會改用小尺寸、無聲的 H.264 proxy。「上傳影片」把來源存到 `input/mediaforge_timeline/`。
+作用對象：點選或 Tab 到一段就是編輯對象；播放頭不在該段時會跳過去（`generate` 跳到扣除開頭重疊後的位置，`cut` 跳到來源區間起點）。之後點或拖曳尺規、方向鍵、播放都只移動播放頭，不會換編輯對象。按鈕會寫明作用在哪裡，例如 `＋ 用在第 2 段`、`＋ 在 3.54 秒指定畫面`。
+
+分段（`generate`，生成新影片）：
+
+- 拖曳分段邊界。右邊界改段長、左邊界改與前段的重疊，後續各段跟著平移（ripple），邊界會吸附到該 grid 的合法值。
+- inspector 第一層：這段的 prompt、參考素材標籤、長度 `[−] 4.46 秒（107 幀） [＋]`（只走合法值；`free` 每次約 1 秒）、`從這段開始新鏡頭` / `接續前一段`。
+- `進階設定`：與前段重疊、精確起點 / 終點（幀）、成品銜接方式（直接切換，或交叉淡化 + 淡化長度 + 聲音淡化方式）、seed。
+- 自動分段：段數、每段長度、與前段重疊。下拉列出可用的值並顯示秒數與幀數，也可自訂；`free` 直接輸入幀數。套用時依序保留各段的 prompt、seed 與仍放得下的交叉淡化，不會搬動素材；預覽會先說明哪幾段會被移除、哪些淡化會重設、參考歸屬如何改變，以及套用後會出現的問題。一個 undo 步驟。
+
+剪輯（`cut`，剪現有影片）：
+
+- 播放或拖曳尺規找位置，`設為起點 I` / `設為終點 O` 直接提交，各一個 undo 步驟。起點超過目前終點時整段移過去並保留長度；碰到下一段或來源結尾時縮短，並說明新長度。
+- `在目前位置新增一段` 依影片順序插入；位置已在某段內或已是來源結尾時會拒絕並說明。`刪除這段`（或 `Delete`）可刪任一段，最後一段不能刪。區間一律依影片順序、互不重疊。
+- 拖曳邊界以整數幀在相鄰兩段之間移動；可匯入 🎞️ Detect Scenes 的 `ranges_json`。
+- 共用 prompt 與段落 prompt 都會顯示，因為 Select Segment 會輸出它們。
+- 資料裡還有素材時無法執行，狀態列提供 `移除素材`（檔案仍在 `input/`，prompt 不動）與 `切回生成新影片`。
+
+來源影片：預覽選定的來源；瀏覽器無法播放的 codec 會改用小尺寸、無聲的 H.264 proxy。`上傳來源影片` 把來源存到 `input/mediaforge_timeline/`。沒有可播放內容時播放鍵停用並說明。播放的是來源影片或選中的素材，不是生成結果。
 
 素材（`generate` 模式）：
 
-- **素材庫** —— 按「加入素材」（可多選），或從桌面把圖片 / 影片 / 音訊檔拖進編輯器。檔案每次兩個上傳到 `input/mediaforge_timeline/`；一批上傳完成後合併成一個 undo 步驟；失敗的檔案留成卡片，可「重試 / 刪除」。卡片顯示縮圖或圖示、名稱、讀取後的長度與狀態（上傳中 / 讀取中 / 就緒 / 錯誤）。選取卡片會在預覽區預覽該素材。名稱就是 prompt 別名，由檔名產生；在 inspector 改名時 prompt 會一起改寫。刪除素材會移除它的參考與錨定，不會刪掉已上傳的檔案。
-- **軌道** —— 把卡片拖到分段下方三條軌道之一，或選取卡片後用 inspector 的「＋參考 / ＋畫面錨定 / ＋鎖定原音」放到播放頭位置。所有卡片都要等讀取完成；表外的組合會被拒絕。
+- **素材庫** —— 按「加入素材」（可多選），或從桌面把圖片 / 影片 / 音訊檔拖進編輯器。檔案每次兩個上傳到 `input/mediaforge_timeline/`；一批上傳完成後合併成一個 undo 步驟；失敗的檔案留成卡片，可「重試 / 刪除」。卡片顯示縮圖或圖示、名稱、讀取後的長度與狀態（上傳中 / 讀取中 / 已讀取 / 讀取失敗）。選取卡片會在預覽區預覽該素材。名稱就是 prompt 別名，由檔名產生；在 inspector 改名時 prompt 會一起改寫。刪除素材會移除它的參考與指定，不會刪掉已上傳的檔案。
+- **軌道** —— 把卡片拖到分段下方三條軌道之一：拖曳時可放的軌道亮起、不可放的變暗，落點是否合法仍在游標位置判斷並說明原因。也可以選取卡片後用 inspector 的按鈕放置，按鈕上的時間就是實際落點，會跟著播放頭更新。所有卡片都要等讀取完成；表外的組合會被拒絕。
 
-  | 卡片 | 參考 | 畫面錨定 | 鎖定原音 |
+  | 卡片 | 參考 | 指定畫面 | 保留原音 |
   |---|---|---|---|
-  | 圖片 | 參考，範圍 = 落點所在段的輸出區間 | 落點的關鍵幀 | — |
-  | 影片 | `follow` 參考，從該段起點開始；檔案有音軌時帶音軌 | 落點的錨定片段（H3：最多 22 幀，維持在單一段的輸出區間內） | — |
-  | 音訊 | 參考，範圍 = 該段 | — | 從落點開始的鎖定原音，長度到素材結尾或時間軸結尾 |
+  | 圖片 | 參考，範圍 = 落點所在段扣除開頭重疊後的部分 | 落點的關鍵畫面（`keyframe`） | — |
+  | 影片 | `follow` 參考，從該段扣除開頭重疊後的位置開始；檔案有音軌時帶音軌 | 落點的引導片段（`guide`；H3：最多 22 幀，維持在單一段內、避開開頭重疊） | — |
+  | 音訊 | 參考，範圍 = 該段扣除開頭重疊後的部分 | — | 從落點開始保留原音（`lock`），長度到素材結尾或時間軸結尾 |
 
-- **長條** —— 拖曳移動、拖曳端點修剪，`S`（或「分割」）在播放頭分割，`Delete` / `Backspace` 刪除，`Alt + ←/→` 微調 1 幀（`Shift` ×10），`Escape` 取消拖曳。長條與分段可用 `Tab` 取得焦點。長條在 8 px 內依序吸附段界、播放頭、其他長條的端點；會讓時間軸不合法的編輯（例如「延續前鏡」把錨定片段推過段界）會被拒絕並說明原因、不寫入；編輯改變某段送入模型的內容時，狀態列會列出受影響的段。參考會在最接近播放頭的段界分割（不會切在段內）；H3 錨定片段不能分割（兩個 17k + 5 長度加起來不會是另一個合法長度）。數值在 inspector 編輯：參考的範圍、`follow` / `fixed`、內容起點 / 長度、音軌與順序（上移 / 下移 —— 順序決定標籤編號）；錨定的位置、內容起點 / 長度與音軌。
-- **Prompt** —— 段落 prompt 空白時沿用全域 prompt。按鈕插入 `<@名稱>`；影片參考的配對音軌寫 `<@名稱:audio>`。每段把別名解析成自己的 `<Picture N>` / `<Video N>` / `<Audio N>` 標籤（只限 H3 grid）。直接手寫的標籤仍可用，但參考順序改變時意義會跟著變；對應明確時可按「轉成 <@名稱>」改寫成別名。
-- **送入模型的內容** —— 每段在所有素材讀取完成後顯示：標籤對照表、每支參考影片經 H3 裁到 5 + 17k 幀後的有效幀數（以及裁掉多少）、關鍵幀與錨定片段的位置、以音訊 token 表示的鎖音覆蓋範圍（附續接 / 鎖定 / 母帶原聲範圍的 token 覆蓋圖）、鎖音關掉音訊續接時的警告，以及解析後的 prompt。狀態列對每一段執行與 Edit Timeline 相同的檢查（manifest、標籤上限、別名），點錯誤會選到出錯的位置。
-- **Seed** —— 每段可選的 seed，附「重抽」；空白 = 使用 Sample Segments 的 `noise_seed`。只有 Sample Segments 會套用。
-- **鏡頭切換 / 延續** —— 「設為新鏡頭」把該段與前段的重疊設為 0、接縫改為 `cut`，取樣不再依賴前段；後續各段及屬於它們的參考與錨定一起平移，跨過舊段界的參考會被標示。「延續前鏡」恢復該 grid 的預設重疊（H3：22 幀）。各是一個 undo 步驟。
+- **長條** —— 拖曳移動、拖曳端點修剪，`S`（或「分割」）在播放頭分割，`Delete` / `Backspace` 刪除，`Alt + ←/→` 微調 1 幀（`Shift` ×10），`Escape` 取消拖曳。長條與分段可用 `Tab` 取得焦點。長條在 8 px 內依序吸附段界、播放頭、其他長條的端點；會讓時間軸不合法的編輯（例如「接續前一段」把引導片段推過段界）會被拒絕並說明原因、不寫入。參考會在最接近播放頭的段界分割（不會切在段內）；關鍵畫面與 H3 引導片段不能分割（兩個 17k + 5 長度加起來不會是另一個合法長度），所以不顯示分割按鈕。數值在 inspector 編輯：參考的範圍、`follow` / `fixed`、內容起點 / 長度、音軌與順序（排序上移 / 下移 —— 順序可能影響標籤編號）；指定的位置、內容起點 / 長度與音軌。保留原音的 inspector 另外說明實際範圍、是否被截短，以及成品換回原聲的條件。
+- **標籤按鈕**（只限 H3 grid）—— `✓ 名稱`：已是本段參考，點一下插入 `<@名稱>`。`＋ 名稱`：點一下同時建立本段參考並插入標籤，一個 undo 步驟；prompt 已有該標籤時只補參考。無法使用時停用，並在提示文字說明原因（同素材多條參考、該類已達上限、素材未讀取完成）。只想加參考不插標籤時，把卡片拖到軌道。
+- **Prompt** —— 共用 prompt 給沒寫 prompt 的段使用；段落有自己的 prompt 就取代它、不會合併。表單持續顯示目前是哪一種，並可 `清空，改用共用 prompt`。需要插入標籤而本段空白時，會先把共用文字複製到本段並說明；只補共用 prompt 已有標籤的參考時，繼續使用共用 prompt。影片參考的配對音軌寫 `<@名稱:audio>`。每段把別名解析成自己的 `<Picture N>` / `<Video N>` / `<Audio N>` 標籤（只限 H3 grid）。直接手寫的編號標籤仍可用，但參考順序改變時意義會跟著變；對應明確時可按「轉成 <@名稱>」改寫成別名，新增參考前也會先做這個轉換，轉不了就拒絕並說明。
+- **這段送給模型的內容** —— 收合時一行摘要（例如 `1 張圖、1 支影片、保留原音 3.96 秒`）。展開後每段在所有素材讀取完成時顯示：標籤對照表、每支參考影片實際使用的秒數與幀數（以及未使用多少）、關鍵畫面與引導片段的時間、保留原音的範圍、解析後的 prompt，以及 H3 技術細節（token 範圍以 `[起點, 終點)` 表示、覆蓋圖、接續邊界偏差）。錯誤與「保留原音和接續前段的聲音重疊」的警告不會隨收合隱藏。
+- **Seed** —— 每段可選的 seed，附「換一個」；空白 = 使用 Sample Segments 的 `noise_seed`。只有 Sample Segments 會套用。
+- **鏡頭切換 / 接續** —— 「從這段開始新鏡頭」把該段與前段的重疊設為 0、銜接改為直接切換，生成時不接續前段；本段與後續各段及屬於它們的參考與指定一起平移，跨過舊段界的項目會被標示。「接續前一段」恢復該 grid 的預設重疊（H3：22 幀；段太短時取放得下的最大值）。`free` 沒有預設重疊，不顯示這個按鈕。各是一個 undo 步驟。
+
+狀態列：
+
+- 第一行是持續狀態。`✓ 時間軸檢查通過` 只代表時間軸本身（結構、分段、素材位置、每段的 prompt 與上限），不檢查下游接線或模型。有問題時顯示白話的對象與原因，點一下定位，`詳情` 內有原始位置與代碼。
+- 少數問題附修復按鈕：長度或重疊不符（例如換了 grid）→ `調整段長與重疊`（依序只修不合法的值，後面的段會跟著移，交叉淡化放不下時縮短，不是整體最佳化）；H3 fps 不符 → `改成 24 fps`；cut 缺來源 → `上傳來源影片`；cut 帶素材 → 見上。一個 undo 步驟，並說明總長變化。
+- 第二行是這次操作的通知：哪幾段送給模型的內容變了；參考換了段或編號標籤改指別的素材時會明確點名，因為這些變更全部合法、檢查仍會通過。狀態正常且本節點輸出還沒接線時，提示下一步（H3 → 🎛️ Sample Segments、其他 → 🎯 Select Segment、cut → ✂️ Trim by Ranges）。
 
 一般：
 
-- `timeline_data` JSON 是唯一會被存檔與送出執行的狀態；編輯器的檢視狀態（縮放、選取、播放頭）只存在 editor 裡，不寫進 workflow，所以選取或移動播放頭不算一個 undo 步驟，也不會進入 prompt。重新載入同一個 graph（undo / redo，或 graph id 相同的 workflow，例如同一個檔案再開一次）時會沿用檢視狀態；其他 graph 從預設檢視開始。素材讀取結果只存在編輯器裡。
+- `timeline_data` JSON 是唯一會被存檔與送出執行的狀態；編輯器的檢視狀態（縮放、選取、播放頭、區塊開合）只存在 editor 裡，不寫進 workflow，所以選取或移動播放頭不算一個 undo 步驟，也不會進入 prompt。重新載入同一個 graph（undo / redo，或 graph id 相同的 workflow，例如同一個檔案再開一次）時會沿用檢視狀態；其他 graph 從預設檢視開始。素材讀取結果只存在編輯器裡。
+- 打字後可以直接點按鈕或換欄位：文字先存，點擊照常生效；鍵盤操作後焦點留在同一個控制項。字母快捷鍵不會攔截 `Ctrl` / `Cmd` 組合鍵。
 - 編輯器載入失敗時會改顯示原始 JSON widget，仍可直接編輯。
-- 介面文字為繁體中文；節點名稱、widget 名稱與 enum 值保留英文。
+- 介面文字為繁體中文；技術名稱與儲存值保留英文，顯示標籤可中英並列。
 
 編輯器使用兩條本機 route：`POST /mediaforge/timeline/probe`（影片、圖片與音訊）與 `POST /mediaforge/timeline/proxy`（只限影片）。只接受同源請求、只讀 ComfyUI `input/` 內的檔案、回應不含絕對路徑；上限為單檔 8 GiB、30 分鐘、每邊 8192 px、120 fps。Proxy 快取在 ComfyUI temp 目錄下的 `mediaforge_timeline_proxy`（4 GiB / 128 筆 / 24 h，LRU）。不連網。跟 core 自己的 route 一樣**沒有認證**、信任 `Host` header（不宣稱能防 DNS rebinding）—— LAN 不可信時請在網路層限制存取。
 
-### 鎖定原音
+### 保留原音
 
-放在「鎖定原音」軌道上的音訊卡片（`role = lock`）讓時間軸上該位置保留原始音訊，作用在兩個地方：
+放在「保留原音」軌道上的音訊卡片（`role = lock`，執行訊息與技術段落稱「鎖定原音」）讓時間軸上該位置保留原始音訊，作用在兩個地方：
 
 - **取樣時**（只限 H3 —— Encode H3 Segment，兩條路徑都是；需要 `audio_vae`）：lock 觸及的每一段，完全落在 lock 內的音訊 token（每秒 40 個）會用你的 audio VAE 從原聲編碼 —— 使用前最多 4 秒、後最多 0.4 秒的有限上下文，是整段編碼的近似 —— 寫進音訊 latent 並設 `noise_mask = 0`。lock 邊緣不足一個 token 的部分照常生成。解碼前 Append 會確認鎖定 token 仍是寫入的值（latent 遺失 `mf_lock` metadata 或任一值偏差超過 1e-3 → `E_LOCK_DRIFT`）。這讓模型取樣的 latent 裡保有原聲；不宣稱對嘴。
 - **最終成品**（`generate` 模式的任何 grid）—— Assemble `lock_audio = original`（預設）組出 48 kHz 雙聲道 float 母帶：生成音軌在每個 lock 的區間 `[at, at + length)` 換回原聲，AAC 編碼前逐 sample 精確。`generated` 保留生成音軌。接上 `audio` 時整條取代並隱藏 `lock_audio`。沒有鎖音時此設定沒有作用；report 的 `effective` 欄位寫明實際套用與原因。
@@ -696,10 +718,10 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 
 | Widget | 型別 | 預設 | 說明 |
 |---|---|---|---|
-| `video` | dropdown | `(none)` | `input/` 下的參考來源影片。`generate` 可不選、`cut` 必選 |
-| `fps` | dropdown | `24` | 時間軸幀率（有理數）：`16` / `24` / `25` / `30` / `24000/1001` / `30000/1001` / `48` / `50` / `60000/1001` / `60`。H3 必須 `24` |
-| `grid` | dropdown | `h3_5+17n` | 決定合法段長與重疊（見下表）；不選擇也不載入模型。`mode = cut` 時隱藏（cut 不使用） |
-| `mode` | dropdown | `generate` | `generate` 規劃生成段；`cut` 選取來源區間，不續接 latent |
+| `video` | dropdown | `(none)` | 顯示為「來源影片（video）」。`input/` 下的來源影片。`generate` 可不選、`cut` 必選；`(none)` 依模式顯示為「不使用來源影片」或「尚未選擇（必選）」 |
+| `fps` | dropdown | `24` | 顯示為「每秒幀數（fps）」。時間軸幀率（有理數）：`16` / `24` / `25` / `30` / `24000/1001` / `30000/1001` / `48` / `50` / `60000/1001` / `60`。H3 必須 `24` |
+| `grid` | dropdown | `h3_5+17n` | 顯示為「段長規則（grid）」，選項附模型名稱（例如 `MiniMax H3 段長規則（h3_5+17n）`）。決定合法段長與重疊（見下表）；不選擇也不載入模型。`mode = cut` 時隱藏（cut 不使用） |
+| `mode` | dropdown | `generate` | 顯示為「用途（mode）」。`generate`（生成新影片）規劃生成段；`cut`（剪現有影片）選取來源區間，不續接 latent |
 | `timeline_data` | STRING (multiline) | `{"version": 1, "source": {"origin_frame": 0}, "segments": [{"start": 0, "end": 107, "prompt": ""}]}` | 以 JSON 字串表示的計畫（含素材的 v2 格式見[時間軸 prompt](#時間軸-prompt)；編輯器存檔為 v2）。視覺化編輯器正常運作時隱藏；編輯器載入失敗時顯示且可編輯 |
 
 | `grid` | 合法段長（幀） | 合法重疊（幀） | 續接 |
@@ -833,7 +855,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 | `codec` | dropdown | smart（有 NVENC 用、沒有用 libx264） | 跟其他編碼節點共用 catalog |
 | `crf` | INT | `18` (0–51) | `prores (prores_ks)` 時隱藏。刻度意義隨 codec 不同，見[智慧 GPU codec 預設](#智慧-gpu-codec-預設) |
 | `preset` | dropdown | `medium` | `ultrafast` … `veryslow`。`prores (prores_ks)` 時隱藏 |
-| `lock_audio` *(選用)* | dropdown | `original` | `original`：[鎖定原音](#鎖定原音)的區間換回原聲（48 kHz 雙聲道母帶）；`generated`：保留生成音軌。沒有鎖音時沒有作用。接上 `audio` 時隱藏 |
+| `lock_audio` *(選用)* | dropdown | `original` | `original`：[鎖定原音](#保留原音)的區間換回原聲（48 kHz 雙聲道母帶）；`generated`：保留生成音軌。沒有鎖音時沒有作用。接上 `audio` 時隱藏 |
 
 **輸入**：`state`（MF_SEGMENT_STATE，必填）—— 來自 End Loop、最後一個 Append 或 Sample Segments；`audio`（AUDIO，選用）—— 整條取代最終音軌，自動補靜音 / 截斷到影片長度。
 
@@ -1333,7 +1355,7 @@ SRT 文字 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`�
 
 **輸出**：`latent` LATENT（→ 你的 sampler）；`report` STRING（JSON：複製區間、token 數、要求與實際生效的遮罩值、衝突、provenance、警告）。
 
-**說明**：輸出的 latent 帶有 `mf_carry` 標記，Append 會檢查它。不檢查 conditioning（prompt、keyframe、reference）—— `report` 固定寫 `conditioning_check: "unavailable"`。有重疊的段卻 `state` 與 `previous_latent` 都沒接 → `E_CARRY_SOURCE`。[鎖定原音](#鎖定原音)與續接的音訊 token 重疊時，該段略過音訊續接（`W_LOCK_CARRY`；report 的 `effective` 欄位寫 `lock_conflict`）。
+**說明**：輸出的 latent 帶有 `mf_carry` 標記，Append 會檢查它。不檢查 conditioning（prompt、keyframe、reference）—— `report` 固定寫 `conditioning_check: "unavailable"`。有重疊的段卻 `state` 與 `previous_latent` 都沒接 → `E_CARRY_SOURCE`。[鎖定原音](#保留原音)與續接的音訊 token 重疊時，該段略過音訊續接（`W_LOCK_CARRY`；report 的 `effective` 欄位寫 `lock_conflict`）。
 
 **範例**：H3 迴圈 —— `mask = hard`、`carry_audio = True`、`state` ← Start Loop 的 `current_iteration_value`。Wan 2.2 high / low 見[兩段式取樣器](#兩段式取樣器)。
 
@@ -1341,7 +1363,7 @@ SRT 文字 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`�
 
 #### 🧩 Encode H3 Segment (`MF_EncodeH3Segment`)
 
-把一段的 prompt 與素材編成 MiniMax H3 conditioning 與空 AV latent：參考經 core `MiniMaxH3ReferenceToVideo`、關鍵幀與錨定片段依幀序經 core `MiniMaxH3AddGuide`，最後把[鎖定原音](#鎖定原音)寫進 latent。素材只在這次呼叫內解碼。
+把一段的 prompt 與素材編成 MiniMax H3 conditioning 與空 AV latent：參考經 core `MiniMaxH3ReferenceToVideo`、關鍵幀與錨定片段依幀序經 core `MiniMaxH3AddGuide`，最後把[鎖定原音](#保留原音)寫進 latent。素材只在這次呼叫內解碼。
 
 **適用情境**：H3 迴圈路徑，取代 `MiniMaxH3ImageToVideo` 的位置（Select Segment 的 `segment` → 這裡 → Extend Latent 的 `target_latent`）。Sample Segments 內部也用它。
 
@@ -1362,7 +1384,7 @@ SRT 文字 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`�
 
 #### 🎛️ Sample Segments (`MF_SampleSegments`)
 
-MiniMax H3 時間軸的低記憶體單節點取樣器。執行時逐段展開成一組節點 —— `🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider` / `CFGGuider` + `SamplerCustomAdvanced` → `➕ Append Segment` —— 並回傳最後一個 Append 的 state。見[時間軸與長片](#時間軸與長片)、[鎖定原音](#鎖定原音)與[增量重算](#增量重算)。
+MiniMax H3 時間軸的低記憶體單節點取樣器。執行時逐段展開成一組節點 —— `🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider` / `CFGGuider` + `SamplerCustomAdvanced` → `➕ Append Segment` —— 並回傳最後一個 Append 的 state。見[時間軸與長片](#時間軸與長片)、[鎖定原音](#保留原音)與[增量重算](#增量重算)。
 
 **適用情境**：H3 時間軸（`generate`、`grid = h3_5+17n`、24 fps；其他設定會在展開前報錯），取代迴圈。
 

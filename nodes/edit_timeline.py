@@ -25,16 +25,19 @@ class MF_EditTimeline:
             "required": {
                 "video": ([NO_SOURCE] + _list_input_videos(), {
                     "default": NO_SOURCE,
-                    "tooltip": "參考來源影片（input/）。generate 模式可不選；cut 模式必選。",
+                    "tooltip": "放在 input/ 的來源影片。生成新影片可以不選；剪現有影片必選。",
                 }),
-                "fps": (list(FPS_PRESETS), {"default": "24", "tooltip": "時間軸幀率（有理數）。H3 必須 24。"}),
+                "fps": (list(FPS_PRESETS), {
+                    "default": "24",
+                    "tooltip": "時間軸每秒幀數。生成新影片且使用 H3 段長規則時，必須設為 24 fps。",
+                }),
                 "grid": (list(GRIDS), {
                     "default": "h3_5+17n",
-                    "tooltip": "決定段長與重疊格點；不選擇或載入模型。cut 模式不使用。",
+                    "tooltip": "決定每段的長度與重疊規則，請依下游模型選擇。此處不會選擇或載入模型。剪現有影片時不使用。",
                 }),
                 "mode": (list(MODES), {
                     "default": "generate",
-                    "tooltip": "generate 規劃生成段；cut 選取來源區間，不續接 latent。",
+                    "tooltip": "generate：規劃要由模型生成的段落。cut：從來源影片選出要保留的區間，不經模型生成。",
                 }),
                 "timeline_data": ("STRING", {"default": DEFAULT_TIMELINE, "multiline": True, "dynamicPrompts": False}),
             },
