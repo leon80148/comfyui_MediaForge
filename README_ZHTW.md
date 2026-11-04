@@ -17,7 +17,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 - 🎙️ **內建音訊混音** — BurnSubtitle 的 `keep_source_audio`（預設開）用 `amix` 把外部 audio pin 跟 source 自帶音軌混在一起；支援 cinematic fps（23.976 / 29.97 / 59.94 等 FLOAT 值）
 - 🧪 **廣播級編碼控制** — H.264 / HEVC / AV1 / ProRes，支援 CRF / bitrate / target-size 三種編碼模式；NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）由 `ffmpeg -encoders` probe 自動加入 dropdown
 - 🎚️ **單次編碼、多層 overlay 的 Compose pipeline** — `filter_complex` graph 編譯器，N 層 overlay 仍只走一次 re-encode
-- 🤖 **Provider-agnostic AI** — `MF_AIConfig` 讓 Whisper / Translate 在 OpenAI / Groq / Ollama / 本地 backend 之間一處切換
+- 🤖 **Provider-agnostic AI** — `MF_AIConfig` 讓 Whisper / Translate 在 OpenAI / Groq / OpenRouter / Gemini / Ollama / 本地 backend 之間一處切換
 - 🧵 **時間軸與長片** — 在附素材庫（參考圖片 / 影片 / 音訊、關鍵幀、錨定片段、鎖定原音）的視覺化編輯器規劃互相重疊的分段，把每段 latent 尾端續接到下一段，逐段解碼並暫存到磁碟，最後只編碼一次。MiniMax H3 AV 在迴圈路徑支援；單節點 H3 取樣器尚待 GPU 驗證；LTX-2 / Wan 2.2 為實驗性（見[時間軸與長片](#時間軸與長片)）
 - 🪶 **輕量相依** — `requirements.txt` 只有四個小型純 Python 套件，加上找不到系統 `ffmpeg` / `ffprobe` 時才用的 `imageio-ffmpeg` / `static-ffmpeg`。全部用到才 import；`faster-whisper` 維持選裝
 - 🔁 **Tensor-native** — `IMAGE [B,H,W,C] float32` 跟 ComfyUI canonical 的 `AUDIO` dict；rawvideo roundtrip PSNR > 38 dB
@@ -94,7 +94,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 |---|---|
 | `MF_AIConfig` (ASR) | `provider = "openai_compatible"`, `base_url = "https://api.groq.com/openai/v1"`, `model = "whisper-large-v3"` |
 | `MF_WhisperTranscribe` | `audio_path = "interview.mp4"` |
-| `MF_AIConfig` (LLM) | `provider = "openai_compatible"`, `base_url = "https://api.openai.com/v1"`, `model = "gpt-4o-mini"` |
+| `MF_AIConfig` (LLM) | `provider = "openai_compatible"`, `base_url = "https://api.openai.com/v1"`, `model = "gpt-6-luna"` |
 | `MF_TranslateSubtitle` | `target_lang = "繁體中文"` |
 | `MF_BurnSubtitle` | 把翻譯後 SRT wire 進 `srt_text`，設定 ASS 字型、顏色、外框 |
 
@@ -1267,17 +1267,19 @@ Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改�
 
 **適用情境**：所有 AI workflow。每個 backend 配一個 `MF_AIConfig`（例如一個給 Groq ASR、一個給 OpenAI translate）、扇出接給各 consumer。
 
+**節點介面**：最上面的 `服務` 和 `模型` 下拉會把值填進下表的欄位，不用自己查網址和模型名稱，用不到的欄位也會隱藏。服務選 `自訂` 會顯示全部欄位，模型選 `自訂…` 可以手打。這兩個下拉只存在前端、不進 workflow JSON，舊 workflow 和 API 呼叫一樣只用下表五個欄位。切換服務時 `api_key` 會換成新服務的預設值，明文 key 不會帶到別的服務。模型清單內建在外掛裡、不連網；Ollama / LM Studio 要手打已下載的模型名稱。
+
 | Widget | 預設 | 說明 |
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible`（任意 `/v1/...` HTTP endpoint）/ `faster_whisper_local`（in-process） |
 | `base_url` | `https://api.openai.com/v1` | 尾端 `/` 會自動 strip |
-| `api_key` | `""` | **建議填 `env:OPENAI_API_KEY`** — `env:` 前綴會在執行時解析同名環境變數，secret 不會進 workflow JSON（明文 key 會原樣序列化進每一份匯出／分享的 workflow — 畫面遮罩擋不了這條路；變數不存在會給明確錯誤）。防外送保護：`env:` 解析出的 key 只允許送往信任 host（內建：`api.openai.com` / `api.groq.com` / localhost 家族）— 可用環境變數 `MF_AI_KEY_ALLOWED_HOSTS`（全域，逗號分隔 hostname）或 `MF_AI_KEY_ALLOWED_HOSTS_<變數名>`（綁單一變數）擴充，讓惡意分享的 workflow 無法用 `env:任意秘密` 配攻擊者 endpoint 外送。`env:` 解析的 key 對非 loopback host 一律要求 **HTTPS**（明文 HTTP 會暴露 Bearer header）— 只有 `localhost` / `127.0.0.1` / `::1` 可走 `http://`；內網 IP 視同遠端，即使加進 allowlist 也需要 HTTPS（或改用明文 key，兩道防護都不適用）。log 只露前 4 字 + `***`；節點畫面上明文 key 以 `•` 遮罩顯示（`env:` 引用直接顯示），點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
-| `model` | `gpt-4o-mini` | 自由字串。Whisper 認出來不像 STT id 時會自動換預設（例如 `gpt-4o-mini` 被同時餵給 translate；Whisper 退回 `whisper-1`） |
+| `api_key` | `""` | **建議填 `env:OPENAI_API_KEY`** — `env:` 前綴會在執行時解析同名環境變數，secret 不會進 workflow JSON（明文 key 會原樣序列化進每一份匯出／分享的 workflow — 畫面遮罩擋不了這條路；變數不存在會給明確錯誤）。防外送保護：`env:` 解析出的 key 只允許送往信任 host（內建：`api.openai.com` / `api.groq.com` / `openrouter.ai` / `generativelanguage.googleapis.com` / localhost 家族）— 可用環境變數 `MF_AI_KEY_ALLOWED_HOSTS`（全域，逗號分隔 hostname）或 `MF_AI_KEY_ALLOWED_HOSTS_<變數名>`（綁單一變數）擴充，讓惡意分享的 workflow 無法用 `env:任意秘密` 配攻擊者 endpoint 外送。`env:` 解析的 key 對非 loopback host 一律要求 **HTTPS**（明文 HTTP 會暴露 Bearer header）— 只有 `localhost` / `127.0.0.1` / `::1` 可走 `http://`；內網 IP 視同遠端，即使加進 allowlist 也需要 HTTPS（或改用明文 key，兩道防護都不適用）。log 只露前 4 字 + `***`；節點畫面上明文 key 以 `•` 遮罩顯示（`env:` 引用直接顯示），點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
+| `model` | `gpt-6-luna` | 字串，可填清單外的任何模型。Whisper 認出來不像 STT id 時會自動換成該服務的語音模型（見 Whisper Transcribe 的 Model 自動替換） |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — 只 `faster_whisper_local` 用 |
 
 **輸出**：`ai_config`（AI_CONFIG dict）。
 
-**詳見 [AI Provider Recipes](#ai-provider-recipes)** — 有 OpenAI / Groq / Ollama / faster-whisper 可直接複貼的 `provider` / `base_url` / `model` 組合。
+**詳見 [AI Provider Recipes](#ai-provider-recipes)** — 有 OpenAI / Groq / OpenRouter / Gemini / Ollama / faster-whisper 可直接複貼的 `provider` / `base_url` / `model` 組合。
 
 ---
 
@@ -1298,10 +1300,10 @@ Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改�
 **輸出**：`srt_text` STRING — 標準 SRT（多段），直接 wire 給 `MF_TranslateSubtitle.srt_text` 或 `MF_BurnSubtitle.srt_text`（要另外存檔的話走 `MF_ConvertChinese` 給 `filename_prefix`）。
 
 **Backend 語意**（看 `ai_config.provider`）：
-- `openai_compatible` — POST 到 `<base_url>/audio/transcriptions`。支援 OpenAI、Groq、任意 OpenAI-API 相容 server。使用 `requirements.txt` 裡的 `requests`。
+- `openai_compatible` — POST 到 `<base_url>/audio/transcriptions`，要求 `verbose_json` 並由節點組成 SRT，所以端點要能回傳有時間軸的 `segments`（OpenAI `whisper-1`、Groq 的文件都有列；沒有就報錯，不會回傳空字幕）。使用 `requirements.txt` 裡的 `requests`。
 - `faster_whisper_local` — lazy-import `faster-whisper`。吃 `ai_config.device`（`cpu` / `cuda` / `auto`）跟 `ai_config.model`（`tiny` / `base` / `small` / `medium` / `large-v3`）。第一次跑會下載到 HF cache。需要 `pip install faster-whisper`。
 
-**Model 自動替換**：`ai_config.model` 看起來不像 STT model id（例如同一個 `AI_CONFIG` 還要餵 Translate、所以是 `gpt-4o-mini`），Whisper 會自動換成 provider 預設 — OpenAI-compatible 用 `whisper-1`、faster-whisper-local 用 `base`。要明確指定 STT 模型（`whisper-large-v3` / `distil-large-v3` 等）直接填到 `ai_config.model`。
+**Model 自動替換**：`ai_config.model` 看起來不像 STT model id（例如同一個 `AI_CONFIG` 還要餵 Translate、所以是 `gpt-6-luna`），Whisper 會自動換成該服務的語音模型 — Groq 用 `whisper-large-v3-turbo`、其他 OpenAI-compatible 端點用 `whisper-1`、faster-whisper-local 用 `base`，實際模型會印在 log。要明確指定 STT 模型（`whisper-large-v3` / `distil-large-v3` 等）直接填到 `ai_config.model`。OpenRouter 和 Gemini 目前不支援語音辨識，接 Whisper 會直接報錯。
 
 **早期 raise**：source 沒音軌 → 友善錯誤。抽出 WAV < 256 bytes（靜音 / 損毀）→ 在送 backend 前先 raise。
 
@@ -1325,7 +1327,7 @@ SRT 文字 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`�
 
 **行為**：每批用 `[1] ...` / `[2] ...` 編號送 prompt、response 用同 pattern parse。LLM 漏行 / 合行造成行數不對時 node **raise**（不會吐錯位的字幕）— 降 `batch_size` 或換更強的 model 重試。
 
-**推薦模型**：`gpt-4o-mini`（快又便宜、batch 30 內 OK）；`gpt-4o` / `llama-3.3-70b-versatile`（長段或專業詞彙更穩、可吃 batch 50+）。
+**推薦模型**：`gpt-6-luna`（OpenAI 目前最便宜的文字模型）；長段或專業詞彙可改用 `gpt-6.1-terra` / `llama-3.3-70b-versatile`。
 
 ---
 
@@ -1421,7 +1423,7 @@ MiniMax H3 時間軸的低記憶體單節點取樣器。執行時逐段展開成
 
 ## AI Provider Recipes
 
-`MF_AIConfig` 輸出的 dict 由所有 AI 節點消費。同一個 `provider` / `base_url` / `api_key` / `model` 介面 — 只是值換。可直接複貼的組合：
+`MF_AIConfig` 輸出的 dict 由所有 AI 節點消費。同一個 `provider` / `base_url` / `api_key` / `model` 介面 — 只是值換。節點上選服務會自動填好，下面這些給 API 呼叫或 `自訂` 服務用：
 
 ### OpenAI（官方）
 
@@ -1430,10 +1432,10 @@ provider   = openai_compatible
 base_url   = https://api.openai.com/v1
 api_key    = sk-...
 model      = whisper-1         # 給 MF_WhisperTranscribe
-           = gpt-4o-mini       # 給 MF_TranslateSubtitle
+           = gpt-6-luna        # 給 MF_TranslateSubtitle
 ```
 
-要錢；最穩定。`whisper-1` 是多語 GA endpoint。
+要錢；最穩定。OpenAI 公告 `whisper-1` 將於 2027-02-26 停用；官方建議的 `gpt-transcribe` 文件只列 JSON 輸出、沒有時間軸，目前無法用來產生字幕。
 
 ### Groq（市場最快的 hosted Whisper）
 
@@ -1456,6 +1458,25 @@ model      = large-v3                  # 首次使用會下載到 HF cache
 ```
 
 要先 `pip install faster-whisper`。隱私 / 離線 workflow 首選。CPU 可跑但慢（現代筆電大約 real-time × 0.3）；非小檔建議 CUDA。
+
+### OpenRouter（僅翻譯）
+
+```
+provider   = openai_compatible
+base_url   = https://openrouter.ai/api/v1
+api_key    = env:OPENROUTER_API_KEY
+model      = ~openai/gpt-sol-latest           # `~` 開頭的別名永遠指向該系列最新模型
+           = ~anthropic/claude-sonnet-latest
+```
+
+### Gemini（僅翻譯）
+
+```
+provider   = openai_compatible
+base_url   = https://generativelanguage.googleapis.com/v1beta/openai
+api_key    = env:GEMINI_API_KEY
+model      = gemini-3.8-flash
+```
 
 ### Ollama / LM Studio（本地 OpenAI 相容）
 
@@ -1549,6 +1570,8 @@ comfyui_MediaForge/
 ├── example_workflows/       # Timeline 範例 workflow（會出現在 ComfyUI 範本瀏覽器）
 ├── web/
 │   ├── ai_config_mask.js    # 前端 extension：在 canvas 上把 MF_AIConfig 的 api_key 遮罩起來
+│   ├── ai_config_services.js # MF_AIConfig 的服務與模型清單
+│   ├── ai_config_ui.js      # 前端 extension：MF_AIConfig 的服務 / 模型下拉
 │   ├── dual_input_lock.js   # 前端 extension：依 dual-input 模式隱藏不適用 widget
 │   │                        #   - lock_widget / hidden_when_connected: tensor 模式隱藏
 │   │                        #   - linked_widgets: path 模式隱藏
@@ -1621,7 +1644,7 @@ pip install faster-whisper    # 只給 backend="faster_whisper_local" 用
 | `MF_ConcatVideos` `mode=copy` raise 出一份逐檔 codec/解析度/pix_fmt/音訊差異列表 | Preflight probe 發現輸入彼此不相容、無法 stream copy | 正常行為 — concat demuxer + `-c copy` 對不相容輸入以前會 exit 0 但輸出從第二段開始壞掉。改用 `mode=transcode`（一定可用、一定 re-encode） |
 | Whisper local backend 超慢 | CTranslate2 在 CPU 上推論 | 在 `MF_AIConfig` 設 `device = "cuda"`；或改 hosted backend（Groq 比本地 CPU 快非常多） |
 | `loop` filter 在超長素材報錯 | Frame 緩衝上限是 `MAX_LOOP_FRAMES = 32767`（INT16） | 降低 fps，或改 `crossfade` mode（走 xfade chain，沒有單一緩衝上限） |
-| 翻譯輸出行數對不上原文 | 小 LLM 把編號批次搞混了 | 換大模型（`gpt-4o`、`llama-3.3-70b-versatile`）；prompt 已加行號對齊，但小模型超過 50 行還是會漏 |
+| 翻譯輸出行數對不上原文 | 小 LLM 把編號批次搞混了 | 換大模型（`gpt-6.1-terra`、`llama-3.3-70b-versatile`）；prompt 已加行號對齊，但小模型超過 50 行還是會漏 |
 | `reverse` filter 在長片爆記憶體 | `reverse` 會把整段串流載入 RAM | 目前是硬上限；先裁短或自己 split-and-stitch |
 
 ### 時間軸訊息

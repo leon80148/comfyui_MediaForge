@@ -21,7 +21,7 @@ Exfiltration guard（Codex R2-1）：env: 能讀任意 process 環境變數，�
 完全由 workflow 控制 — 惡意分享的 workflow 可以配 `env:AWS_SECRET_ACCESS_KEY` +
 攻擊者 endpoint，讓下游節點把 secret 放進 Authorization header 外送。因此
 env:-resolved key 只允許送往 trusted host：內建清單涵蓋 README recipes（OpenAI /
-Groq）與本機推論（localhost 家族）；其他 host 需由使用者用環境變數擴充 —
+Groq / OpenRouter / Gemini）與本機推論（localhost 家族）；其他 host 需由使用者用環境變數擴充 —
 `MF_AI_KEY_ALLOWED_HOSTS`（全域，逗號分隔 hostname）或
 `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>`（綁定單一變數）。環境變數是 server-side
 設定、workflow JSON 碰不到，所以這條 allowlist 攻擊者無法自帶。明文 key 不受限
@@ -39,6 +39,8 @@ _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _BUILTIN_ALLOWED_HOSTS = {
     "api.openai.com",
     "api.groq.com",
+    "openrouter.ai",
+    "generativelanguage.googleapis.com",
     *_LOOPBACK_HOSTS,
 }
 
@@ -62,7 +64,7 @@ class MF_AIConfig:
                 # 建議填 env:VARNAME 間接引用（見 module docstring）；明文 key 會
                 # 序列化進 workflow JSON、匯出分享即外洩
                 "api_key": ("STRING", {"default": "", "placeholder": "env:OPENAI_API_KEY 或明文 key"}),
-                "model": ("STRING", {"default": "gpt-4o-mini"}),
+                "model": ("STRING", {"default": "gpt-6-luna"}),
                 # local faster_whisper 適用：'base' / 'small' / 'medium' / 'large-v3'
                 "device": (["cpu", "cuda", "auto"], {"default": "auto"}),
             },

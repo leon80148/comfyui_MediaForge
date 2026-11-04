@@ -17,7 +17,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 - 🧪 **Broadcast-grade codec control** — H.264 / HEVC / AV1 / ProRes with CRF / bitrate / target-size encode modes; NVENC variants (`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`) auto-detected via `ffmpeg -encoders` probe
 - 🎚️ **Single-encode multi-overlay Compose pipeline** — `filter_complex` graph compiler; lossless overlay stacking vs. N re-encodes
 - 🎙️ **Audio mixing built-in** — BurnSubtitle's `keep_source_audio` toggle `amix`-es an external audio pin with the source's native audio (default on); cinematic fps rates (23.976 / 29.97 / 59.94) accepted as FLOAT
-- 🤖 **Provider-agnostic AI** — `MF_AIConfig` lets you point Whisper / Translate at OpenAI / Groq / Ollama / local backends in one place
+- 🤖 **Provider-agnostic AI** — `MF_AIConfig` lets you point Whisper / Translate at OpenAI / Groq / OpenRouter / Gemini / Ollama / local backends in one place
 - 🧵 **Timeline & long video** — plan overlapping segments in a visual editor with a material library (reference images / videos / audio, keyframes, guides, audio locks), carry each segment's latent tail into the next, decode and spill one segment at a time, encode once. MiniMax H3 AV supported in the loop path; the single-node H3 sampler awaits GPU verification; LTX-2 / Wan 2.2 experimental (see [Timeline & Long Video](#timeline--long-video))
 - 🪶 **Light dependencies** — `requirements.txt` lists four small pure-Python packages plus `imageio-ffmpeg` / `static-ffmpeg`, the fallbacks used when no system `ffmpeg` / `ffprobe` is found. All are imported only when needed; `faster-whisper` stays optional
 - 🔁 **Tensor-native** — `IMAGE [B,H,W,C] float32` and ComfyUI-canonical `AUDIO` dict; rawvideo roundtrip at PSNR > 38 dB
@@ -94,7 +94,7 @@ All four effects accumulate and compile to **one** `filter_complex_script` — t
 |---|---|
 | `MF_AIConfig` (ASR) | `provider = "openai_compatible"`, `base_url = "https://api.groq.com/openai/v1"`, `model = "whisper-large-v3"` |
 | `MF_WhisperTranscribe` | `audio_path = "interview.mp4"` |
-| `MF_AIConfig` (LLM) | `provider = "openai_compatible"`, `base_url = "https://api.openai.com/v1"`, `model = "gpt-4o-mini"` |
+| `MF_AIConfig` (LLM) | `provider = "openai_compatible"`, `base_url = "https://api.openai.com/v1"`, `model = "gpt-6-luna"` |
 | `MF_TranslateSubtitle` | `target_lang = "繁體中文"` |
 | `MF_BurnSubtitle` | wire translated SRT into `srt_text`, set ASS font/color/outline |
 
@@ -1267,17 +1267,19 @@ Centralized provider configuration. Outputs an `AI_CONFIG` dict that all AI node
 
 **When to use**: any AI workflow. Drop one `MF_AIConfig` per backend (e.g. one for ASR via Groq, one for translation via OpenAI) and fan out into the consumers.
 
+**On the node**: the `服務` (service) and `模型` (model) dropdowns at the top fill in the fields below, so you don't have to look up URLs and model names, and fields a service doesn't use are hidden. Service `自訂` (custom) shows every field; model `自訂…` lets you type a name. Both dropdowns exist only in the frontend and never enter the workflow JSON, so old workflows and API calls keep using the same five inputs. Switching service replaces `api_key` with the new service's default, so a plaintext key is never carried over to another service. The model list ships with the plugin and needs no network; for Ollama / LM Studio you type the name of a model you have downloaded.
+
 | Widget | Default | Notes |
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible` (any `/v1/...` HTTP endpoint) / `faster_whisper_local` (in-process) |
 | `base_url` | `https://api.openai.com/v1` | Trailing slash stripped automatically |
-| `api_key` | `""` | **Recommended: `env:OPENAI_API_KEY`** — the `env:` prefix resolves the named environment variable at runtime, so the secret never enters the workflow JSON (a plaintext key serializes into every exported/shared workflow — the canvas mask cannot protect that path; missing variable → clear error). As an exfiltration guard, an `env:`-resolved key is only allowed toward allowlisted hosts (built-in: `api.openai.com` / `api.groq.com` / localhost family) — extend with the `MF_AI_KEY_ALLOWED_HOSTS` env var (comma-separated hostnames, global) or `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>` (per-variable), so a malicious shared workflow can't pair `env:SOME_SECRET` with an attacker endpoint. `env:`-resolved keys also require **HTTPS** toward any non-loopback host (plaintext HTTP would expose the Bearer header) — only `localhost` / `127.0.0.1` / `::1` may use `http://`; a private-LAN IP counts as remote, so an allowlisted LAN endpoint still needs HTTPS (or use a plaintext key, which skips both guards). Logged with first 4 chars + `***` mask; node canvas displays plaintext keys masked with `•` (`env:` references shown as-is; click to reveal/edit — see `web/ai_config_mask.js`) |
-| `model` | `gpt-4o-mini` | Free-form string. Whisper auto-substitutes if not an STT id (e.g. `gpt-4o-mini` reused for translate; Whisper falls back to `whisper-1`) |
+| `api_key` | `""` | **Recommended: `env:OPENAI_API_KEY`** — the `env:` prefix resolves the named environment variable at runtime, so the secret never enters the workflow JSON (a plaintext key serializes into every exported/shared workflow — the canvas mask cannot protect that path; missing variable → clear error). As an exfiltration guard, an `env:`-resolved key is only allowed toward allowlisted hosts (built-in: `api.openai.com` / `api.groq.com` / `openrouter.ai` / `generativelanguage.googleapis.com` / localhost family) — extend with the `MF_AI_KEY_ALLOWED_HOSTS` env var (comma-separated hostnames, global) or `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>` (per-variable), so a malicious shared workflow can't pair `env:SOME_SECRET` with an attacker endpoint. `env:`-resolved keys also require **HTTPS** toward any non-loopback host (plaintext HTTP would expose the Bearer header) — only `localhost` / `127.0.0.1` / `::1` may use `http://`; a private-LAN IP counts as remote, so an allowlisted LAN endpoint still needs HTTPS (or use a plaintext key, which skips both guards). Logged with first 4 chars + `***` mask; node canvas displays plaintext keys masked with `•` (`env:` references shown as-is; click to reveal/edit — see `web/ai_config_mask.js`) |
+| `model` | `gpt-6-luna` | String; any model outside the list works too. Whisper substitutes the service's speech model if this isn't an STT id (see Model auto-substitution under Whisper Transcribe) |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — only used by `faster_whisper_local` |
 
 **Output**: `ai_config` (AI_CONFIG dict).
 
-**See [AI Provider Recipes](#ai-provider-recipes)** for copy-paste-ready `provider` / `base_url` / `model` combos for OpenAI / Groq / Ollama / faster-whisper.
+**See [AI Provider Recipes](#ai-provider-recipes)** for copy-paste-ready `provider` / `base_url` / `model` combos for OpenAI / Groq / OpenRouter / Gemini / Ollama / faster-whisper.
 
 ---
 
@@ -1298,10 +1300,10 @@ Audio file or in-memory `AUDIO` dict → SRT text (string output, not file). Bac
 **Output**: `srt_text` STRING — well-formed SRT (multi-block) ready to wire into `MF_TranslateSubtitle.srt_text` or `MF_BurnSubtitle.srt_text` directly (use `MF_ConvertChinese` with `filename_prefix` when you also want the SRT saved as a file).
 
 **Backend semantics** (from `ai_config.provider`):
-- `openai_compatible` — POSTs to `<base_url>/audio/transcriptions`. Works with OpenAI, Groq, any OpenAI-API-compatible server. Uses `requests` from `requirements.txt`.
+- `openai_compatible` — POSTs to `<base_url>/audio/transcriptions`, asks for `verbose_json` and builds the SRT itself, so the endpoint must return timed `segments` (documented by OpenAI `whisper-1` and Groq; anything else raises instead of returning empty subtitles). Uses `requests` from `requirements.txt`.
 - `faster_whisper_local` — lazy-imports `faster-whisper`. Honors `ai_config.device` (`cpu` / `cuda` / `auto`) and `ai_config.model` (`tiny` / `base` / `small` / `medium` / `large-v3`). First run downloads model to HF cache. Requires `pip install faster-whisper`.
 
-**Model auto-substitution**: if `ai_config.model` doesn't look like an STT model id (e.g. it's `gpt-4o-mini` because the same `AI_CONFIG` feeds Translate), Whisper substitutes the provider's default — `whisper-1` for OpenAI-compatible, `base` for faster-whisper-local. Set an explicit STT model id (`whisper-large-v3`, `distil-large-v3`, …) to override.
+**Model auto-substitution**: if `ai_config.model` doesn't look like an STT model id (e.g. it's `gpt-6-luna` because the same `AI_CONFIG` feeds Translate), Whisper substitutes the service's speech model — `whisper-large-v3-turbo` for Groq, `whisper-1` for other OpenAI-compatible endpoints, `base` for faster-whisper-local — and logs the model it used. Set an explicit STT model id (`whisper-large-v3`, `distil-large-v3`, …) to override. OpenRouter and Gemini have no speech support here, so wiring them to Whisper raises an error.
 
 **Errors raised early**: source missing audio stream → friendly error. WAV extraction yields < 256 bytes (silent / corrupt) → raise before sending to backend.
 
@@ -1325,7 +1327,7 @@ SRT text → translated SRT (timestamps preserved). Uses `/v1/chat/completions` 
 
 **Behavior**: each batch is sent as numbered lines (`[1] ...`, `[2] ...`); the response is parsed by the same numbering pattern. If the count drifts (LLM merged / skipped a line) the node **raises** rather than producing misaligned subtitles — retry with smaller `batch_size` or stronger model.
 
-**Recommended models**: `gpt-4o-mini` (fast + cheap, fine up to batch 30); `gpt-4o` / `llama-3.3-70b-versatile` (more reliable for long-form / specialized vocabulary, can handle batch 50+).
+**Recommended models**: `gpt-6-luna` (OpenAI's cheapest text model today); try `gpt-6.1-terra` / `llama-3.3-70b-versatile` for long-form or specialized vocabulary.
 
 ---
 
@@ -1421,7 +1423,7 @@ Low-memory single-node sampler for a MiniMax H3 timeline. When it runs it expand
 
 ## AI Provider Recipes
 
-`MF_AIConfig` outputs a dict consumed by all AI nodes. Same `provider` / `base_url` / `api_key` / `model` interface — only the values change. Copy-paste-ready combos:
+`MF_AIConfig` outputs a dict consumed by all AI nodes. Same `provider` / `base_url` / `api_key` / `model` interface — only the values change. Picking a service on the node fills these in; the values below are for API calls or the custom service:
 
 ### OpenAI (official)
 
@@ -1430,10 +1432,10 @@ provider   = openai_compatible
 base_url   = https://api.openai.com/v1
 api_key    = sk-...
 model      = whisper-1         # for MF_WhisperTranscribe
-           = gpt-4o-mini       # for MF_TranslateSubtitle
+           = gpt-6-luna        # for MF_TranslateSubtitle
 ```
 
-Paid; most reliable. `whisper-1` is the multilingual GA endpoint.
+Paid; most reliable. OpenAI has announced that `whisper-1` shuts down on 2027-02-26; its recommended `gpt-transcribe` is documented with JSON output only, without timestamps, so it can't produce subtitles today.
 
 ### Groq (fastest hosted Whisper)
 
@@ -1456,6 +1458,25 @@ model      = large-v3                  # downloaded to HF cache on first use
 ```
 
 `pip install faster-whisper` first. Best for privacy / offline workflows. CPU works but slow (real-time × ~0.3 on a modern laptop); CUDA recommended for non-trivial files.
+
+### OpenRouter (translate only)
+
+```
+provider   = openai_compatible
+base_url   = https://openrouter.ai/api/v1
+api_key    = env:OPENROUTER_API_KEY
+model      = ~openai/gpt-sol-latest           # a leading `~` is an alias for the newest model in that family
+           = ~anthropic/claude-sonnet-latest
+```
+
+### Gemini (translate only)
+
+```
+provider   = openai_compatible
+base_url   = https://generativelanguage.googleapis.com/v1beta/openai
+api_key    = env:GEMINI_API_KEY
+model      = gemini-3.8-flash
+```
 
 ### Ollama / LM Studio (local OpenAI-compatible)
 
@@ -1549,6 +1570,8 @@ comfyui_MediaForge/
 ├── example_workflows/       # Timeline example workflows (shown in ComfyUI's template browser)
 ├── web/
 │   ├── ai_config_mask.js    # frontend extension: mask MF_AIConfig api_key on the canvas
+│   ├── ai_config_services.js # MF_AIConfig service and model catalog
+│   ├── ai_config_ui.js      # frontend extension: MF_AIConfig service / model dropdowns
 │   ├── dual_input_lock.js   # frontend extension: hide widgets per dual-input mode
 │   │                        #   - lock_widget / hidden_when_connected: hide on tensor mode
 │   │                        #   - linked_widgets: hide on path mode
@@ -1621,7 +1644,7 @@ pip install faster-whisper    # only for backend="faster_whisper_local"
 | `MF_ConcatVideos` `mode=copy` raises listing per-file codec/dims/pix_fmt/audio differences | Preflight probe found the inputs aren't stream-copy compatible | Expected — concat demuxer + `-c copy` on mismatched inputs used to exit 0 but emit a corrupt file after the first segment. Switch to `mode=transcode` (always works, always re-encodes) |
 | Whisper local backend extremely slow | CTranslate2 CPU inference | Set `device = "cuda"` in `MF_AIConfig`; or use a hosted backend (Groq is much faster than local CPU) |
 | `loop` filter errors on very long source | Buffered-frame limit (`MAX_LOOP_FRAMES = 32767`, INT16) | Reduce fps or use `crossfade` mode (xfade chain, no single buffer) |
-| Translate output line count drifts | Small LLM lost track of numbered batches | Switch to a stronger model (`gpt-4o`, `llama-3.3-70b-versatile`); the prompt does line-number alignment but small models miss it on > 50-line batches |
+| Translate output line count drifts | Small LLM lost track of numbered batches | Switch to a stronger model (`gpt-6.1-terra`, `llama-3.3-70b-versatile`); the prompt does line-number alignment but small models miss it on > 50-line batches |
 | `reverse` filter OOM on long source | `reverse` loads the entire stream into RAM | Currently a hard limit; cut to a sub-clip first or split-and-stitch manually |
 
 ### Timeline messages
