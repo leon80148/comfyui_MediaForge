@@ -7,11 +7,12 @@ Hard contracts (per ROADMAP v2.1):
 
 設計選擇：rawvideo over stdout pipe (非 PNG tempdir)。
 理由：避免磁碟 I/O 瓶頸；single subprocess pipe 比 N 個檔案 I/O 快數倍；
-代價：整段影片要 fit in RAM。對 ComfyUI workflow 場景 (通常 <60s clip + tensor 已經要進 GPU) 是可接受 trade-off。
-若日後遇到 >5min 1080p 素材記憶體爆，可加 chunked decode 模式。
+代價：整段影片要 fit in RAM。解碼、編碼都逐塊處理，峰值接近 IMAGE 本身；更長的影片請用 Video Batch 節點。
 """
+import contextlib
 import json
 import subprocess
+import threading
 
 import numpy as np
 import torch
@@ -54,17 +55,157 @@ def _parse_fps(rate_str):
         return 0.0
 
 
-# 安全上限：rgb24 raw bytes 不該超過此值；caller 仍要為 peak memory 預留空間。
-# R10 P2 fix：原本 4 GiB 是 raw 上限，但 decode 路徑同時持有 proc.stdout (bytes copy) +
-# uint8 numpy + float32 tensor，peak 約 raw × 5。若 raw 拉到 4 GiB，peak >20 GiB → OOM。
-# 把 raw cap 降到 1 GiB → peak ≤ 5 GiB，仍能涵蓋 ~16s 1080p (足夠 ComfyUI 短片 workflow)；
-# 長片請用 max_frames / target_fps 降採樣。
+# Timeline 素材切片（load_video_slice 等）的上限：rgb24 raw bytes。Load Video Frames 改看可用 RAM。
 MAX_DECODE_BYTES = 1 * 1024 * 1024 * 1024
-# decode 過程峰值倍率：proc.stdout (1x) + np.frombuffer.copy() (1x) + tensor float32 (4x) ≈ 6x
-DECODE_PEAK_RATIO = 6
+# decode 峰值對 raw rgb24 的倍率：float32 IMAGE 是 4 倍，組合分塊時可能要再一份。
+# --deterministic 下 torch.empty 會先填滿結果才開始釋放分塊；Windows 配置當下就佔 commit。
+DECODE_PEAK_RATIO = 8
+RAM_HEADROOM = 0.8
+
+STDERR_TAIL_BYTES = 64 * 1024
+READ_BLOCK_BYTES = 16 * 1024 * 1024
+CHUNK_BYTES = 16 * 1024 * 1024
 
 
-def decode_video_to_tensor(path, target_fps=0.0, max_frames=0):
+def quantize(frames):
+    """float [N,H,W,3]（任意 device / dtype）→ CPU uint8，round(clamp(x)·255)。float32 工作副本不超過 CHUNK_BYTES。"""
+    out = torch.empty(frames.shape, dtype=torch.uint8)
+    step = chunk_frames(frames.shape[2], frames.shape[1])
+    for i in range(0, frames.shape[0], step):
+        x = frames[i:i + step].to(device="cpu", dtype=torch.float32, copy=True)
+        out[i:i + step] = x.clamp_(0.0, 1.0).mul_(255.0).round_().to(torch.uint8)
+    return out
+
+
+def chunk_frames(width, height):
+    """每批轉換 / 寫入的幀數：float32 工作副本 + uint8 結果合計約 CHUNK_BYTES，至少一幀。"""
+    return max(1, CHUNK_BYTES // (width * height * 3 * 5))
+
+
+class StderrTail(threading.Thread):
+    """持續讀 stderr（避免 pipe 塞滿反過來卡住 FFmpeg），只保留最後 64 KiB。"""
+
+    def __init__(self, stream):
+        super().__init__(daemon=True)
+        self._stream = stream
+        self._buf = bytearray()
+        self.start()
+
+    def run(self):
+        while chunk := self._stream.read1(4096):
+            self._buf += chunk
+            del self._buf[:-STDERR_TAIL_BYTES]
+
+    def text(self):
+        return "\n".join(bytes(self._buf).decode("utf-8", errors="replace").strip().splitlines()[-30:])
+
+    def print_tail(self, label):
+        lines = self.text()
+        if lines:
+            print(f"[{label}] FFmpeg stderr：\n" + lines)
+
+
+def stop_process(proc):
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def _read_full(stream, view):
+    got = 0
+    while got < len(view):
+        n = stream.readinto(view[got:])
+        if not n:
+            break
+        got += n
+    return got
+
+
+def _rgb_blocks(cmd, count, width, height, label, check_interrupt):
+    """FFmpeg 的 rgb24 stdout → 一塊塊 uint8 [n,H,W,3]。每塊共用同一個 buffer，用完下一塊就蓋掉，要留就複製。
+
+    count=None 讀到 EOF。讀滿 count 幀就結束，後面的輸出不要：FFmpeg 失敗只在還沒讀滿時才算失敗，
+    讀滿後關 stdout，它本來就會因為 pipe 關閉而結束。呼叫端要用 contextlib.closing 確保提早離開時也收掉程序。
+    """
+    frame_bytes = width * height * 3
+    block_frames = max(1, READ_BLOCK_BYTES // frame_bytes)
+    buffer = bytearray(block_frames * frame_bytes)
+    view = memoryview(buffer)
+    proc = subprocess.Popen(resolve_ffmpeg_cmd(cmd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stderr = StderrTail(proc.stderr)
+    done = 0
+    try:
+        while count is None or done < count:
+            if check_interrupt is not None:
+                check_interrupt()
+            want = (block_frames if count is None else min(block_frames, count - done)) * frame_bytes
+            got = _read_full(proc.stdout, view[:want])
+            whole = got // frame_bytes
+            if whole:
+                yield np.frombuffer(buffer, dtype=np.uint8, count=whole * frame_bytes).reshape(whole, height, width, 3)
+                done += whole
+            if got < want:
+                # EOF. A failed FFmpeg explains a partial frame better than the partial frame does.
+                if proc.wait() != 0:
+                    stderr.join()
+                    raise RuntimeError(f"[{label}] FFmpeg 解碼失敗（exit {proc.returncode}）：\n{stderr.text()}")
+                if got % frame_bytes:
+                    raise RuntimeError(f"[{label}] FFmpeg 輸出不是整數幀（每幀 {frame_bytes} bytes，多了 {got % frame_bytes} bytes），解析度可能不符。")
+                return
+    finally:
+        proc.stdout.close()
+        stop_process(proc)
+        stderr.join()
+
+
+def read_rgb_frames(cmd, count, width, height, label, check_interrupt=None, into=None):
+    """FFmpeg 的 rgb24 stdout → float32 [n,H,W,3]，n ≤ count。邊讀邊填預先配置的張量（或呼叫端給的 into），峰值約等於 IMAGE 本身。"""
+    frames = torch.empty(count, height, width, 3, dtype=torch.float32) if into is None else into
+    done = 0
+    with contextlib.closing(_rgb_blocks(cmd, count, width, height, label, check_interrupt)) as blocks:
+        for block in blocks:
+            frames[done:done + block.shape[0]].copy_(torch.from_numpy(block)).div_(255.0)
+            done += block.shape[0]
+    return frames[:done]
+
+
+def read_stdout(cmd, label, what, check_interrupt):
+    """subprocess.run(capture_output=True) 的可中止版本：邊讀邊檢查，中止時確實收掉 FFmpeg。"""
+    proc = subprocess.Popen(resolve_ffmpeg_cmd(cmd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stderr = StderrTail(proc.stderr)
+    chunks = []
+    try:
+        while True:
+            check_interrupt()
+            chunk = proc.stdout.read1(READ_BLOCK_BYTES)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        if proc.wait() != 0:
+            stderr.join()
+            raise RuntimeError(f"[{label}] FFmpeg {what}失敗 (exit {proc.returncode})：\n{stderr.text()}")
+    finally:
+        proc.stdout.close()
+        stop_process(proc)
+        stderr.join()
+    return b"".join(chunks)
+
+
+def _check_decode_ram(nbytes, width, height):
+    import psutil
+    available = psutil.virtual_memory().available
+    if nbytes > available * RAM_HEADROOM:
+        raise RuntimeError(
+            f"[MediaForge.video_io] 解碼 {width}x{height} 約需 {nbytes / 2 ** 30:.2f} GiB RAM，目前可用 {available / 2 ** 30:.2f} GiB。"
+            "長影片請改用 Start Video Batch / End Video Batch 分批處理；或用 max_frames 截短、target_fps 降採樣。"
+        )
+
+
+def decode_video_to_tensor(path, target_fps=0.0, max_frames=0, check_interrupt=None):
     """Decode video → IMAGE tensor [B,H,W,C] float32 in [0,1] + fps + metadata dict.
 
     target_fps=0 → 沿用原始 fps；max_frames=0 → 不限制。
@@ -85,7 +226,7 @@ def decode_video_to_tensor(path, target_fps=0.0, max_frames=0):
     )
     effective_fps = target_fps if target_fps > 0 else src_fps
 
-    # 預估 raw decode 大小，超 MAX_DECODE_BYTES 直接 raise。
+    # 預估大小，放不下就直接 raise，不要解到一半才發現。
     # R9 P2 fix：原本用 format.duration (container 整體) — 若 audio 比 video 長 (e.g.,
     # 編輯軟體留尾巴音軌)、會用 audio 長度估算 frames、可能誤殺合法短影片。
     # 改用 video stream 自己的時長。
@@ -94,16 +235,7 @@ def decode_video_to_tensor(path, target_fps=0.0, max_frames=0):
         est_frames = int(round((effective_fps or src_fps or 30) * dur_sec))
         if max_frames > 0:
             est_frames = min(est_frames, max_frames)
-        est_bytes = est_frames * width * height * 3
-        est_peak = est_bytes * DECODE_PEAK_RATIO
-        if est_bytes > MAX_DECODE_BYTES:
-            raise RuntimeError(
-                f"[MediaForge.video_io] 預估解碼需 {est_bytes / 1024 / 1024 / 1024:.2f} GiB raw RGB "
-                f"(peak ~{est_peak / 1024 / 1024 / 1024:.1f} GiB inc. tensor copies)，"
-                f"超過安全上限 {MAX_DECODE_BYTES / 1024 / 1024 / 1024:.1f} GiB"
-                f"（{width}x{height}, ~{est_frames} frames）。"
-                "請用 max_frames 截短或 target_fps 降採樣再試。"
-            )
+        _check_decode_ram(est_frames * width * height * 3 * DECODE_PEAK_RATIO, width, height)
 
     cmd = ["ffmpeg", "-v", "error", "-i", path]
     if target_fps > 0:
@@ -112,24 +244,28 @@ def decode_video_to_tensor(path, target_fps=0.0, max_frames=0):
         cmd.extend(["-frames:v", str(max_frames)])
     cmd.extend(["-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
 
-    proc = subprocess.run(resolve_ffmpeg_cmd(cmd), check=False, capture_output=True)
-    if proc.returncode != 0:
-        tail = "\n".join((proc.stderr.decode("utf-8", errors="replace")).strip().splitlines()[-30:])
-        raise RuntimeError(f"[MediaForge.video_io] FFmpeg 解碼失敗 (exit {proc.returncode}):\n{tail}")
-
-    frame_bytes = width * height * 3
-    total = len(proc.stdout)
-    if total == 0:
+    # The metadata can be wrong or missing, so this collects blocks and sizes the result from what really arrived.
+    blocks, held = [], 0
+    with contextlib.closing(_rgb_blocks(cmd, None, width, height, "MediaForge.video_io", check_interrupt)) as stream:
+        for block in stream:
+            # Memory already held by earlier blocks is gone from "available", but their share of the joined result isn't.
+            _check_decode_ram(held + block.size * DECODE_PEAK_RATIO, width, height)
+            blocks.append(torch.from_numpy(block).float().div_(255.0))
+            held += blocks[-1].nbytes
+    if not blocks:
         raise RuntimeError(f"[MediaForge.video_io] FFmpeg 解碼成功但無輸出 (空影片?)：{path}")
-    if total % frame_bytes != 0:
-        raise RuntimeError(
-            f"[MediaForge.video_io] rawvideo 輸出長度 {total} 不是 frame_bytes={frame_bytes} 倍數，"
-            "可能是 pix_fmt / 解析度 mismatch"
-        )
-    n_frames = total // frame_bytes
-    arr = np.frombuffer(proc.stdout, dtype=np.uint8).reshape(n_frames, height, width, 3)
-    # uint8 → float32 [0,1]；contiguous 後給 torch 才不會觸發隱式 copy
-    tensor = torch.from_numpy(arr.copy()).float() / 255.0
+    n_frames = sum(block.shape[0] for block in blocks)
+    _check_decode_ram(held, width, height)
+    # Each block is freed once copied. On Linux, pages of the new tensor only count once written, so this usually peaks near one IMAGE.
+    # That is measured, not promised: see DECODE_PEAK_RATIO.
+    tensor = torch.empty(n_frames, height, width, 3, dtype=torch.float32)
+    blocks.reverse()
+    done = 0
+    while blocks:
+        block = blocks.pop()
+        tensor[done:done + block.shape[0]] = block
+        done += block.shape[0]
+        del block
 
     meta = {
         "src_fps": src_fps,
@@ -186,6 +322,32 @@ def decode_audio_to_dict(path, target_sr=0):
     return {"waveform": waveform, "sample_rate": int(out_sr)}
 
 
+def _write_frames(cmd, tensor, what):
+    """逐塊量化寫進 FFmpeg stdin，不把整批 tobytes()。stderr 另開執行緒收，pipe 才不會塞滿互相卡住。"""
+    _, height, width, _ = tensor.shape
+    step = chunk_frames(width, height)
+    proc = subprocess.Popen(resolve_ffmpeg_cmd(cmd), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    stderr = StderrTail(proc.stderr)
+    write_err = None
+    try:
+        # FFmpeg 可能在 input 還沒餵完就死掉 (codec init 失敗、output 路徑不可寫等)；抓住 BrokenPipeError 才拿得到有用的錯訊。
+        try:
+            for first in range(0, tensor.shape[0], step):
+                proc.stdin.write(memoryview(quantize(tensor[first:first + step]).numpy()).cast("B"))
+            proc.stdin.flush()
+        except BrokenPipeError as e:
+            write_err = e
+        with contextlib.suppress(BrokenPipeError):
+            proc.stdin.close()
+        proc.wait()
+    finally:
+        stop_process(proc)
+        stderr.join()
+    if proc.returncode != 0 or write_err is not None:
+        suffix = f"\n（stdin write 中斷：{write_err}）" if write_err else ""
+        raise RuntimeError(f"[MediaForge.video_io] FFmpeg {what} 失敗 (exit {proc.returncode}):\n{stderr.text()}{suffix}")
+
+
 def encode_tensor_to_video(
     tensor,
     output_path,
@@ -212,10 +374,6 @@ def encode_tensor_to_video(
         raise ValueError(f"[MediaForge.video_io] fps 必須 > 0，但拿到 {fps}")
 
     n, h, w, _ = tensor.shape
-    # float32 [0,1] → uint8 contiguous bytes
-    arr = (tensor.detach().cpu().clamp(0.0, 1.0) * 255.0).round().to(torch.uint8).numpy()
-    if not arr.flags["C_CONTIGUOUS"]:
-        arr = np.ascontiguousarray(arr)
 
     cmd = [
         "ffmpeg", "-y", "-v", "error",
@@ -247,33 +405,11 @@ def encode_tensor_to_video(
 
     cmd.append(output_path)
 
-    proc = subprocess.Popen(resolve_ffmpeg_cmd(cmd), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-    stderr = b""
-    write_err = None
     try:
-        # FFmpeg 可能在 input 還沒 fully 餵完就死掉 (codec init 失敗、output 路徑不可寫等)；
-        # 此時 communicate 內部會收 BrokenPipeError — 抓住、再去拿 stderr，才能給出有用的錯訊。
-        # 為什麼用 communicate(input=...) 而非自己 write/close：communicate 會在 background thread
-        # 同時 drain stderr，避免 stderr pipe 滿了反向 deadlock stdin write。
-        try:
-            _, stderr = proc.communicate(input=arr.tobytes())
-        except BrokenPipeError as e:
-            write_err = e
-            # 再次嘗試 drain stderr — communicate 已 close stdin
-            try:
-                _, stderr = proc.communicate()
-            except (BrokenPipeError, ValueError):
-                pass
+        _write_frames(cmd, tensor, "encode")
     finally:
         if audio_tmp is not None:
             _cleanup_audio_tmp(audio_tmp)
-
-    if proc.returncode != 0 or write_err is not None:
-        tail = "\n".join(stderr.decode("utf-8", errors="replace").strip().splitlines()[-30:])
-        suffix = f"\n（stdin write 中斷：{write_err}）" if write_err else ""
-        raise RuntimeError(
-            f"[MediaForge.video_io] FFmpeg encode 失敗 (exit {proc.returncode}):\n{tail}{suffix}"
-        )
     return output_path
 
 
@@ -286,8 +422,7 @@ def encode_tensor_to_gif(tensor, output_path, fps):
     `paletteuse` 套用該調色盤 + Bayer dither，比不做 palette 的預設 GIF encoder
     畫質好非常多。
 
-    Pipe 處理方式抄 encode_tensor_to_video 的 Popen/communicate/BrokenPipeError 模式，
-    但精簡掉 audio mux 分支（GIF 無音軌）。
+    Pipe 處理方式同 encode_tensor_to_video，但沒有 audio mux 分支（GIF 無音軌）。
     """
     if tensor.ndim != 4 or tensor.shape[-1] != 3:
         raise ValueError(
@@ -297,9 +432,6 @@ def encode_tensor_to_gif(tensor, output_path, fps):
         raise ValueError(f"[MediaForge.video_io] fps 必須 > 0，但拿到 {fps}")
 
     _, h, w, _ = tensor.shape
-    arr = (tensor.detach().cpu().clamp(0.0, 1.0) * 255.0).round().to(torch.uint8).numpy()
-    if not arr.flags["C_CONTIGUOUS"]:
-        arr = np.ascontiguousarray(arr)
 
     cmd = [
         "ffmpeg", "-y", "-v", "error",
@@ -313,24 +445,7 @@ def encode_tensor_to_gif(tensor, output_path, fps):
         output_path,
     ]
 
-    proc = subprocess.Popen(resolve_ffmpeg_cmd(cmd), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-    stderr = b""
-    write_err = None
-    try:
-        _, stderr = proc.communicate(input=arr.tobytes())
-    except BrokenPipeError as e:
-        write_err = e
-        try:
-            _, stderr = proc.communicate()
-        except (BrokenPipeError, ValueError):
-            pass
-
-    if proc.returncode != 0 or write_err is not None:
-        tail = "\n".join(stderr.decode("utf-8", errors="replace").strip().splitlines()[-30:])
-        suffix = f"\n（stdin write 中斷：{write_err}）" if write_err else ""
-        raise RuntimeError(
-            f"[MediaForge.video_io] FFmpeg GIF encode 失敗 (exit {proc.returncode}):\n{tail}{suffix}"
-        )
+    _write_frames(cmd, tensor, "GIF encode")
     return output_path
 
 

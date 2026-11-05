@@ -10,7 +10,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## 亮點
 
-- 🎞️ **33 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）
+- 🎞️ **35 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）
 - 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + tensor_fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
 - 🚀 **智慧 GPU codec 預設** — 偵測到 NVENC 自動用 `h264_nvenc`，沒 GPU 的機器自動 fallback `libx264`。不必手動切、不會在沒卡的環境壞掉
 - 📡 **API-ready 輸出** — 每個產出檔案的節點都同時 emit ComfyUI `ui.images` metadata，`/history/<prompt_id>` 直接看到輸出檔名，`/view?filename=X&subfolder=Y&type=output` 可下載（見 [Using via API](#using-via-api)）
@@ -18,6 +18,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 - 🧪 **廣播級編碼控制** — H.264 / HEVC / AV1 / ProRes，支援 CRF / bitrate / target-size 三種編碼模式；NVENC variants（`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`）由 `ffmpeg -encoders` probe 自動加入 dropdown
 - 🎚️ **單次編碼、多層 overlay 的 Compose pipeline** — `filter_complex` graph 編譯器，N 層 overlay 仍只走一次 re-encode
 - 🤖 **Provider-agnostic AI** — `MF_AIConfig` 讓 Whisper / Translate 在 OpenAI / Groq / OpenRouter / Gemini / Ollama / 本地 backend 之間一處切換
+- 🎬 **Video Batch** — 十分鐘的影片也能分批通過任何 IMAGE 節點（放大、遮罩、H3）：兩個節點、一個佇列項目，畫面留在磁碟而不是 RAM，最後產出一支完整的影片。見 [Video Batch](#video-batch批次處理長影片)
 - 🧵 **時間軸與長片** — 在附素材庫（參考圖片 / 影片 / 音訊、關鍵幀、錨定片段、鎖定原音）的視覺化編輯器規劃互相重疊的分段，把每段 latent 尾端續接到下一段，逐段解碼並暫存到磁碟，最後只編碼一次。MiniMax H3 AV 在迴圈路徑支援；單節點 H3 取樣器尚待 GPU 驗證；LTX-2 / Wan 2.2 為實驗性（見[時間軸與長片](#時間軸與長片)）
 - 🪶 **輕量相依** — `requirements.txt` 只有四個小型純 Python 套件，加上找不到系統 `ffmpeg` / `ffprobe` 時才用的 `imageio-ffmpeg` / `static-ffmpeg`。全部用到才 import；`faster-whisper` 維持選裝
 - 🔁 **Tensor-native** — `IMAGE [B,H,W,C] float32` 跟 ComfyUI canonical 的 `AUDIO` dict；rawvideo roundtrip PSNR > 38 dB
@@ -25,21 +26,22 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 ## 目錄
 
 1. [Quick Start](#quick-start)
-2. [時間軸與長片（Timeline & Long Video）](#時間軸與長片)
-3. [Using via API（API 工作流）](#using-via-api)
-4. [智慧 GPU codec 預設](#智慧-gpu-codec-預設)
-5. [為什麼選這個 plugin（vs VideoHelperSuite）](#為什麼選這個-pluginvs-videohelpersuite)
-6. [節點清單（33）](#節點清單33)
-7. [AI Provider Recipes](#ai-provider-recipes)
-8. [Hidden Contracts（內部型別契約）](#hidden-contracts內部型別契約)
-9. [Architecture](#architecture)
-10. [系統需求](#系統需求)
-11. [安裝](#安裝)
-12. [疑難排解](#疑難排解)
-13. [常見問題](#常見問題)
-14. [測試](#測試)
-15. [Roadmap](#roadmap)
-16. [License & 致謝](#license)
+2. [Video Batch（批次處理長影片）](#video-batch批次處理長影片)
+3. [時間軸與長片（Timeline & Long Video）](#時間軸與長片)
+4. [Using via API（API 工作流）](#using-via-api)
+5. [智慧 GPU codec 預設](#智慧-gpu-codec-預設)
+6. [為什麼選這個 plugin（vs VideoHelperSuite）](#為什麼選這個-pluginvs-videohelpersuite)
+7. [節點清單（35）](#節點清單35)
+8. [AI Provider Recipes](#ai-provider-recipes)
+9. [Hidden Contracts（內部型別契約）](#hidden-contracts內部型別契約)
+10. [Architecture](#architecture)
+11. [系統需求](#系統需求)
+12. [安裝](#安裝)
+13. [疑難排解](#疑難排解)
+14. [常見問題](#常見問題)
+15. [測試](#測試)
+16. [Roadmap](#roadmap)
+17. [License & 致謝](#license)
 
 ## Quick Start
 
@@ -112,6 +114,85 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 6. `🧵 Assemble Segments` — `state` ← End Loop 的 `outputs` → 一支 `.mp4`（260 幀、32 kHz 音訊）。
 
 接線細節、其他模型與編輯器說明：見[時間軸與長片](#時間軸與長片)。要用參考素材、以單一取樣節點取代迴圈：`example_workflows/timeline_h3_director.json`。
+
+## Video Batch（批次處理長影片）
+
+> 讓長影片通過任何 IMAGE 節點，而不必把整支影片放進 RAM。畫面一批一批送進你的節點，每批處理完就寫到磁碟，最後產出一支完整的影片。不用接迴圈，也不用計算總幀數。
+
+```
+🎞️ Start Video Batch ── frames ──► 你的節點 ── frames ──► 🎬 End Video Batch
+```
+
+**快速試用**：放這兩個節點，中間接你的節點（例如放大模型），在 Start 選影片，按 Run。End 的 `frames_per_batch` 是每批送進你的節點的幀數，它決定記憶體峰值；RAM 或 VRAM 不夠時調低它。
+
+**按下 Run 之後**：全程只佔一個佇列項目、一筆歷史。
+
+1. 先檢查整個工作：來源、接線、音訊。有問題就在你的節點拿到任何畫面之前停止。
+2. End 要一批，Start 只用 FFmpeg 解那一段，你的節點處理它。每批重跑的都是同一批節點。在 ComfyUI 一般的快取模式下，節點是同一個 instance，所以它自己留著的模型只載入一次；`--cache-none` 會重建。
+3. End 把畫面以無損 FFV1 寫到 `.mf_tmp/seg_*`，從記憶體放掉，再要下一批。第一批之後還會試編碼幾幀，所以奇數尺寸或編碼器不可用會立刻報錯，不必等整片跑完。
+4. 來源結束後，End 把分段編成一支影片、驗證、顯示在節點上，並刪掉分段。
+
+End 節點會顯示「第 k / 約 N 批」、「正在組裝成片…」、「完成」。進度條要等成品驗證通過才會滿。
+
+**Video Batch 還是 Timeline？**
+
+| | Video Batch | [Timeline](#時間軸與長片) |
+|---|---|---|
+| 用途 | 處理現有影片：放大、遮罩、重繪 | 依計畫分段生成新影片，段與段接續 |
+| 長度 | 來源的幀數 | 在編輯器裡規劃的長度 |
+| 接線 | 2 個節點加上你自己的 | 6–8 個節點，H3 可用 Sample Segments |
+
+**分批**：`frames` 永遠剛好是 `frames_per_batch` 幀。最後一批不足時重複最後一幀，End 再裁回去，所以需要固定長度的模型也能用。你的節點必須回傳和收到一樣多的幀，改變幀數的節點（例如插幀）請放到 End 之後，接 `final_video_path`。批與批之間不會傳遞 latent 或時序資訊，時序模型可能在接縫留下痕跡。`overlap_frames` 會淡接接縫，但只是混合結果，不能給模型更多上下文。結果不保證等同一次處理整支影片。
+
+**MiniMax H3**：`frames_per_batch` 必須符合 17n+5（例如 124），`fps = 24`。其他值會在模型執行前被拒絕。
+
+**音訊**：由 End 的 `audio` 與 `keep_source_audio` 決定成片音軌：
+
+| End 的 `audio` | 來源 | 成片音軌 |
+|---|---|---|
+| 未接，`keep_source_audio` 關閉 | 任何 | 無 |
+| 未接 | 所有來源都沒有音軌 | 無 |
+| 未接 | 一個來源有音軌 | 該來源的音軌，以第一個影片幀為起點 |
+| 未接 | 兩個來源都有音軌 | 模型執行前報錯：接 `audio`，或關閉 `keep_source_audio` |
+| 接批次外的節點（Load Audio） | 任何 | 該音訊，只讀一次，從影片開頭對齊；不足補靜音，過長裁切 |
+| 接批次內的節點（Start 的 `audio`、VAE Decode Audio） | 任何 | 每批的音訊，逐批取用 |
+
+Start 的 `audio` 輸出只有接線才解碼，`keep_source_audio` 關閉時也一樣；來源沒有音軌時接它會報錯。重疊區的音訊用線性淡接，同一段原音在接縫不會變大聲。
+
+**兩支影片**：用兩個 Start，都接進你的節點。較短的那支決定長度。批次設定都在 End，不會互相衝突。fps 不同時在 End 設定 `fps`。
+
+**磁碟與記憶體**：分段在 1344×768 約每幀 0.5 MB，十分鐘 1080p 30 fps 粗估約 20 GB，一直佔用到最後編碼完成。End 每批更新估計，暫存或輸出磁碟看起來不夠就報錯。Start 解碼前依一批的大小檢查 RAM，End 在第一批後再依實際輸出尺寸檢查一次。這些都是估計，不是保證；你的節點自己用多少記憶體由節點決定。
+
+**Stop**：按下後不會再開始新的一批。正在跑的節點會在下次檢查 Stop 時停下，FFmpeg 也會一起結束；來源卡住時可能延遲。不提供部分成片。分段會在下一個 Video Batch 工作開始時刪除。當機殘留的分段，由啟動時的清理在寫入它的程序已結束且超過 24 小時後刪除。
+
+**和 VHS Meta Batch Manager 比較**：實測環境是 ComfyUI 0.42.5、VHS commit `4d907be`，影片 11.6 分鐘 720p，每批 64 幀，兩邊都用 x264 CRF 19、preset medium。Video Batch 的分段放在 Linux 磁碟上。
+
+| | VHS Meta Batch Manager | Start / End Video Batch |
+|---|---|---|
+| 節點 | Batch Manager，接到 Load Video 和 Video Combine | Start 和 End，取代 Load 和 Combine |
+| 佇列與歷史 | 每批一筆（這裡是 261 筆） | 一筆 |
+| 音軌 | 另一個檔案 `-audio.mp4` | 在同一個輸出檔裡 |
+| 按 Stop 之後 | FFmpeg 繼續開著，檔案打不開，要等下次 Run 才會收尾。收尾後有已寫入的幀，沒有音訊 | 不再開始新的一批，FFmpeg 也會結束，沒有部分成片 |
+| 批次間重疊 | 無 | `overlap_frames` |
+| 額外磁碟 | 不需要 | 約 4 GB 分段，到最後編碼完成為止 |
+| 時間：有音軌的影片，不接模型 | 1191 秒 | 299 秒 |
+| 時間：沒有音訊，不接模型（VHS 把檔案的音軌移除；Video Batch 關閉 `keep_source_audio`） | 236 秒 | 286 秒 |
+| 時間：FlashVSR，50 批，每批 16 幀，480×270 | 940 秒 | 900 秒 |
+| RAM 峰值：ComfyUI 與 FFmpeg | 2.43 + 0.56 GiB | 2.53 + 0.60 GiB |
+| RAM 峰值：FlashVSR 的 ComfyUI | 11.54 GiB | 11.44 GiB |
+
+這幾次實測的 RAM 峰值很接近。沒有音訊時 VHS 比較快，因為它邊跑邊編碼，Video Batch 最後要再編碼一次。在這個 ComfyUI 版本上，影片有音軌時，VHS 每一批都會解碼整條音軌（這裡每批約 3.6 秒，片子越長越久），即使音訊輸出沒有接線：core 的記憶體掃描會走訪每個節點的輸出，走訪時就觸發了 VHS 的延遲解碼。這是兩個專案碰在一起才出現的情況，不是 Meta Batch 的設計造成的，任何一邊更新都可能消失。接真模型時，幾乎所有時間都花在模型上。
+
+暫存磁碟不夠，或想在 Stop 後留下已寫入的幀，選 VHS。想要佇列只有一筆、一個檔案就有聲音、Stop 後沒有 FFmpeg 留著跑，或需要批次間重疊，選 Video Batch。
+
+**尚未支援**：重啟後續跑、Stop 後的部分成片、一個工作流多個 End、批次內改變幀數的節點、MPEG-TS 與 MPEG 檔、HDR 與廣色域影片、批次內放 core Start / End Loop。
+
+**範例工作流**（在 `example_workflows/`；模型欄位是 `SELECT_*` 佔位，請選自己的檔案）：
+
+| 檔案 | 內容 |
+|---|---|
+| `video_batch_upscale.json` | Start 與 End 之間接放大模型，保留原音 |
+| `video_batch_h3.json` | MiniMax H3 逐批重繪：124 幀、24 fps |
 
 ## 時間軸與長片
 
@@ -435,6 +516,7 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 |---|---|---|---|
 | 影片載入 → IMAGE batch | ✅ opencv | ✅ FFmpeg | MediaForge 可處理 AV1 / HEVC 10-bit / ProRes / VP9 / 任意 colorspace |
 | IMAGE batch → 影片儲存 | ✅ 只 H.264 | ✅ H.264 / HEVC / AV1 / ProRes | 加上 CRF / bitrate / target-size 模式 |
+| 長影片分批通過任何 IMAGE 節點 | ✅ Meta Batch Manager | ✅ Video Batch | [比較與實測數字](#video-batch批次處理長影片) |
 | GIF 匯出 | ❌ | ✅ | `MF_SaveVideoFrames` `codec=gif (palette)` — 雙 pass palette + Bayer dither |
 | 音訊 in/out（canonical dict） | ⚠️ 有限 | ✅ 雙向 | `{'waveform': Tensor[B,C,T], 'sample_rate': int}` |
 | 按 ranges 裁切 | ✅ image-batch | ✅ 影片 + image-batch | MediaForge 直接吃 `MF_DetectSilence` 輸出 |
@@ -450,7 +532,7 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 
 **結論**：兩個都裝。VHS 用於快速 IMAGE batch workflow；MediaForge 用於廣播級編碼、檔案級操作、Compose pipeline、AI 字幕。
 
-## 節點清單（33）
+## 節點清單（35）
 
 每個節點區段都遵循同一個模板：**用途 → 適用情境 → 必填欄位 → 選用輸入 → 輸出 → 範例**。Widget 表掃過去就能找到要調的旋鈕，範例則給典型接線方式。
 
@@ -862,6 +944,51 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 **輸出**：`final_video_path` STRING；`report` STRING（JSON：幀數、fps、尺寸、色彩假設、音訊來源（`internal` / `override` / `locked_original` / `none`）/ 取樣率 / samples、補靜音數、各接縫診斷、`effective` 鎖音欄位）。emit `ui.images` 給 `/history`。
 
 **說明**：假設 BT.709（full-range RGB → limited-range YUV）並寫入對應標記；核對幀數，有內部音軌時也核對精確 sample 數；分段檔被刪除（例如清掉 `.mf_tmp/`，或被快取逐出）→ `E_SPILL_MISSING`，請重跑迴圈。這裡不刪分段檔，因為快取住的 state 可能還會被重用。
+
+---
+
+#### 🎞️ Start Video Batch (`MF_StartVideoBatch`)
+
+把影片一批一批送進你的節點。和 `🎬 End Video Batch` 配對使用，說明見 [Video Batch](#video-batch批次處理長影片)。
+
+**何時使用**：影片太長、放不進記憶體，又要通過 IMAGE 節點時。內建檔案選擇，流程維持兩個節點；這是「用 `📂 Select Video` 選檔」慣例的唯一例外。
+
+| Widget | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `video` | dropdown + 上傳 | | `input/` 內的影片。接了 `video_path` 時連同上傳鈕一起隱藏 |
+| `resize` | dropdown | `none` | `none` / `fit`（留邊）/ `fill`（裁切）/ `stretch` |
+| `width`、`height` | INT | `1280`、`720` | `resize = none` 時隱藏 |
+| `video_path` *（選用）* | STRING socket | | 優先於 `video`。不能依賴批次內的節點 |
+
+**輸出**：`frames` IMAGE — 本批，永遠是 `frames_per_batch` 幀；`audio` AUDIO — 本批音訊，只有接線才解碼；`fps` FLOAT；`frame_count` INT — 本批幀數，含重複的幀，不是全片長度。
+
+**備註**：支援 mp4 / mov / mkv / webm / avi。MPEG-TS 與 MPEG 沒有關鍵幀索引可以定位，HDR 與廣色域影片尚未處理，都會被拒絕並提示轉檔指令。fps 取自來源，除非 End 有設定；可變幀率會重取樣成該 fps。來源檔案在工作途中改變時會停止，不會混到兩支影片。
+
+---
+
+#### 🎬 End Video Batch (`MF_EndVideoBatch`)
+
+負責整個工作：要每一批、寫到磁碟、最後編成影片。是輸出節點。
+
+**何時使用**：和 `🎞️ Start Video Batch` 配對。工作的設定都在這裡。
+
+| Widget | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `frames_per_batch` | INT | `64` | 一次送進節點的幀數，越小越省 RAM 與 VRAM。H3 需符合 17n+5，例如 124 |
+| `fps` | FLOAT | `0` | 轉成這個固定 fps；`0` 使用來源的 fps。兩支影片 fps 不同時必填 |
+| `max_frames` | INT | `0` | 只處理前幾幀，試跑用；`0` 全部 |
+| `codec` | dropdown | 智慧（有 NVENC 用 NVENC，否則 libx264） | 與其他編碼節點相同 |
+| `keep_source_audio` | BOOLEAN | `true` | 保留來源音軌。接了 `audio` 時隱藏 |
+| `filename_prefix` *（進階）* | STRING | `MediaForge/video_batch` | → `output/<prefix>_NNNNN.mp4`（ProRes 為 `.mov`） |
+| `overlap_frames` *（進階）* | INT | `0` | 相鄰兩批重疊並淡接的幀數，最多 `frames_per_batch` 的一半 |
+| `crf` *（進階）* | INT | `18`（0–51） | `prores (prores_ks)` 時隱藏 |
+| `preset` *（進階）* | dropdown | `medium` | `prores (prores_ks)` 時隱藏 |
+
+**輸入**：`frames`（IMAGE，必接）— 處理後的畫面；`audio`（AUDIO，選用）— 見[音訊表](#video-batch批次處理長影片)。這裡的 widget 都只能在節點上設定、沒有接點，因為 Start 要在 End 執行前就讀到它們。
+
+**輸出**：`final_video_path` STRING；`report` STRING（JSON：幀數、fps、尺寸、批數、來源、音訊來源 `internal` / `override` / `none`、取樣率與樣本數、每個接縫的診斷）。
+
+**備註**：End 之後的節點可以讀 `final_video_path`，但不能讀批次內的畫面，因為只會拿到其中一批。錯誤說明見 [Video Batch 訊息](#video-batch-訊息)。
 
 ---
 
@@ -1519,6 +1646,8 @@ comfyui_MediaForge/
 │   ├── ai_config.py            # MF_AIConfig
 │   ├── append_segment.py       # MF_AppendSegment  — Timeline：解碼、去重疊、暫存到 .mf_tmp/
 │   ├── assemble_segments.py    # MF_AssembleSegments  — Timeline：最終編碼（OUTPUT_NODE）
+│   ├── start_video_batch.py    # MF_StartVideoBatch  — Video Batch：每次執行解碼一批
+│   ├── end_video_batch.py      # MF_EndVideoBatch  — Video Batch：驅動各批、最終編碼（OUTPUT_NODE）
 │   ├── burn_subtitle.py        # MF_BurnSubtitle  — 使用 font/ 子目錄
 │   ├── compose_video.py        # MF_ComposeVideo  — Compose v2 終點(取代 Start+Finalize)
 │   ├── compose_overlay_text.py # MF_ComposeOverlayText
@@ -1563,6 +1692,7 @@ comfyui_MediaForge/
 │   ├── output_path.py       # resolve_output_path + output_path_to_ui_entry (API metadata helper)
 │   ├── plugin_tmp.py        # .mf_tmp/ 暫存檔 + 清理過期的檔案與 session 目錄
 │   ├── segment_spill.py     # Timeline：不可變 state、FFV1 / WAV 分段暫存、crossfade、鎖音母帶、最終編碼
+│   ├── video_batch.py       # Video Batch：接線規則、分批數學、來源檢查、重複執行同一批 node ID 的工作
 │   ├── timeline_materials.py# Timeline：materials / refs / anchors、幾何、逐段 manifest、H3 標籤、別名
 │   ├── timeline_media.py    # Timeline：素材快照、圖片 / 影片 / 音訊切片解碼
 │   ├── timeline_messages.py # Timeline：訊息目錄（穩定的 E_* / W_* key）
@@ -1693,6 +1823,46 @@ Timeline 節點的訊息格式為 `[<節點名稱>] <KEY>：<訊息>`，以下�
 | `W_PROXY` | 時間軸編輯器 | 預覽建立失敗；時間軸仍可編輯。請重試。 | 編輯器顯示「預覽失敗（時間軸仍可編輯）」與「重試」按鈕；沒有預覽也能編輯 |
 | — | core Start / End Loop | `Loop body is not closed` | 迴圈本體內的 preview / 副作用節點沒接到 End Loop 的 `terminations` —— 接上，或移到迴圈外 |
 
+### Video Batch 訊息
+
+Video Batch 節點的訊息開頭是 `[Start Video Batch]` 或 `[End Video Batch]`。
+
+| 訊息 | 怎麼辦 |
+|---|---|
+| 需要接到一個 End Video Batch | 加上 End，把處理後的畫面接到它的 `frames` |
+| 一個工作流只能有一個 End Video Batch | 刪掉多餘的 |
+| 有 Start Video Batch 沒有接到 End Video Batch | 接上或刪掉 |
+| `frames` 必須來自 Start Video Batch | 把 End 的 `frames` 接回 Start（可以經過你的節點） |
+| End Video Batch 下游的節點不能直接讀批次內的畫面 | 那個節點只會拿到其中一批，請改接 `final_video_path` |
+| 批次內不能放 Start / End Loop | 移到批次外 |
+| Start 的輸入不能依賴批次內的節點 | 改接批次外的來源 |
+| End 的設定不能接線 | 直接在節點上設定 |
+| `frames_per_batch` 至少是 1；`overlap_frames` 必須介於 0 和它的一半之間 | 改數值 |
+| 批次內有 MiniMax H3 節點，`frames_per_batch` 必須符合 17n+5 | 用訊息建議的值，例如 124 |
+| 還沒有選影片；找不到影片 | 上傳或選一支影片，或接 `video_path` |
+| 格式尚未通過批次解碼驗證（TS、MPG） | 轉檔：`ffmpeg -i in.ts -c copy out.mkv` |
+| HDR 或廣色域影片尚未支援 | 先轉成 SDR / BT.709 |
+| 無法判斷影片起點；無法判斷 fps | 先轉檔；fps 可在 End 設定 |
+| 影片的 fps 不同 | 在 End 填一個共同的 `fps` |
+| 這批畫面約需 X GiB RAM（Start，解碼前） | 調低 `frames_per_batch`，或用 `resize` 縮小畫面 |
+| 從第 N 幀起沒有畫面 | 確認影片沒有損毀、不是空檔案 |
+| 來源在處理途中改變了 | 執行中不要替換檔案，重新執行 |
+| 第 N 批沒有拿到畫面；第 N 批被上游節點阻擋 | 檢查接到 `frames` 的節點，批次流程不能跳過某一批 |
+| `frames` 必須是 `[幀數,高,寬,3]` 的 RGB；必須是 0–1 的浮點數 | 轉換輸出，例如拿掉 alpha |
+| 第 N 批送進 B 幀，處理後變成 M 幀 | 這個節點改變了幀數，請移到 End 之後 |
+| 畫面含 NaN 或無限大 | 上游節點可能失敗了 |
+| 第 N 批只有 L 幀，沒有超過重疊 | 來源可能在處理中改變了，重新執行 |
+| `audio` 必須是單一條音訊；被上游阻擋；是空的 | 只接一條，或拔掉 `audio` |
+| 第 N 批音訊的取樣率或聲道和前面不同 | 讓每一批的音訊規格一致 |
+| 來源沒有音軌，不能使用 `audio` 輸出 | 拔掉 Start 的 `audio`，或換有音軌的影片 |
+| 兩個來源都有音軌，無法判斷要用哪一條 | 把要用的音訊接到 End 的 `audio`，或關閉 `keep_source_audio` |
+| 音軌規格異常；音軌太大（暫存 WAV 上限約 4 GiB）；解碼音軌的 RAM 不夠 | 轉成 48 kHz 雙聲道：`ffmpeg -i 影片 -c:v copy -ac 2 -ar 48000 -c:a aac 輸出.mp4`，或關閉 `keep_source_audio` |
+| 處理後的畫面是 W×H，這個 codec 需要偶數寬高 | 調整節點的縮放倍率，或在 End 前加縮放節點 |
+| 這個 codec 試編碼失敗 | 改用其他 codec，例如 `h264 (libx264)` |
+| 磁碟空間可能不夠 | 清出空間，或用 `max_frames`、`resize` 減少處理量 |
+| 處理後每批約需 X GiB RAM | 調低 `frames_per_batch`，或用 `resize` 縮小畫面 |
+| 此 ComfyUI 版本未通過相容檢查 | 這個工作依賴 core 內部介面，驗證過的版本是 core 0.42.5。請更新 MediaForge，或回報你的版本 |
+
 ## 常見問題
 
 **Q：為什麼不全用 VideoHelperSuite 就好？**
@@ -1731,6 +1901,8 @@ python -m pytest tests/ -k "video_io"        # 只跑 rawvideo roundtrip
 real-ffmpeg 系列需要 PATH 上有 `ffmpeg`。
 
 Timeline 測試（`test_timeline_*.py`、`test_latent_carry.py`、`test_segment_spill.py`、`test_load_segment_frames.py`、`test_h3_adapter_core.py`、`test_sample_segments_core.py`）跟 `tests/` 其他測試一樣只在開發者本地。真 core 測試 `tests/test_timeline_core_cache.py`、`tests/test_h3_adapter_core.py`、`tests/test_sample_segments_core.py` 會用 ComfyUI 的 interpreter 與 core 類別（快取測試會啟動多個 `main.py --cpu` 實例），必須在 ComfyUI 的 Linux / WSL 環境內跑。JS 測試需要 Node.js：
+
+Video Batch 測試：`test_video_batch_plan.py`（規則與分批數學）、`test_video_batch_decode.py`（每個批次窗口與連續解碼比對；支援的 FFmpeg 版本都要跑）、`test_video_batch_core.py`（真 core 執行器，五種快取模式；需要 ComfyUI，設定 `COMFYUI_ROOT`）、`test_video_io_streaming.py`（Load / Save Video Frames 的峰值記憶體）。
 
 ```bash
 python -m pytest -q tests/test_timeline_core_cache.py tests/test_h3_adapter_core.py tests/test_sample_segments_core.py   # 在 ComfyUI 的 Linux / WSL 環境內

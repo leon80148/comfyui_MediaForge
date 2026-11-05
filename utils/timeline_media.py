@@ -19,8 +19,11 @@ from .timeline_materials import audio_sample_count
 from .timeline_messages import TimelineError, format_message
 from .timeline_source import (ffmpeg_input_args, opaque_fingerprint, parse_audio_probe, parse_probe_output,
                               resolve_timeline_source, run_probe)
-from .video_io import MAX_DECODE_BYTES
+from .video_io import MAX_DECODE_BYTES, read_rgb_frames, read_stdout
 
+# Sample rate and channel count come from the file itself, so damaged metadata must not size an allocation.
+MAX_AUDIO_RATE = 384000
+MAX_AUDIO_CHANNELS = 32
 AUDIO_PREROLL = Fraction(1)  # 秒；遠大於常見音訊封包（AAC ≈ 21 ms、PCM-in-MKV ≈ 85 ms）
 EDIT_LABEL = "Edit Timeline"
 # EXIF Orientation 5–8 是轉 90° / 270°：寬高對調
@@ -161,6 +164,22 @@ def decode_video(path, seek, count, fps, size, scale, label, stream=0):
     return torch.from_numpy(arr.copy()).float().div_(255.0)
 
 
+def decode_video_window(path, first, count, fps, offset_sec, size, extra_filters, stream, label, check_interrupt=None, into=None):
+    """時間軸幀 [first, first + count)，逐 byte 等於同濾鏡鏈從檔頭連續解碼的同一段。
+
+    decode_video 從 accurate seek 點重新起算 fps filter，重取樣與 VFR 來源在窗口接縫會偏移、總幀數也會變。
+    這裡讓 fps filter 依絕對時間從 0 算起：從窗口前的關鍵幀解、保留原始時間戳，再用幀號裁切。
+    MPEG-TS 這類沒有關鍵幀索引的容器 seek 會落錯位置，由呼叫端先擋掉。
+    """
+    num, den = fps
+    head = ["-noaccurate_seek", "-ss", f"{float(offset_sec + Fraction(first * den, num)):.9f}"] if first > 0 else []
+    vf = ",".join([f"setpts=PTS-{float(offset_sec):.9f}/TB", f"fps={num}/{den}:start_time=0",
+                   f"trim=start_frame={first}:end_frame={first + count}", *extra_filters])
+    cmd = (["ffmpeg", "-v", "error", "-nostdin", *head, "-copyts", "-start_at_zero"] + ffmpeg_input_args(path)
+           + ["-map", f"0:v:{stream}", "-vf", vf, "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+    return read_rgb_frames(cmd, count, size[0], size[1], label, check_interrupt, into)
+
+
 def _seek_unsafe(path, sample_rate, label):
     """輸入端 -ss 會改變 sample 內容嗎：第一條 audio stream 的時間戳比一個 sample 粗（Matroska / WebM 以 1 ms 計），
     或需要重取樣（seek 後重新起算的重取樣相位與從頭重取樣不同）。"""
@@ -172,7 +191,7 @@ def _seek_unsafe(path, sample_rate, label):
     return rate != sample_rate or Fraction(stream["time_base"]) > Fraction(1, rate)
 
 
-def decode_audio(path, seek, origin, count, sample_rate, channels, source_channels, label):
+def decode_audio(path, seek, origin, count, sample_rate, channels, source_channels, label, check_interrupt=None):
     """最多 count 個 sample；來源提早結束時回傳較短的 PCM（尾端不補），由呼叫端決定補靜音或截短上下文。
 
     seek / origin 是 -ss 軸（容器起點 = 0）上的時間；素材第 k 個 sample 在 origin + k / sample_rate。
@@ -198,9 +217,9 @@ def decode_audio(path, seek, origin, count, sample_rate, channels, source_channe
     if source_channels == 1 and channels == 2:
         af += ",pan=stereo|c0=c0|c1=c0"  # -ac 2 would upmix mono at -3 dB; the spec duplicates it
     head = ["-ss", f"{float(ss):.9f}"] if ss > 0 else []
-    out = run_capture(["ffmpeg", "-v", "error", "-nostdin"] + head + ffmpeg_input_args(path)
-                      + ["-map", "0:a:0", "-af", af, "-ac", str(channels), "-ar", str(sample_rate), "-f", "f32le", "pipe:1"],
-                      label, "解碼音訊")
+    cmd = (["ffmpeg", "-v", "error", "-nostdin"] + head + ffmpeg_input_args(path)
+           + ["-map", "0:a:0", "-af", af, "-ac", str(channels), "-ar", str(sample_rate), "-f", "f32le", "pipe:1"])
+    out = run_capture(cmd, label, "解碼音訊") if check_interrupt is None else read_stdout(cmd, label, "解碼音訊", check_interrupt)
     pcm = np.frombuffer(out, dtype=np.float32).reshape(-1, channels).T
     return torch.from_numpy(pcm.copy()).unsqueeze(0)
 

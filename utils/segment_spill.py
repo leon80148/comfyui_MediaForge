@@ -27,15 +27,15 @@ from .timeline_media import decode_audio, pad_audio
 from .timeline_messages import TimelineError, format_message
 from .timeline_plan import sample_index
 from .timeline_source import opaque_fingerprint, resolve_timeline_source
+from .video_io import RAM_HEADROOM, chunk_frames, quantize
+from .video_io import StderrTail as _StderrTail
+from .video_io import stop_process as _stop
 
 APPEND_LABEL = "Append Segment"
 ASSEMBLE_LABEL = "Assemble Segments"
 
 SPILL_ROOT = PLUGIN_TMP_DIR
-CHUNK_BYTES = 16 * 1024 * 1024
 STALL_TIMEOUT = 120.0
-STDERR_TAIL_BYTES = 64 * 1024
-RAM_HEADROOM = 0.8
 # 實測 FFV1 level 3 ≈ 0.51 MB/幀 @1344×768；磁碟預檢再乘 2 倍
 FFV1_BYTES_PER_PIXEL = 0.5
 THUMB_SIZE = 16
@@ -103,6 +103,15 @@ class SpillPart:
         self._finalizer()
 
 
+def discard(state):
+    """主動刪掉 state 的所有暫存（分段、crossfade 保留區、session 目錄），不等 finalizer。"""
+    pending = state["pending"] or {}
+    for part in (*state["parts"], pending.get("frames"), pending.get("audio")):
+        if part is not None:
+            part.remove()
+    _remove_session_dir(state["spill_dir"])
+
+
 class PendingPart(SpillPart):
     """crossfade 保留區（raw uint8 RGB 或 float32 PCM）。與 SpillPart 同一套 owner：被多個 state
     共享、最後一個引用消失才刪檔；讀取不消耗，重跑 / 分支可以重讀。"""
@@ -139,21 +148,10 @@ def crossfade_frames(seam):
     return seam["frames"] if seam is not None and seam["kind"] == "crossfade" else 0
 
 
-def quantize(frames):
-    """float [N,H,W,3]（任意 device / dtype）→ CPU uint8，與 video_io 相同的 round(clamp(x)·255)。"""
-    x = frames.to(device="cpu", dtype=torch.float32, copy=True)
-    return x.clamp_(0.0, 1.0).mul_(255.0).round_().to(torch.uint8)
-
-
 def mix_frame(a_u8, b, w):
     """crossfade 一幀：在 0–255 浮點域算 (1−w)·A + w·B，最後才量化。"""
     b255 = b.to(device="cpu", dtype=torch.float32).clamp(0.0, 1.0) * 255.0
     return ((1.0 - w) * a_u8.to(torch.float32) + w * b255).round_().clamp_(0.0, 255.0).to(torch.uint8)
-
-
-def chunk_frames(width, height):
-    """每批轉換 / 寫入的幀數：float32 工作副本 + uint8 結果合計約 CHUNK_BYTES，至少一幀。"""
-    return max(1, CHUNK_BYTES // (width * height * 3 * 5))
 
 
 def audio_input(audio, label):
@@ -233,26 +231,6 @@ def check_ram(nbytes):
 
 # ---------- spill writer（writer thread + 呼叫端監督） ----------
 
-class _StderrTail(threading.Thread):
-    """持續讀 stderr（避免 pipe 塞滿反過來卡住 FFmpeg），只保留最後 64 KiB。"""
-
-    def __init__(self, stream):
-        super().__init__(daemon=True)
-        self._stream = stream
-        self._buf = bytearray()
-        self.start()
-
-    def run(self):
-        while chunk := self._stream.read1(4096):
-            self._buf += chunk
-            del self._buf[:-STDERR_TAIL_BYTES]
-
-    def print_tail(self, label):
-        lines = bytes(self._buf).decode("utf-8", errors="replace").strip().splitlines()[-30:]
-        if lines:
-            print(f"[{label}] FFmpeg stderr：\n" + "\n".join(lines))
-
-
 def _feed(stdin, chunks, progress, errors):
     try:
         for chunk in chunks:
@@ -288,16 +266,6 @@ def _supervise(finished, check_interrupt, progress=None):
             last, since = now, time.monotonic()
         elif time.monotonic() - since > STALL_TIMEOUT:
             raise RuntimeError(f"[{APPEND_LABEL}] FFmpeg 超過 {STALL_TIMEOUT:g} 秒沒有進度，已中止。請確認磁碟空間與系統負載後重試。")
-
-
-def _stop(proc):
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
 
 
 def _probe_streams(path, fmt, entries):

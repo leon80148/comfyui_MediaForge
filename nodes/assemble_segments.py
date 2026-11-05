@@ -6,7 +6,7 @@ parts 是無損 FFV1 + float32 WAV；這裡才做唯一一次有損編碼。音�
 import json
 
 from ..utils import segment_spill
-from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
+from ..utils.encoder import assemble_settings, get_available_codecs, pick_default_codec
 from ..utils.ffmpeg import ensure_ffmpeg
 from ..utils.output_path import output_path_to_ui_entry
 from .append_segment import _check_interrupt
@@ -48,12 +48,8 @@ class MF_AssembleSegments:
         segment_spill.check_state(state, LABEL)
         if not ensure_ffmpeg():
             raise RuntimeError(f"[{LABEL}] FFmpeg / FFprobe 未在 PATH 中，請先安裝。")
-        codec_id, pix_fmt = get_available_codecs()[codec]
-        if codec_id == "prores_ks":
-            # ProRes 沒有 crf / preset；profile 3 = 422 HQ，與 MF_SaveVideoFrames 一致
-            ext, encoder_args = ".mov", build_encoder_args(codec_id) + ["-profile:v", "3"]
-        else:
-            ext, encoder_args = ".mp4", build_encoder_args(codec_id, crf=crf, preset=preset)
+        codec_id = get_available_codecs()[codec][0]
+        ext, pix_fmt, encoder_args = assemble_settings(codec, crf, preset)
         override = None if audio is None else segment_spill.audio_input(audio, LABEL)
         path, report = segment_spill.assemble(state, filename_prefix, ext, pix_fmt, encoder_args, override,
                                               check_interrupt=_check_interrupt, lock_audio=lock_audio)

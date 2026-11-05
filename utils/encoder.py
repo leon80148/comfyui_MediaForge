@@ -182,3 +182,11 @@ def build_encoder_args(codec_id, *, crf=None, bitrate=None, preset=None):
 
     # prores_ks 等其他 codec：caller 透過 extra_args 自己處理 -profile:v 等
     return args
+
+
+def assemble_settings(codec_label, crf, preset):
+    """dropdown 的 codec → segment_spill.assemble 要的 (ext, pix_fmt, encoder_args)。ProRes 沒有 crf / preset；profile 3 = 422 HQ。"""
+    codec_id, pix_fmt = get_available_codecs()[codec_label]
+    if codec_id == "prores_ks":
+        return ".mov", pix_fmt, build_encoder_args(codec_id) + ["-profile:v", "3"]
+    return ".mp4", pix_fmt, build_encoder_args(codec_id, crf=crf, preset=preset)

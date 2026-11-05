@@ -7,7 +7,7 @@ from fractions import Fraction
 
 import torch
 
-from ..utils.timeline_media import decode_audio, decode_video, scale_filter
+from ..utils.timeline_media import MAX_AUDIO_CHANNELS, MAX_AUDIO_RATE, decode_audio, decode_video, scale_filter
 from ..utils.timeline_messages import TimelineError
 from ..utils.timeline_plan import require_segment, sample_index
 from ..utils.timeline_source import opaque_fingerprint, probe_source, resolve_timeline_source
@@ -15,8 +15,6 @@ from ..utils.video_io import MAX_DECODE_BYTES
 
 NODE_LABEL = "Load Segment Frames"
 RESIZE_MODES = ("none", "fit", "fill", "stretch")
-MAX_AUDIO_RATE = 384000
-MAX_AUDIO_CHANNELS = 32
 SHORTFALL_MODES = ("error", "hold_last", "black")
 
 

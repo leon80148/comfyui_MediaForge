@@ -8,6 +8,7 @@ import os
 
 from ..utils.cache_key import path_fingerprint
 from ..utils.ffmpeg import ensure_ffmpeg
+from ..utils.video_batch import check_interrupt
 from ..utils.video_io import decode_audio_to_dict, decode_video_to_tensor
 
 
@@ -38,7 +39,7 @@ class MF_LoadVideoFrames:
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"[Load Video Frames] 找不到影片：{video_path}")
 
-        frames, meta = decode_video_to_tensor(video_path, target_fps=target_fps, max_frames=max_frames)
+        frames, meta = decode_video_to_tensor(video_path, target_fps=target_fps, max_frames=max_frames, check_interrupt=check_interrupt)
 
         audio_dict = None
         if load_audio:

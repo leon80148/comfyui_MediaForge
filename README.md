@@ -10,7 +10,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 
 ## Highlights
 
-- 🎞️ **33 nodes** across 6 categories — Subtitle / Video / Analysis / Audio (Phase 6 kickoff) / Compose (now with audio chain) / AI (+ Net / Image planned)
+- 🎞️ **35 nodes** across 6 categories — Subtitle / Video / Analysis / Audio (Phase 6 kickoff) / Compose (now with audio chain) / AI (+ Net / Image planned)
 - 🔗 **Dual-input bridge** — file-consumer nodes accept *either* a `video_path` string *or* an in-memory `IMAGE + AUDIO + tensor_fps` triplet, so MediaForge chains with VHS / AnimateDiff / any IMAGE-pipeline plugin without a SaveVideoFrames round-trip
 - 🚀 **Smart GPU codec default** — `h264_nvenc` is auto-selected when NVENC is available, libx264 fallback on CPU-only systems. No per-workflow switching needed
 - 📡 **API-ready output** — every file-producing node emits ComfyUI `ui.images` metadata so `/history/<prompt_id>` exposes the output filename; download via `/view?filename=X&subfolder=Y&type=output` (see [Using via API](#using-via-api))
@@ -18,6 +18,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 - 🎚️ **Single-encode multi-overlay Compose pipeline** — `filter_complex` graph compiler; lossless overlay stacking vs. N re-encodes
 - 🎙️ **Audio mixing built-in** — BurnSubtitle's `keep_source_audio` toggle `amix`-es an external audio pin with the source's native audio (default on); cinematic fps rates (23.976 / 29.97 / 59.94) accepted as FLOAT
 - 🤖 **Provider-agnostic AI** — `MF_AIConfig` lets you point Whisper / Translate at OpenAI / Groq / OpenRouter / Gemini / Ollama / local backends in one place
+- 🎬 **Video Batch** — run a ten-minute video through any IMAGE node (upscaler, masking, H3) in batches, with two nodes and one queue entry. Frames stay on disk, not in RAM, and one finished video comes out. See [Video Batch](#video-batch)
 - 🧵 **Timeline & long video** — plan overlapping segments in a visual editor with a material library (reference images / videos / audio, keyframes, guides, audio locks), carry each segment's latent tail into the next, decode and spill one segment at a time, encode once. MiniMax H3 AV supported in the loop path; the single-node H3 sampler awaits GPU verification; LTX-2 / Wan 2.2 experimental (see [Timeline & Long Video](#timeline--long-video))
 - 🪶 **Light dependencies** — `requirements.txt` lists four small pure-Python packages plus `imageio-ffmpeg` / `static-ffmpeg`, the fallbacks used when no system `ffmpeg` / `ffprobe` is found. All are imported only when needed; `faster-whisper` stays optional
 - 🔁 **Tensor-native** — `IMAGE [B,H,W,C] float32` and ComfyUI-canonical `AUDIO` dict; rawvideo roundtrip at PSNR > 38 dB
@@ -25,21 +26,22 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
-2. [Timeline & Long Video](#timeline--long-video)
-3. [Using via API](#using-via-api)
-4. [Smart GPU codec default](#smart-gpu-codec-default)
-5. [Why this plugin (vs VideoHelperSuite)](#why-this-plugin-vs-videohelpersuite)
-6. [Nodes (33)](#nodes-33)
-7. [AI Provider Recipes](#ai-provider-recipes)
-8. [Hidden Contracts](#hidden-contracts)
-9. [Architecture](#architecture)
-10. [Requirements](#requirements)
-11. [Install](#install)
-12. [Troubleshooting](#troubleshooting)
-13. [FAQ](#faq)
-14. [Testing](#testing)
-15. [Roadmap](#roadmap)
-16. [License & Acknowledgments](#license)
+2. [Video Batch](#video-batch)
+3. [Timeline & Long Video](#timeline--long-video)
+4. [Using via API](#using-via-api)
+5. [Smart GPU codec default](#smart-gpu-codec-default)
+6. [Why this plugin (vs VideoHelperSuite)](#why-this-plugin-vs-videohelpersuite)
+7. [Nodes (35)](#nodes-35)
+8. [AI Provider Recipes](#ai-provider-recipes)
+9. [Hidden Contracts](#hidden-contracts)
+10. [Architecture](#architecture)
+11. [Requirements](#requirements)
+12. [Install](#install)
+13. [Troubleshooting](#troubleshooting)
+14. [FAQ](#faq)
+15. [Testing](#testing)
+16. [Roadmap](#roadmap)
+17. [License & Acknowledgments](#license)
 
 ## Quick Start
 
@@ -112,6 +114,85 @@ Generate a long AV clip as overlapping 107-frame segments and encode it once. Op
 6. `🧵 Assemble Segments` — `state` ← End Loop `outputs` → one `.mp4` (260 frames, 32 kHz audio).
 
 Wiring details, the other models and the editor: [Timeline & Long Video](#timeline--long-video). With reference materials and a single sampler node instead of a loop: `example_workflows/timeline_h3_director.json`.
+
+## Video Batch
+
+> Run any IMAGE node over a long video without holding the video in RAM. Frames go through your nodes one batch at a time, every batch is written to disk, and one finished video comes out. There is no loop to wire and no frame count to work out.
+
+```
+🎞️ Start Video Batch ── frames ──► your nodes ── frames ──► 🎬 End Video Batch
+```
+
+**To try it:** add the two nodes, connect them through your node (an upscaler, say), pick a video on Start and press Run. `frames_per_batch` on End is how many frames go through your nodes at a time, and it sets the memory peak. Lower it if you run out of RAM or VRAM.
+
+**What happens when you press Run.** It stays one queue entry and one history entry.
+
+1. The whole job is checked first: the sources, the wiring and the audio. A problem here stops it before your nodes get any frames.
+2. End asks for a batch. Start decodes only that window with FFmpeg and your nodes run on it. The same nodes run again for every batch. With ComfyUI's usual caching a node stays the same instance, so a model it keeps loaded is loaded once. `--cache-none` rebuilds it.
+3. End writes the frames to `.mf_tmp/seg_*` as lossless FFV1, drops them from memory and asks for the next batch. After the first batch it also tries a tiny encode, so an odd output size or an unavailable encoder fails at once instead of after the whole video.
+4. When the source ends, End encodes the parts into one file, checks it, shows it on the node and deletes the parts.
+
+The End node shows `第 k / 約 N 批` (batch k of about N), then `正在組裝成片…` (assembling), then `完成` (done). The progress bar only fills once the finished file has passed its checks.
+
+**Video Batch or Timeline?**
+
+| | Video Batch | [Timeline](#timeline--long-video) |
+|---|---|---|
+| For | Processing an existing video: upscaling, masks, restyling | Generating new video in planned segments that continue from each other |
+| Length | The source's frames | What you plan in the editor |
+| Wiring | 2 nodes plus your own | 6–8 nodes, or Sample Segments for H3 |
+
+**Batches.** The `frames` output always has exactly `frames_per_batch` frames: a short last batch repeats its last frame, and End cuts the result back, so models that need a fixed length work. Your nodes must return as many frames as they get, so anything that changes the frame count, like frame interpolation, goes after End on `final_video_path`. Nothing carries latents or temporal context from one batch to the next. A temporal model can show a join between them; `overlap_frames` crossfades the join, but it only blends the results and can't give the model more context. The result isn't guaranteed to match running the whole video in one go.
+
+**MiniMax H3.** `frames_per_batch` must be 17n+5, for example 124, with `fps = 24`. Other values are refused before the model runs.
+
+**Audio.** `audio` on End and `keep_source_audio` decide the soundtrack:
+
+| `audio` on End | Sources | Soundtrack of the video |
+|---|---|---|
+| Not linked, `keep_source_audio` off | Any | None |
+| Not linked | No source has audio | None |
+| Not linked | One source has audio | That source's audio, starting at its first video frame |
+| Not linked | Two sources have audio | Error before the model runs: link `audio` or turn off `keep_source_audio` |
+| Linked to a node outside the batch (Load Audio) | Any | That audio, read once, from the start of the video. Padded with silence or cut to the video's length |
+| Linked to a node inside the batch (Start's `audio`, VAE Decode Audio) | Any | Each batch's audio, read batch by batch |
+
+Start's `audio` output is only decoded if it's linked, even with `keep_source_audio` off. Linking it on a source without audio is an error. Overlaps crossfade audio linearly, so the same source audio doesn't get louder at a join.
+
+**Two videos.** Use two Starts and link both into your nodes. The shorter one decides the length. Batch settings live on End, so they can't disagree. If the two have different fps, set `fps` on End.
+
+**Disk and memory.** Parts take about 0.5 MB per frame at 1344×768, so ten minutes at 1080p 30 fps is very roughly 20 GB until the final encode. End updates its estimate after every batch and stops with an error if the temp or the output disk looks too small. Before decoding, Start checks RAM for one batch; End checks again after the first batch with the real output size. These are estimates, not guarantees: your nodes' own memory use is theirs.
+
+**Stop.** After Stop no new batch starts. The node that's running stops when it next checks for Stop, and FFmpeg is stopped with it; a source that has stalled can delay this. You don't get a partial video. The parts are deleted when the next Video Batch job starts. After a crash, the startup sweep deletes them once the process that wrote them is gone and they are older than 24 hours.
+
+**Compared with VHS Meta Batch Manager.** Measured on ComfyUI 0.42.5 and VHS commit `4d907be`, with an 11.6-minute 720p clip, 64 frames per batch, x264 CRF 19 and preset medium on both sides. Video Batch kept its parts on the Linux disk.
+
+| | VHS Meta Batch Manager | Start / End Video Batch |
+|---|---|---|
+| Nodes | Batch Manager, linked to Load Video and Video Combine | Start and End, in place of Load and Combine |
+| Queue and history | One entry per batch (261 here) | One |
+| Soundtrack | A second file, `-audio.mp4` | In the one output file |
+| After Stop | FFmpeg keeps running and the file won't open until the next Run closes it. Then you have the frames written so far, without audio | No new batch starts and FFmpeg is stopped. No partial video |
+| Overlap between batches | No | `overlap_frames` |
+| Extra disk | None | About 4 GB of parts until the final encode |
+| Time, clip with audio, no model | 1191 s | 299 s |
+| Time, no audio, no model (VHS: track removed from the file. Video Batch: `keep_source_audio` off) | 236 s | 286 s |
+| Time, FlashVSR, 50 batches of 16 frames at 480×270 | 940 s | 900 s |
+| Peak RAM, ComfyUI and FFmpeg | 2.43 + 0.56 GiB | 2.53 + 0.60 GiB |
+| Peak RAM with FlashVSR, ComfyUI | 11.54 GiB | 11.44 GiB |
+
+Peak RAM was close in these runs. Without audio VHS is faster, because it encodes while the batches run and Video Batch encodes once more at the end. With audio on this ComfyUI version, every VHS batch decodes the clip's whole audio track, about 3.6 s per batch here and more on longer clips, even if its audio output isn't linked: core's memory scan walks each node's output, and that makes VHS's lazy audio decode. That comes from how the two projects meet, not from how Meta Batch works, so an update to either could remove it. With a real model the model takes nearly all the time.
+
+Choose VHS if you can't spare the temp disk or want the frames written so far after a Stop. Choose Video Batch if you want one queue entry, one file with its sound, no FFmpeg left running after Stop, or an overlap between batches.
+
+**Not supported yet.** Resuming after a restart, a partial video after Stop, more than one End in a workflow, nodes inside the batch that change the frame count, MPEG-TS and MPEG files, HDR and wide-gamut video, core Start / End Loop inside the batch.
+
+**Example workflows** (in `example_workflows/`; model fields use `SELECT_*` placeholders, pick your own files):
+
+| File | Contents |
+|---|---|
+| `video_batch_upscale.json` | An upscale model between Start and End, keeping the source audio |
+| `video_batch_h3.json` | MiniMax H3 redrawing each batch: 124 frames, 24 fps |
 
 ## Timeline & Long Video
 
@@ -435,6 +516,7 @@ To override per-node, just pick from the dropdown — existing workflows that ha
 |---|---|---|---|
 | Load video → IMAGE batch | ✅ opencv | ✅ FFmpeg | MediaForge handles AV1 / HEVC 10-bit / ProRes / VP9 / arbitrary colorspaces |
 | Save IMAGE batch → video | ✅ H.264 only | ✅ H.264 / HEVC / AV1 / ProRes | Plus CRF / bitrate / target-size modes |
+| Long video through any IMAGE node, batch by batch | ✅ Meta Batch Manager | ✅ Video Batch | [Compared here](#video-batch), with measurements |
 | GIF export | ❌ | ✅ | `MF_SaveVideoFrames` `codec=gif (palette)` — two-pass palette + Bayer dither |
 | Audio in/out (canonical dict) | ⚠️ limited | ✅ both directions | `{'waveform': Tensor[B,C,T], 'sample_rate': int}` |
 | Trim by ranges | ✅ image-batch | ✅ video + image-batch | MediaForge takes `SILENCE_RANGES` from `MF_DetectSilence` |
@@ -450,7 +532,7 @@ To override per-node, just pick from the dropdown — existing workflows that ha
 
 **TL;DR:** Install both. VHS for fast IMAGE-batch workflows; MediaForge for broadcast encoding, file-level ops, Compose pipeline, and AI-driven subtitle work.
 
-## Nodes (33)
+## Nodes (35)
 
 Each node section below follows the same template: **purpose → when to use → required widgets → optional inputs → output → example**. Skim the widget tables to find the knob you need; fall back to the example for typical wiring.
 
@@ -862,6 +944,51 @@ Encodes the spilled parts into the final video — the single lossy encode of th
 **Outputs**: `final_video_path` STRING; `report` STRING (JSON: frames, fps, size, color assumption, audio source (`internal` / `override` / `locked_original` / `none`) / sample rate / samples, padded samples, per-seam diagnostics, `effective` lock-audio entry). Emits `ui.images` for `/history`.
 
 **Notes**: assumes BT.709 (full-range RGB → limited-range YUV) and writes those tags; verifies the frame count, and with internal audio the exact sample count; `E_SPILL_MISSING` if parts were deleted (e.g. `.mf_tmp/` cleaned up, or a cache eviction) — rerun the loop. Spill parts are not deleted here, because the cached state may still be reused.
+
+---
+
+#### 🎞️ Start Video Batch (`MF_StartVideoBatch`)
+
+Feeds a video into your nodes one batch at a time. Pairs with `🎬 End Video Batch`; see [Video Batch](#video-batch).
+
+**When to use**: to run an IMAGE node over a video that's too long to hold in memory. The file picker is built in, so the flow stays two nodes; this is the one exception to using `📂 Select Video`.
+
+| Widget | Type | Default | Notes |
+|---|---|---|---|
+| `video` | dropdown + upload | | A video under `input/`. Hidden with its upload button when `video_path` is linked |
+| `resize` | dropdown | `none` | `none` / `fit` (letterbox) / `fill` (crop) / `stretch` |
+| `width`, `height` | INT | `1280`, `720` | Hidden for `resize = none` |
+| `video_path` *(optional)* | STRING socket | | Takes priority over `video`. Must not depend on a node inside the batch |
+
+**Outputs**: `frames` IMAGE — this batch, always `frames_per_batch` frames; `audio` AUDIO — this batch's audio, decoded only if linked; `fps` FLOAT; `frame_count` INT — frames in this batch including repeated ones, not the length of the video.
+
+**Notes**: mp4 / mov / mkv / webm / avi. MPEG-TS and MPEG have no keyframe index to seek by, and HDR and wide-gamut video isn't handled yet; both are refused with the command to convert them. The fps comes from the source unless End sets one; variable frame rate is resampled to it. If the source file changes during the job, it stops instead of mixing two videos.
+
+---
+
+#### 🎬 End Video Batch (`MF_EndVideoBatch`)
+
+Runs the job: asks for each batch, writes it to disk, and encodes the finished video. Its output node.
+
+**When to use**: paired with `🎞️ Start Video Batch`. All the job's settings are here.
+
+| Widget | Type | Default | Notes |
+|---|---|---|---|
+| `frames_per_batch` | INT | `64` | Frames sent to your nodes at once. Lower uses less RAM and VRAM. H3 needs 17n+5, for example 124 |
+| `fps` | FLOAT | `0` | Convert to this fixed fps; `0` uses the source's. Required when two sources differ |
+| `max_frames` | INT | `0` | Process only the first frames, for a test run; `0` is all |
+| `codec` | dropdown | smart (NVENC if available, else libx264) | Same catalog as the other encoders |
+| `keep_source_audio` | BOOLEAN | `true` | Keep the source's soundtrack. Hidden when `audio` is linked |
+| `filename_prefix` *(advanced)* | STRING | `MediaForge/video_batch` | → `output/<prefix>_NNNNN.mp4` (`.mov` for ProRes) |
+| `overlap_frames` *(advanced)* | INT | `0` | Frames two neighbouring batches share and crossfade over; at most half of `frames_per_batch` |
+| `crf` *(advanced)* | INT | `18` (0–51) | Hidden for `prores (prores_ks)` |
+| `preset` *(advanced)* | dropdown | `medium` | Hidden for `prores (prores_ks)` |
+
+**Inputs**: `frames` (IMAGE, required) — the processed frames; `audio` (AUDIO, optional) — see the [audio table](#video-batch). Every widget here is settings-only, with no socket, because Start has to read them before End runs.
+
+**Outputs**: `final_video_path` STRING; `report` STRING (JSON: frames, fps, size, batches, sources, audio source (`internal` / `override` / `none`), sample rate and samples, per-seam diagnostics).
+
+**Notes**: nodes after End may read `final_video_path`, but not the frames inside the batch, because they would only get one batch. Errors are explained under [Video Batch messages](#video-batch-messages).
 
 ---
 
@@ -1519,6 +1646,8 @@ comfyui_MediaForge/
 │   ├── ai_config.py            # MF_AIConfig
 │   ├── append_segment.py       # MF_AppendSegment  — Timeline: decode, de-overlap, spill to .mf_tmp/
 │   ├── assemble_segments.py    # MF_AssembleSegments  — Timeline: final encode (OUTPUT_NODE)
+│   ├── start_video_batch.py    # MF_StartVideoBatch  — Video Batch: decodes one batch per run
+│   ├── end_video_batch.py      # MF_EndVideoBatch  — Video Batch: drives the batches, final encode (OUTPUT_NODE)
 │   ├── burn_subtitle.py        # MF_BurnSubtitle  — uses font/ subdir
 │   ├── compose_video.py        # MF_ComposeVideo  — Compose v2 endpoint (replaces Start + Finalize)
 │   ├── compose_overlay_text.py # MF_ComposeOverlayText
@@ -1563,6 +1692,7 @@ comfyui_MediaForge/
 │   ├── output_path.py       # resolve_output_path + output_path_to_ui_entry (API metadata helper)
 │   ├── plugin_tmp.py        # .mf_tmp/ temp files + sweep of stale files and session dirs
 │   ├── segment_spill.py     # Timeline: immutable state, FFV1 / WAV spill parts, crossfade, lock-audio master, final encode
+│   ├── video_batch.py       # Video Batch: graph rules, batch math, source checks, the job that re-runs the same node IDs
 │   ├── timeline_materials.py# Timeline: materials / refs / anchors, geometry, per-segment manifest, H3 tags, aliases
 │   ├── timeline_media.py    # Timeline: material snapshots, image / video / audio slice decoding
 │   ├── timeline_messages.py # Timeline: message catalog (stable E_* / W_* keys)
@@ -1693,6 +1823,46 @@ Timeline nodes report problems as `[<node>] <KEY>：<message>`. The message text
 | `W_PROXY` | timeline editor | Preview creation failed; the timeline is still editable. Retry. | The editor shows 「預覽失敗（時間軸仍可編輯）」 with a 重試 (Retry) button; editing works without the preview |
 | — | core Start / End Loop | `Loop body is not closed` | A preview / side-effect node inside the loop body isn't wired into End Loop `terminations` — wire it there, or move it out of the loop |
 
+### Video Batch messages
+
+Video Batch nodes report problems as `[Start Video Batch] …` or `[End Video Batch] …`. The text is Traditional Chinese; the table gives what it means.
+
+| Message (English translation) | Fix |
+|---|---|
+| Start needs an End Video Batch | Add End and link the processed frames to its `frames` |
+| A workflow can only have one End Video Batch | Delete the extra one |
+| A Start isn't connected to End | Link it or delete it |
+| `frames` must come from Start | Link End's `frames` to Start, through your nodes if you have any |
+| A node after End can't read frames inside the batch | That node would get only one batch. Link it to `final_video_path` |
+| No Start / End Loop inside the batch | Move the loop outside |
+| A Start input can't depend on a node inside the batch | Use a source outside the batch |
+| A setting on End can't be linked | Set it on the node |
+| `frames_per_batch` must be at least 1; `overlap_frames` must be between 0 and half of it | Change the value |
+| With MiniMax H3 in the batch, `frames_per_batch` must be 17n+5 | Use a value it suggests, such as 124 |
+| No video selected; video not found | Upload or pick one, or link `video_path` |
+| The format isn't verified for batch decoding (TS, MPG) | Convert: `ffmpeg -i in.ts -c copy out.mkv` |
+| HDR or wide-gamut video isn't supported yet | Convert to SDR / BT.709 first |
+| Can't find the video's start time; can't find its fps | Convert the file; for fps, set `fps` on End |
+| The videos have different fps | Set a shared `fps` on End |
+| This batch needs X GiB of RAM (Start, before decoding) | Lower `frames_per_batch`, or shrink the frames with `resize` |
+| No frames from frame N | Check that the video isn't damaged or empty |
+| The source changed during the job | Don't replace the file while it runs; run again |
+| Batch N got no frames; batch N was blocked by a node upstream | Check the node feeding `frames`. A batch can't be skipped |
+| `frames` must be `[frames, height, width, 3]` RGB; must be 0–1 float | Convert the output, for example drop alpha |
+| Batch N went in with B frames and came out with M | The node changes the frame count. Move it after End |
+| Frames contain NaN or infinity | The node upstream probably failed |
+| Batch N has only L frames, not more than the overlap | The source changed during the job; run again |
+| `audio` must be a single track; `audio` was blocked; `audio` is empty | Link one track, or unlink `audio` |
+| Batch N's audio has a different sample rate or channel count | Make every batch's audio the same format |
+| The source has no audio, so `audio` can't be used | Unlink Start's `audio`, or use a video with audio |
+| Two sources have audio | Link the one you want to End's `audio`, or turn off `keep_source_audio` |
+| Odd audio format; the track is too big (temp WAV limit about 4 GiB); not enough RAM to decode it | Convert it to 48 kHz stereo: `ffmpeg -i video -c:v copy -ac 2 -ar 48000 -c:a aac out.mp4`, or turn off `keep_source_audio` |
+| The frames are W×H and this codec needs even sizes | Change your node's scale, or add a resize before End |
+| The trial encode failed with this codec | Pick another codec, such as `h264 (libx264)` |
+| The disk may not have enough room | Free some space, or use `max_frames` or `resize` |
+| After your nodes, each batch needs X GiB of RAM | Lower `frames_per_batch`, or shrink the frames with `resize` |
+| This ComfyUI version didn't pass the compatibility check | The job depends on core internals, verified on core 0.42.5. Update MediaForge or tell us your version |
+
 ## FAQ
 
 **Q: Why not use VideoHelperSuite for everything?**
@@ -1731,6 +1901,8 @@ python -m pytest tests/ -k "video_io"        # only rawvideo roundtrip
 Real-ffmpeg tests require `ffmpeg` on PATH.
 
 Timeline tests (`test_timeline_*.py`, `test_latent_carry.py`, `test_segment_spill.py`, `test_load_segment_frames.py`, `test_h3_adapter_core.py`, `test_sample_segments_core.py`) are developer-local like the rest of `tests/`. The real-core tests `tests/test_timeline_core_cache.py`, `tests/test_h3_adapter_core.py` and `tests/test_sample_segments_core.py` must run inside the ComfyUI Linux / WSL environment, because they use ComfyUI's interpreter and core classes (the cache tests spawn `main.py --cpu` instances). The JS tests need Node.js:
+
+Video Batch tests: `test_video_batch_plan.py` (rules and batch math), `test_video_batch_decode.py` (each batch window against a continuous decode; run it on every FFmpeg version you support), `test_video_batch_core.py` (the real core executor in five cache modes; needs ComfyUI, set `COMFYUI_ROOT`), `test_video_io_streaming.py` (peak memory of Load / Save Video Frames).
 
 ```bash
 python -m pytest -q tests/test_timeline_core_cache.py tests/test_h3_adapter_core.py tests/test_sample_segments_core.py   # inside ComfyUI's Linux / WSL environment

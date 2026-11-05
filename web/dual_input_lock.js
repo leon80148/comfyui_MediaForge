@@ -37,6 +37,10 @@ import { app } from "../../scripts/app.js";
 //                           trigger is wired. Use for path-mode-only widgets that aren't the path
 //                           itself (e.g. keep_source_audio only matters when source comes from
 //                           video_path; tensor frames already pre-mux audio in encode_tensor_to_tempfile).
+//   hidden_buttons        : same as hidden_when_connected, for widgets the frontend makes itself (the upload
+//                           button of a video_upload dropdown), which aren't in INPUT_TYPES.
+//   clears_preview        : lock_widget is a video_upload dropdown whose preview goes away with it when the trigger is
+//                           wired: the preview would show a file that isn't the one that runs.
 //
 // Dead UI surface taxonomy on dual-input nodes:
 //   - lock_widget / hidden_when_connected  → path-mode-only, hide in tensor mode
@@ -54,6 +58,9 @@ const DUAL_INPUT_NODES = {
     "MF_ComposeAudioMix":   { trigger_input: "audio", lock_widget: "audio_path" },
     "MF_DetectSilence":     { trigger_input: "audio", lock_widget: "audio_source" },
     "MF_ExtractAudio":      { trigger_input: "audio", lock_widget: "audio_source" },
+    // A linked path replaces the file picker. An AUDIO on End replaces the soundtrack, so there's nothing to keep.
+    "MF_StartVideoBatch":   { trigger_input: "video_path", lock_widget: "video", hidden_buttons: ["upload"], clears_preview: true },
+    "MF_EndVideoBatch":     { trigger_input: "audio", lock_widget: "keep_source_audio" },
 };
 
 // Secondary connection-driven locks for nodes that have a SECOND dual-input pair
@@ -132,6 +139,12 @@ const WIDGET_VALUE_LOCKS = {
     "MF_AssembleSegments": [
         { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
     ],
+    "MF_StartVideoBatch": [
+        { trigger: "resize", value: "none", hide: ["width", "height"] },
+    ],
+    "MF_EndVideoBatch": [
+        { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
+    ],
     "MF_SampleSegments": [
         { trigger: "mask", value: "hard", hide: ["video_taper_tokens", "audio_taper_tokens"] },
         { trigger: "mask", value: "linear", hide: ["video_taper_tokens", "audio_taper_tokens"] },
@@ -143,6 +156,12 @@ const WIDGET_VALUE_LOCKS = {
         { trigger: "kind", value: "audio", hide: ["resize", "width", "height"] },
         { trigger: "kind", value: "lock", hide: ["resize", "width", "height"] },
     ],
+};
+
+// A dropdown with nothing to choose has no value, and the frontend leaves it out of the prompt. For a required input that
+// stops the run with core's generic error, even when a linked path makes the dropdown irrelevant. Send "" so the node decides.
+const EMPTY_DROPDOWN_SENDS_BLANK = {
+    "MF_StartVideoBatch": ["video"],
 };
 
 // Wrap an existing prototype method (or assign if missing) so multiple
@@ -180,12 +199,29 @@ function isTriggerConnected(node, trigger_name) {
     return node.inputs[slot_idx].link != null;
 }
 
+// The frontend keeps a dropdown's preview in two places: the node's outputs, which Nodes 2.0 draws, and a DOM widget
+// that classic draws. Calling the dropdown's own callback puts both back.
+function syncFilePreview(node, config, connected) {
+    setWidgetHidden(findWidget(node, "video-preview"), connected);
+    if (connected) {
+        // Inside a subgraph the key carries the subgraph: the bare number belongs to a root node with the same ID.
+        delete app.nodeOutputs?.[node.graph?.isRootGraph === false ? `${node.graph.id}:${node.id}` : String(node.id)];
+        node.imgs = undefined;
+        node.mfPreviewCleared = true;
+    } else if (node.mfPreviewCleared) {
+        node.mfPreviewCleared = false;
+        const dropdown = findWidget(node, config.lock_widget);
+        if (dropdown?.value) dropdown.callback?.(dropdown.value);
+    }
+}
+
 function applyLockState(node, config) {
     const connected = isTriggerConnected(node, config.trigger_input);
+    if (config.clears_preview) syncFilePreview(node, config, connected);
     // lock_widget: reverse direction — hide when trigger is wired
     setWidgetHidden(findWidget(node, config.lock_widget), connected);
     // hidden_when_connected: reverse direction — extra path-mode-only widgets (besides the path itself)
-    for (const name of (config.hidden_when_connected || [])) {
+    for (const name of [...(config.hidden_when_connected || []), ...(config.hidden_buttons || [])]) {
         setWidgetHidden(findWidget(node, name), connected);
     }
     // linked_widgets: same direction — hide when trigger is NOT wired (widget only matters in tensor mode)
@@ -250,6 +286,15 @@ app.registerExtension({
         // ones (EXTRA_INPUT_LOCKS) — each config is applied independently.
         const connConfigs = [DUAL_INPUT_NODES[nodeData.name], EXTRA_INPUT_LOCKS[nodeData.name]].filter(Boolean);
         const valueRules = WIDGET_VALUE_LOCKS[nodeData.name];
+        const blanks = EMPTY_DROPDOWN_SENDS_BLANK[nodeData.name];
+        if (blanks) {
+            chainCallback(nodeType.prototype, "onNodeCreated", function () {
+                for (const name of blanks) {
+                    const widget = findWidget(this, name);
+                    if (widget) widget.serializeValue = () => widget.value ?? "";
+                }
+            });
+        }
         if (!connConfigs.length && !valueRules) return;
 
         if (connConfigs.length) {
@@ -267,11 +312,23 @@ app.registerExtension({
             // Fresh node drag-from-menu
             chainCallback(nodeType.prototype, "onNodeCreated", function () {
                 for (const config of connConfigs) applyLockState(this, config);
+                // The preview widget only appears once its video has loaded, which can be after the link is known.
+                if (connConfigs.some((config) => config.clears_preview)) {
+                    chainCallback(this, "addDOMWidget", () => {
+                        for (const config of connConfigs) applyLockState(this, config);
+                    });
+                }
             });
 
             // Saved-workflow load — at this point inputs[].link are restored
             chainCallback(nodeType.prototype, "onConfigure", function () {
                 for (const config of connConfigs) applyLockState(this, config);
+                // The dropdown sets its preview on the next frame, after this.
+                if (connConfigs.some((config) => config.clears_preview)) {
+                    requestAnimationFrame(() => {
+                        for (const config of connConfigs) applyLockState(this, config);
+                    });
+                }
             });
         }
 
