@@ -1273,7 +1273,7 @@ Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改�
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible`（任意 `/v1/...` HTTP endpoint）/ `faster_whisper_local`（in-process） |
 | `base_url` | `https://api.openai.com/v1` | 尾端 `/` 會自動 strip |
-| `api_key` | `""` | **建議填 `env:OPENAI_API_KEY`** — `env:` 前綴會在執行時解析同名環境變數，secret 不會進 workflow JSON（明文 key 會原樣序列化進每一份匯出／分享的 workflow — 畫面遮罩擋不了這條路；變數不存在會給明確錯誤）。防外送保護：`env:` 解析出的 key 只允許送往信任 host（內建：`api.openai.com` / `api.groq.com` / `openrouter.ai` / `generativelanguage.googleapis.com` / localhost 家族）— 可用環境變數 `MF_AI_KEY_ALLOWED_HOSTS`（全域，逗號分隔 hostname）或 `MF_AI_KEY_ALLOWED_HOSTS_<變數名>`（綁單一變數）擴充，讓惡意分享的 workflow 無法用 `env:任意秘密` 配攻擊者 endpoint 外送。`env:` 解析的 key 對非 loopback host 一律要求 **HTTPS**（明文 HTTP 會暴露 Bearer header）— 只有 `localhost` / `127.0.0.1` / `::1` 可走 `http://`；內網 IP 視同遠端，即使加進 allowlist 也需要 HTTPS（或改用明文 key，兩道防護都不適用）。log 只露前 4 字 + `***`；節點畫面上明文 key 以 `•` 遮罩顯示（`env:` 引用直接顯示），點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
+| `api_key` | `""` | **建議填 `env:OPENAI_API_KEY`** — `env:` 前綴會在執行時解析同名環境變數，secret 不會進 workflow JSON（明文 key 會原樣序列化進每一份匯出／分享的 workflow — 畫面遮罩擋不了這條路；變數不存在會給明確錯誤）。防外送保護：`env:` 解析出的 key 只允許送往信任 host（內建：`api.openai.com` / `api.groq.com` / localhost 家族；`openrouter.ai` 只接受 `OPENROUTER_API_KEY`，`generativelanguage.googleapis.com` 只接受 `GEMINI_API_KEY`）— 可用環境變數 `MF_AI_KEY_ALLOWED_HOSTS`（全域，逗號分隔 hostname）或 `MF_AI_KEY_ALLOWED_HOSTS_<變數名>`（綁單一變數）擴充，讓惡意分享的 workflow 無法用 `env:任意秘密` 配攻擊者 endpoint 外送。`env:` 解析的 key 對非 loopback host 一律要求 **HTTPS**（明文 HTTP 會暴露 Bearer header）— 只有 `localhost` / `127.0.0.1` / `::1` 可走 `http://`；內網 IP 視同遠端，即使加進 allowlist 也需要 HTTPS（或改用明文 key，兩道防護都不適用）。log 只露前 4 字 + `***`；節點畫面上明文 key 以 `•` 遮罩顯示（`env:` 引用直接顯示），點擊可編輯／顯示真值（見 `web/ai_config_mask.js`） |
 | `model` | `gpt-6-luna` | 字串，可填清單外的任何模型。Whisper 認出來不像 STT id 時會自動換成該服務的語音模型（見 Whisper Transcribe 的 Model 自動替換） |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — 只 `faster_whisper_local` 用 |
 
@@ -1469,6 +1469,8 @@ model      = ~openai/gpt-sol-latest           # `~` 開頭的別名永遠指向�
            = ~anthropic/claude-sonnet-latest
 ```
 
+改用其他 `env:` 變數名稱時，要在啟動 ComfyUI 的環境另外設定 `MF_AI_KEY_ALLOWED_HOSTS_<變數名>=openrouter.ai`。
+
 ### Gemini（僅翻譯）
 
 ```
@@ -1477,6 +1479,8 @@ base_url   = https://generativelanguage.googleapis.com/v1beta/openai
 api_key    = env:GEMINI_API_KEY
 model      = gemini-3.8-flash
 ```
+
+改用其他 `env:` 變數名稱時，要在啟動 ComfyUI 的環境另外設定 `MF_AI_KEY_ALLOWED_HOSTS_<變數名>=generativelanguage.googleapis.com`。
 
 ### Ollama / LM Studio（本地 OpenAI 相容）
 

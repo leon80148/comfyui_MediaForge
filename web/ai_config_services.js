@@ -6,8 +6,8 @@
 // each vendor's docs on 2026-11-05), and a model dropped from this list just shows as 自訂… on old
 // workflows, with its saved value untouched.
 //
-// Rules tests/test_ai_config.py checks against Python: every baseUrl host is in
-// _BUILTIN_ALLOWED_HOSTS (nodes/ai_config.py), and each model's kind agrees with
+// Rules tests/test_ai_config.py checks against Python: every preset's env: key passes the guard in
+// nodes/ai_config.py with that preset's baseUrl, and each model's kind agrees with
 // _looks_like_stt_model (nodes/whisper_transcribe.py), which would otherwise swap it out.
 //
 // The first model is what a service starts on. It is a translation model where one exists:

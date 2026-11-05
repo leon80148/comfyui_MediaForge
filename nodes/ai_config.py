@@ -20,8 +20,10 @@ api_key 支援 `env:VARNAME` 間接引用（如 `env:OPENAI_API_KEY`）：config
 Exfiltration guard（Codex R2-1）：env: 能讀任意 process 環境變數，而 base_url 也
 完全由 workflow 控制 — 惡意分享的 workflow 可以配 `env:AWS_SECRET_ACCESS_KEY` +
 攻擊者 endpoint，讓下游節點把 secret 放進 Authorization header 外送。因此
-env:-resolved key 只允許送往 trusted host：內建清單涵蓋 README recipes（OpenAI /
-Groq / OpenRouter / Gemini）與本機推論（localhost 家族）；其他 host 需由使用者用環境變數擴充 —
+env:-resolved key 只允許送往 trusted host：內建清單涵蓋 OpenAI / Groq 與本機推論
+（localhost 家族）；OpenRouter / Gemini 只接受各自的變數（`OPENROUTER_API_KEY` /
+`GEMINI_API_KEY`），避免 workflow 把別家的 key 或其他 secret 送到這兩家。其他
+host 或其他變數需由使用者用環境變數擴充 —
 `MF_AI_KEY_ALLOWED_HOSTS`（全域，逗號分隔 hostname）或
 `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>`（綁定單一變數）。環境變數是 server-side
 設定、workflow JSON 碰不到，所以這條 allowlist 攻擊者無法自帶。明文 key 不受限
@@ -36,17 +38,26 @@ from urllib.parse import urlparse
 # see module docstring for the threat model.
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
+# OpenAI and Groq accept any variable because existing setups may use custom names like
+# env:MY_OPENAI_KEY; binding them now would break those setups on upgrade.
 _BUILTIN_ALLOWED_HOSTS = {
     "api.openai.com",
     "api.groq.com",
-    "openrouter.ai",
-    "generativelanguage.googleapis.com",
     *_LOOPBACK_HOSTS,
 }
 
+_BUILTIN_HOSTS_BY_VAR = {
+    "OPENROUTER_API_KEY": {"openrouter.ai"},
+    "GEMINI_API_KEY": {"generativelanguage.googleapis.com"},
+}
+
+
+def _builtin_hosts_for(var_name):
+    return _BUILTIN_ALLOWED_HOSTS | _BUILTIN_HOSTS_BY_VAR.get(var_name, set())
+
 
 def _allowed_hosts_for(var_name):
-    hosts = set(_BUILTIN_ALLOWED_HOSTS)
+    hosts = set(_builtin_hosts_for(var_name))
     for env_key in (f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}", "MF_AI_KEY_ALLOWED_HOSTS"):
         raw = os.environ.get(env_key, "")
         hosts.update(h.strip().lower() for h in raw.split(",") if h.strip())
@@ -99,14 +110,25 @@ class MF_AIConfig:
                 parsed = urlparse(base_url)
                 host = (parsed.hostname or "").lower()
                 if host not in _allowed_hosts_for(var_name):
+                    bound_var = next((v for v, hosts in _BUILTIN_HOSTS_BY_VAR.items() if host in hosts), None)
+                    if bound_var:
+                        fix = (
+                            f"{host} 內建只接受 env:{bound_var}，請改用這個變數名稱，"
+                            "或在啟動 ComfyUI 的環境加上 "
+                            f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}={host}（只放行這個變數）。"
+                        )
+                    else:
+                        fix = (
+                            "若這是你自己的 endpoint，請在啟動 ComfyUI 的環境加上 "
+                            f"MF_AI_KEY_ALLOWED_HOSTS={host}（全域）或 "
+                            f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}={host}（只綁這個變數）。"
+                        )
                     raise ValueError(
                         f"[AI Config] env: 解析出的 key 不允許送往 base_url host "
                         f"{host!r}。env: 間接引用的 key 只能送往信任清單內的 host"
-                        f"（內建：{', '.join(sorted(_BUILTIN_ALLOWED_HOSTS))}），"
+                        f"（{var_name} 內建可送：{', '.join(sorted(_builtin_hosts_for(var_name)))}），"
                         "防止惡意 workflow 用 env: 讀走任意環境變數再外送。"
-                        "若這是你自己的 endpoint，請在啟動 ComfyUI 的環境加上 "
-                        f"MF_AI_KEY_ALLOWED_HOSTS={host}（全域）或 "
-                        f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}={host}（只綁這個變數）。"
+                        f"{fix}"
                     )
                 # R3-1：host 過了 allowlist 還不夠 — http:// 的 Bearer header 是明文，
                 # 網路攔截者一樣拿得到 key。遠端 host 強制 https；只有 loopback

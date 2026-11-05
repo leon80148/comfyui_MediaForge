@@ -1273,7 +1273,7 @@ Centralized provider configuration. Outputs an `AI_CONFIG` dict that all AI node
 |---|---|---|
 | `provider` | `openai_compatible` | `openai_compatible` (any `/v1/...` HTTP endpoint) / `faster_whisper_local` (in-process) |
 | `base_url` | `https://api.openai.com/v1` | Trailing slash stripped automatically |
-| `api_key` | `""` | **Recommended: `env:OPENAI_API_KEY`** — the `env:` prefix resolves the named environment variable at runtime, so the secret never enters the workflow JSON (a plaintext key serializes into every exported/shared workflow — the canvas mask cannot protect that path; missing variable → clear error). As an exfiltration guard, an `env:`-resolved key is only allowed toward allowlisted hosts (built-in: `api.openai.com` / `api.groq.com` / `openrouter.ai` / `generativelanguage.googleapis.com` / localhost family) — extend with the `MF_AI_KEY_ALLOWED_HOSTS` env var (comma-separated hostnames, global) or `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>` (per-variable), so a malicious shared workflow can't pair `env:SOME_SECRET` with an attacker endpoint. `env:`-resolved keys also require **HTTPS** toward any non-loopback host (plaintext HTTP would expose the Bearer header) — only `localhost` / `127.0.0.1` / `::1` may use `http://`; a private-LAN IP counts as remote, so an allowlisted LAN endpoint still needs HTTPS (or use a plaintext key, which skips both guards). Logged with first 4 chars + `***` mask; node canvas displays plaintext keys masked with `•` (`env:` references shown as-is; click to reveal/edit — see `web/ai_config_mask.js`) |
+| `api_key` | `""` | **Recommended: `env:OPENAI_API_KEY`** — the `env:` prefix resolves the named environment variable at runtime, so the secret never enters the workflow JSON (a plaintext key serializes into every exported/shared workflow — the canvas mask cannot protect that path; missing variable → clear error). As an exfiltration guard, an `env:`-resolved key is only allowed toward allowlisted hosts (built-in: `api.openai.com` / `api.groq.com` / localhost family, plus `openrouter.ai` for `OPENROUTER_API_KEY` only and `generativelanguage.googleapis.com` for `GEMINI_API_KEY` only) — extend with the `MF_AI_KEY_ALLOWED_HOSTS` env var (comma-separated hostnames, global) or `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>` (per-variable), so a malicious shared workflow can't pair `env:SOME_SECRET` with an attacker endpoint. `env:`-resolved keys also require **HTTPS** toward any non-loopback host (plaintext HTTP would expose the Bearer header) — only `localhost` / `127.0.0.1` / `::1` may use `http://`; a private-LAN IP counts as remote, so an allowlisted LAN endpoint still needs HTTPS (or use a plaintext key, which skips both guards). Logged with first 4 chars + `***` mask; node canvas displays plaintext keys masked with `•` (`env:` references shown as-is; click to reveal/edit — see `web/ai_config_mask.js`) |
 | `model` | `gpt-6-luna` | String; any model outside the list works too. Whisper substitutes the service's speech model if this isn't an STT id (see Model auto-substitution under Whisper Transcribe) |
 | `device` | `auto` | `cpu` / `cuda` / `auto` — only used by `faster_whisper_local` |
 
@@ -1469,6 +1469,8 @@ model      = ~openai/gpt-sol-latest           # a leading `~` is an alias for th
            = ~anthropic/claude-sonnet-latest
 ```
 
+A different `env:` variable name also needs `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>=openrouter.ai` in the environment that starts ComfyUI.
+
 ### Gemini (translate only)
 
 ```
@@ -1477,6 +1479,8 @@ base_url   = https://generativelanguage.googleapis.com/v1beta/openai
 api_key    = env:GEMINI_API_KEY
 model      = gemini-3.8-flash
 ```
+
+A different `env:` variable name also needs `MF_AI_KEY_ALLOWED_HOSTS_<VARNAME>=generativelanguage.googleapis.com` in the environment that starts ComfyUI.
 
 ### Ollama / LM Studio (local OpenAI-compatible)
 
