@@ -728,7 +728,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 
 #### 💾 Save Video · Serial H.264 (`MF_SaveVideo`)
 
-ComfyUI `VIDEO` → H.264 MP4，有音訊時編成 AAC。每個階段都只用一條執行緒：讀檔時的解碼、RGB→YUV 轉換（swscale）、libx264 與 AAC 編碼。ComfyUI V3 輸出節點：完成後顯示影片預覽，原輸入物件照樣往下傳。
+ComfyUI `VIDEO` → H.264 MP4，有音訊時編成 AAC。讀檔時的解碼器、RGB→YUV 轉換（swscale）、libx264 與 AAC 編碼器各只用一條執行緒。ComfyUI V3 輸出節點：完成後顯示影片預覽，原輸入物件照樣往下傳。
 
 **適用情境**：存任何 `VIDEO`（core Load Video、Create Video 或其他輸出 `VIDEO` 的節點），要的是單執行緒、可重現的匯出而不是編碼速度——例如機器正在跑取樣，或存檔出問題時要先排除多執行緒。
 

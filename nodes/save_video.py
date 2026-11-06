@@ -1,4 +1,4 @@
-"""MF_SaveVideo — 把 VIDEO 存成 H.264 MP4（有音訊時編成 AAC），解碼、色彩轉換與編碼各只用一條執行緒。
+"""MF_SaveVideo — 把 VIDEO 存成 H.264 MP4（有音訊時編成 AAC），解碼器、色彩轉換與編碼器各只用一條執行緒。
 
 MediaForge 第一個 V3 節點：hidden prompt / extra_pnginfo 與 PreviewVideo 走 comfy_api.latest，V3 的 base class
 讓 comfy_api 必須在 module top import。匯出邏輯在 utils/serial_h264.py，不需要 ComfyUI 也能測。
@@ -18,7 +18,7 @@ class MF_SaveVideo(io.ComfyNode):
             node_id="MF_SaveVideo",
             display_name="💾 Save Video · Serial H.264",
             category="MediaForge/Video",
-            description="把 VIDEO 存成 H.264 MP4，有音訊時編成 AAC。解碼、RGB→YUV 轉換、H.264 與 AAC 編碼各只用一條執行緒；"
+            description="把 VIDEO 存成 H.264 MP4，有音訊時編成 AAC。讀檔時的解碼器、RGB→YUV 轉換、H.264 與 AAC 編碼器各只用一條執行緒；"
                         "每次執行寫進獨立的 <filename_prefix>-<識別碼>/video.mp4。",
             inputs=[
                 io.Video.Input("video", tooltip="要存的影片。"),

@@ -728,7 +728,7 @@ Tensor → encoded video file. The canonical tensor→file producer; pairs with 
 
 #### 💾 Save Video · Serial H.264 (`MF_SaveVideo`)
 
-ComfyUI `VIDEO` → H.264 MP4, AAC when the video has audio. Every stage runs on one thread: decoding a loaded file, the RGB→YUV conversion (swscale), libx264 and the AAC encoder. A ComfyUI V3 output node: it shows a video preview and passes the input on unchanged.
+ComfyUI `VIDEO` → H.264 MP4, AAC when the video has audio. The decoders of a loaded file, the RGB→YUV conversion (swscale), libx264 and the AAC encoder each run on one thread. A ComfyUI V3 output node: it shows a video preview and passes the input on unchanged.
 
 **When to use**: saving any `VIDEO` (core Load Video, Create Video, other `VIDEO` nodes) when a serial, repeatable export matters more than encode speed — on a machine that is busy sampling, or to rule threading out when a save misbehaves.
 
