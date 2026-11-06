@@ -112,23 +112,18 @@ class MF_AIConfig:
                 if host not in _allowed_hosts_for(var_name):
                     bound_var = next((v for v, hosts in _BUILTIN_HOSTS_BY_VAR.items() if host in hosts), None)
                     if bound_var:
-                        fix = (
-                            f"{host} 內建只接受 env:{bound_var}，請改用這個變數名稱，"
-                            "或在啟動 ComfyUI 的環境加上 "
-                            f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}={host}（只放行這個變數）。"
-                        )
+                        prefix = f"{host} 內建只接受 env:{bound_var}，可直接改用它；若要保留 {var_name}，"
+                        options = f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}={host}（只放行這個變數）"
                     else:
-                        fix = (
-                            "若這是你自己的 endpoint，請在啟動 ComfyUI 的環境加上 "
-                            f"MF_AI_KEY_ALLOWED_HOSTS={host}（全域）或 "
-                            f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}={host}（只綁這個變數）。"
-                        )
+                        prefix = "若這是你自己的 endpoint，"
+                        options = (f"MF_AI_KEY_ALLOWED_HOSTS={host}（全域）或 "
+                                   f"MF_AI_KEY_ALLOWED_HOSTS_{var_name}={host}（只綁這個變數）")
                     raise ValueError(
                         f"[AI Config] env: 解析出的 key 不允許送往 base_url host "
                         f"{host!r}。env: 間接引用的 key 只能送往信任清單內的 host"
                         f"（{var_name} 內建可送：{', '.join(sorted(_builtin_hosts_for(var_name)))}），"
                         "防止惡意 workflow 用 env: 讀走任意環境變數再外送。"
-                        f"{fix}"
+                        f"{prefix}請在啟動 ComfyUI 的環境加上 {options}。"
                     )
                 # R3-1：host 過了 allowlist 還不夠 — http:// 的 Bearer header 是明文，
                 # 網路攔截者一樣拿得到 key。遠端 host 強制 https；只有 loopback
