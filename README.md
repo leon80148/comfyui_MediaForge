@@ -144,7 +144,7 @@ The End node shows `第 k / 約 N 批` (batch k of about N), then `正在組裝�
 
 **Batches.** The `frames` output always has exactly `frames_per_batch` frames: a short last batch repeats its last frame, and End cuts the result back, so models that need a fixed length work. Your nodes must return as many frames as they get, so anything that changes the frame count, like frame interpolation, goes after End on `final_video_path`. Nothing carries latents or temporal context from one batch to the next. A temporal model can show a join between them; `overlap_frames` crossfades the join, but it only blends the results and can't give the model more context. The result isn't guaranteed to match running the whole video in one go.
 
-**MiniMax H3.** `frames_per_batch` must be 17n+5, for example 124, with `fps = 24`. Other values are refused before the model runs.
+**MiniMax H3.** `frames_per_batch` must be 17n+5, for example 124, with `fps = 24`. Other values are refused before the model runs. In a 150-batch test (12.9 minutes) the batches got slower as the run went on, from about 141 s to 183 s each, so it took about 16% longer than its first batches suggest. The cause hasn't been found yet.
 
 **Audio.** `audio` on End and `keep_source_audio` decide the soundtrack:
 
@@ -175,13 +175,13 @@ Start's `audio` output is only decoded if it's linked, even with `keep_source_au
 | After Stop | FFmpeg keeps running and the file won't open until the next Run closes it. Then you have the frames written so far, without audio | No new batch starts and FFmpeg is stopped. No partial video |
 | Overlap between batches | No | `overlap_frames` |
 | Extra disk | None | About 4 GB of parts until the final encode |
-| Time, clip with audio, no model | 1191 s | 299 s |
-| Time, no audio, no model (VHS: track removed from the file. Video Batch: `keep_source_audio` off) | 236 s | 286 s |
-| Time, FlashVSR, 50 batches of 16 frames at 480×270 | 940 s | 900 s |
-| Peak RAM, ComfyUI and FFmpeg | 2.43 + 0.56 GiB | 2.53 + 0.60 GiB |
-| Peak RAM with FlashVSR, ComfyUI | 11.54 GiB | 11.44 GiB |
+| Time, clip with audio, no model | 1191 s | 281 s |
+| Time, no audio, no model (VHS: track removed from the file. Video Batch: `keep_source_audio` off) | 236 s | 286 s (earlier build) |
+| Time, FlashVSR, 50 batches of 16 frames at 480×270 | 940 s | 1075 s |
+| Peak RAM, ComfyUI and FFmpeg | 2.43 + 0.56 GiB | 2.35 + 0.60 GiB |
+| Peak RAM with FlashVSR, ComfyUI | 11.54 GiB | 11.30 GiB |
 
-Peak RAM was close in these runs. Without audio VHS is faster, because it encodes while the batches run and Video Batch encodes once more at the end. With audio on this ComfyUI version, every VHS batch decodes the clip's whole audio track, about 3.6 s per batch here and more on longer clips, even if its audio output isn't linked: core's memory scan walks each node's output, and that makes VHS's lazy audio decode. That comes from how the two projects meet, not from how Meta Batch works, so an update to either could remove it. With a real model the model takes nearly all the time.
+Peak RAM was close in these runs. Without audio VHS is faster, because it encodes while the batches run and Video Batch encodes once more at the end. With audio on this ComfyUI version, every VHS batch decodes the clip's whole audio track, about 3.6 s per batch here and more on longer clips, even if its audio output isn't linked: core's memory scan walks each node's output, and that makes VHS's lazy audio decode. That comes from how the two projects meet, not from how Meta Batch works, so an update to either could remove it. With a real model the model takes nearly all the time. FlashVSR's own time per batch varied by about 17% between days, and the two FlashVSR runs above were on different days, so they don't show which is faster: on the same day as the VHS run, an earlier build of Video Batch took 900 s. In the FlashVSR runs, Video Batch's own work (reading the window and committing the batch) was about 0.4 s per batch. The row marked "earlier build" was measured before the last review fixes.
 
 Choose VHS if you can't spare the temp disk or want the frames written so far after a Stop. Choose Video Batch if you want one queue entry, one file with its sound, no FFmpeg left running after Stop, or an overlap between batches.
 
