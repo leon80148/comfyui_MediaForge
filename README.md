@@ -132,7 +132,7 @@ Wiring details, the other models and the editor: [Timeline & Long Video](#timeli
 3. End writes the frames to `.mf_tmp/seg_*` as lossless FFV1, drops them from memory and asks for the next batch. After the first batch it also tries a tiny encode, so an odd output size or an unavailable encoder fails at once instead of after the whole video.
 4. When the source ends, End encodes the parts into one file, checks it, shows it on the node and deletes the parts.
 
-The End node shows `第 k / 約 N 批` (batch k of about N), then `正在組裝成片…` (assembling), then `完成` (done). The progress bar only fills once the finished file has passed its checks.
+The End node shows `第 k / 約 N 批` (batch k of about N), then `正在組裝成片…` (assembling), then `完成` (done). The progress bar only fills once the finished file has passed its checks. Under the status, End lists each source with its fps, length and whether the film keeps its soundtrack, and anything it converted, such as `bg.mp4：24 → 25 fps`. In the classic renderer End shows about two lines; make the node taller to see them all. The server log has the full summary too.
 
 **Video Batch or Timeline?**
 
@@ -159,7 +159,7 @@ The End node shows `第 k / 約 N 批` (batch k of about N), then `正在組裝�
 
 Start's `audio` output is only decoded if it's linked, even with `keep_source_audio` off. Linking it on a source without audio is an error. Overlaps crossfade audio linearly, so the same source audio doesn't get louder at a join.
 
-**Two videos.** Use two Starts and link both into your nodes. The shorter one decides the length. Batch settings live on End, so they can't disagree. If the two have different fps, set `fps` on End.
+**Two or more videos.** Use one Start per video and link them all into your nodes; they all feed the same End. The shortest decides the length. Batch settings live on End, so they can't disagree. If their fps differ and End's `fps` is 0, End uses the fps of the video whose soundtrack the film keeps, or the highest when none is kept, converts the others and says so on the node. A video under 5 fps stops the job instead, because that is nearly always a wrong fps upstream, such as Loop Video's `tensor_fps`; set `fps` on End if you really mean it.
 
 **Disk and memory.** Parts take about 0.5 MB per frame at 1344×768, so ten minutes at 1080p 30 fps is very roughly 20 GB until the final encode. End updates its estimate after every batch and stops with an error if the temp or the output disk looks too small. Before decoding, Start checks RAM for one batch; End checks again after the first batch with the real output size. These are estimates, not guarantees: your nodes' own memory use is theirs.
 
@@ -975,7 +975,7 @@ Runs the job: asks for each batch, writes it to disk, and encodes the finished v
 | Widget | Type | Default | Notes |
 |---|---|---|---|
 | `frames_per_batch` | INT | `64` | Frames sent to your nodes at once. Lower uses less RAM and VRAM. H3 needs 17n+5, for example 124 |
-| `fps` | FLOAT | `0` | Convert to this fixed fps; `0` uses the source's. Required when two sources differ |
+| `fps` | FLOAT | `0` | Convert to this fixed fps; `0` uses the source's. When sources differ, `0` picks one (see Two or more videos) |
 | `max_frames` | INT | `0` | Process only the first frames, for a test run; `0` is all |
 | `codec` | dropdown | smart (NVENC if available, else libx264) | Same catalog as the other encoders |
 | `keep_source_audio` | BOOLEAN | `true` | Keep the source's soundtrack. Hidden when `audio` is linked |
@@ -1843,7 +1843,7 @@ Video Batch nodes report problems as `[Start Video Batch] …` or `[End Video Ba
 | The format isn't verified for batch decoding (TS, MPG) | Convert: `ffmpeg -i in.ts -c copy out.mkv` |
 | HDR or wide-gamut video isn't supported yet | Convert to SDR / BT.709 first |
 | Can't find the video's start time; can't find its fps | Convert the file; for fps, set `fps` on End |
-| The videos have different fps | Set a shared `fps` on End |
+| A video is under 5 fps while the others are faster | Usually a wrong fps upstream, such as Loop Video's `tensor_fps`. If you mean it, set `fps` on End |
 | This batch needs X GiB of RAM (Start, before decoding) | Lower `frames_per_batch`, or shrink the frames with `resize` |
 | No frames from frame N | Check that the video isn't damaged or empty |
 | The source changed during the job | Don't replace the file while it runs; run again |
@@ -1859,6 +1859,7 @@ Video Batch nodes report problems as `[Start Video Batch] …` or `[End Video Ba
 | Odd audio format; the track is too big (temp WAV limit about 4 GiB); not enough RAM to decode it | Convert it to 48 kHz stereo: `ffmpeg -i video -c:v copy -ac 2 -ar 48000 -c:a aac out.mp4`, or turn off `keep_source_audio` |
 | The frames are W×H and this codec needs even sizes | Change your node's scale, or add a resize before End |
 | The trial encode failed with this codec | Pick another codec, such as `h264 (libx264)` |
+| The trial encode didn't finish in 60 seconds | The GPU may be busy. Run again, or pick `h264 (libx264)` |
 | The disk may not have enough room | Free some space, or use `max_frames` or `resize` |
 | After your nodes, each batch needs X GiB of RAM | Lower `frames_per_batch`, or shrink the frames with `resize` |
 | This ComfyUI version didn't pass the compatibility check | The job depends on core internals, verified on core 0.42.5. Update MediaForge or tell us your version |

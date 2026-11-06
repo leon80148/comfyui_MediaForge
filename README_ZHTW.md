@@ -132,7 +132,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 3. End 把畫面以無損 FFV1 寫到 `.mf_tmp/seg_*`，從記憶體放掉，再要下一批。第一批之後還會試編碼幾幀，所以奇數尺寸或編碼器不可用會立刻報錯，不必等整片跑完。
 4. 來源結束後，End 把分段編成一支影片、驗證、顯示在節點上，並刪掉分段。
 
-End 節點會顯示「第 k / 約 N 批」、「正在組裝成片…」、「完成」。進度條要等成品驗證通過才會滿。
+End 節點會顯示「第 k / 約 N 批」、「正在組裝成片…」、「完成」。進度條要等成品驗證通過才會滿。狀態下面會列出每支來源的 fps、長度、成片是否用它的音軌，以及 End 轉換了什麼，例如「bg.mp4：24 → 25 fps」。classic 前端的 End 預設大約只顯示兩行，把節點拉高就能看到全部；server log 也有完整摘要。
 
 **Video Batch 還是 Timeline？**
 
@@ -159,7 +159,7 @@ End 節點會顯示「第 k / 約 N 批」、「正在組裝成片…」、「�
 
 Start 的 `audio` 輸出只有接線才解碼，`keep_source_audio` 關閉時也一樣；來源沒有音軌時接它會報錯。重疊區的音訊用線性淡接，同一段原音在接縫不會變大聲。
 
-**兩支影片**：用兩個 Start，都接進你的節點。較短的那支決定長度。批次設定都在 End，不會互相衝突。fps 不同時在 End 設定 `fps`。
+**兩支以上的影片**：每支影片用一個 Start，都接進你的節點，最後接到同一個 End。最短的那支決定長度。批次設定都在 End，不會互相衝突。fps 不同而 End 的 `fps` 是 0 時，End 用成片保留音軌的那支的 fps，沒有保留音軌就用最高的，其他支自動轉換，並在節點上顯示。有一支低於 5 fps 時會停下，因為那幾乎都是上游設錯，例如 Loop Video 的 `tensor_fps`；確定要這樣，就在 End 填 `fps`。
 
 **磁碟與記憶體**：分段在 1344×768 約每幀 0.5 MB，十分鐘 1080p 30 fps 粗估約 20 GB，一直佔用到最後編碼完成。End 每批更新估計，暫存或輸出磁碟看起來不夠就報錯。Start 解碼前依一批的大小檢查 RAM，End 在第一批後再依實際輸出尺寸檢查一次。這些都是估計，不是保證；你的節點自己用多少記憶體由節點決定。
 
@@ -975,7 +975,7 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 | Widget | 型別 | 預設 | 說明 |
 |---|---|---|---|
 | `frames_per_batch` | INT | `64` | 一次送進節點的幀數，越小越省 RAM 與 VRAM。H3 需符合 17n+5，例如 124 |
-| `fps` | FLOAT | `0` | 轉成這個固定 fps；`0` 使用來源的 fps。兩支影片 fps 不同時必填 |
+| `fps` | FLOAT | `0` | 轉成這個固定 fps；`0` 使用來源的 fps。多支影片 fps 不同時，`0` 會自動選一個（見「兩支以上的影片」） |
 | `max_frames` | INT | `0` | 只處理前幾幀，試跑用；`0` 全部 |
 | `codec` | dropdown | 智慧（有 NVENC 用 NVENC，否則 libx264） | 與其他編碼節點相同 |
 | `keep_source_audio` | BOOLEAN | `true` | 保留來源音軌。接了 `audio` 時隱藏 |
@@ -1843,7 +1843,7 @@ Video Batch 節點的訊息開頭是 `[Start Video Batch]` 或 `[End Video Batch
 | 格式尚未通過批次解碼驗證（TS、MPG） | 轉檔：`ffmpeg -i in.ts -c copy out.mkv` |
 | HDR 或廣色域影片尚未支援 | 先轉成 SDR / BT.709 |
 | 無法判斷影片起點；無法判斷 fps | 先轉檔；fps 可在 End 設定 |
-| 影片的 fps 不同 | 在 End 填一個共同的 `fps` |
+| 某支影片低於 5 fps，其他支比它快 | 通常是上游 fps 設錯，例如 Loop Video 的 `tensor_fps`；確定要這樣就在 End 填 `fps` |
 | 這批畫面約需 X GiB RAM（Start，解碼前） | 調低 `frames_per_batch`，或用 `resize` 縮小畫面 |
 | 從第 N 幀起沒有畫面 | 確認影片沒有損毀、不是空檔案 |
 | 來源在處理途中改變了 | 執行中不要替換檔案，重新執行 |
@@ -1859,6 +1859,7 @@ Video Batch 節點的訊息開頭是 `[Start Video Batch]` 或 `[End Video Batch
 | 音軌規格異常；音軌太大（暫存 WAV 上限約 4 GiB）；解碼音軌的 RAM 不夠 | 轉成 48 kHz 雙聲道：`ffmpeg -i 影片 -c:v copy -ac 2 -ar 48000 -c:a aac 輸出.mp4`，或關閉 `keep_source_audio` |
 | 處理後的畫面是 W×H，這個 codec 需要偶數寬高 | 調整節點的縮放倍率，或在 End 前加縮放節點 |
 | 這個 codec 試編碼失敗 | 改用其他 codec，例如 `h264 (libx264)` |
+| 試編碼超過 60 秒沒有完成 | GPU 可能正忙。再跑一次，或改用 `h264 (libx264)` |
 | 磁碟空間可能不夠 | 清出空間，或用 `max_frames`、`resize` 減少處理量 |
 | 處理後每批約需 X GiB RAM | 調低 `frames_per_batch`，或用 `resize` 縮小畫面 |
 | 此 ComfyUI 版本未通過相容檢查 | 這個工作依賴 core 內部介面，驗證過的版本是 core 0.42.5。請更新 MediaForge，或回報你的版本 |

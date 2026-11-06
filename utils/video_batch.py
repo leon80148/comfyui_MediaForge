@@ -10,7 +10,7 @@ import os
 import shutil
 import subprocess
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from typing import NamedTuple
 
@@ -46,6 +46,10 @@ AUDIO_RAM_COPIES = 3
 OUTPUT_RATIO_NEAR_LOSSLESS = 1.0
 OUTPUT_RATIO_LOSSY = 0.25
 NEAR_LOSSLESS_CRF = 10
+# NVENC took over 10 s to open on a GPU busy with SAM3 (2026-11-07), so the test encode gets far more room than a probe.
+ENCODER_CHECK_TIMEOUT_SEC = 60
+# Unifying sources to one fps would turn a slower one into a slideshow. This slow, it is nearly always a wrong fps upstream.
+MIN_AUTO_FPS = 5
 AUDIO_FIX_HINT = "請先把音軌轉成 48 kHz 雙聲道（例如 ffmpeg -i 影片 -c:v copy -ac 2 -ar 48000 -c:a aac 輸出.mp4），或關閉 keep_source_audio。"
 
 
@@ -175,6 +179,28 @@ def fps_fraction(value):
     return fraction.numerator, fraction.denominator
 
 
+def fps_text(fps):
+    """(num, den) → 人會寫的樣子：25、29.97、23.976。"""
+    value = Fraction(*fps)
+    return str(value.numerator) if value.denominator == 1 else f"{float(value):.3f}".rstrip("0").rstrip(".")
+
+
+def choose_job_fps(entries):
+    """End 的 fps 留 0 時，多支來源統一成哪個 fps（SPEC §5「兩個 Start」）。entries 是 [(名稱, (num, den), 成片是否用它的音軌)]。
+
+    用音軌那支的 fps，沒有就取最高。有一支慢到不合理就停下，那多半是上游設錯。
+    """
+    if len({Fraction(*fps) for _, fps, _ in entries}) == 1:
+        return entries[0][1]
+    for i, (name, fps, _) in enumerate(entries):
+        if Fraction(*fps) < MIN_AUTO_FPS:
+            others = "、".join(f"{other} {fps_text(rate)} fps" for j, (other, rate, _) in enumerate(entries) if j != i)
+            raise ValueError(f"[{END_LABEL}] {name} 只有 {fps_text(fps)} fps，和其他影片（{others}）差太多，統一後它會一秒才換一張畫面。"
+                             f"多半是上游節點（例如 Loop Video 的 tensor_fps）設錯了；確定要這樣，請在 {END_LABEL} 的 fps 填一個值。")
+    kept = [fps for _, fps, takes_audio in entries if takes_audio]
+    return kept[0] if len(kept) == 1 else max((fps for _, fps, _ in entries), key=lambda rate: Fraction(*rate))
+
+
 def window_start(index, b, k):
     return index * (b - k)
 
@@ -246,12 +272,31 @@ def batch_text(number, estimate):
     return f"第 {number} 批" if estimate is None else f"第 {number} / 約 {max(number, estimate)} 批"
 
 
+def source_summary(entries, job_fps, audio):
+    """End 上顯示的來源摘要。entries 是 [(名稱, 原 fps, 長度 µs 或 None, 成片是否用它的音軌)]；audio 是 source、external、batch 或 none。"""
+    lines = []
+    for name, fps, duration_us, uses_audio in entries:
+        rate = fps_text(fps) if Fraction(*fps) == Fraction(*job_fps) else f"{fps_text(fps)} → {fps_text(job_fps)}"
+        line = f"{name}：{rate} fps"
+        if duration_us:
+            line += f"，{duration_us / 1_000_000:.1f} 秒"
+        if uses_audio:
+            line += "，用它的音軌"
+        lines.append(line)
+    extra = {"external": "音軌：外接 audio", "batch": "音軌：接到 End 的 audio，逐批讀", "none": "成片沒有音軌"}.get(audio)
+    return lines + [extra] if extra else lines
+
+
 def check_encoder(width, height, pix_fmt, encoder_args, label):
     """幾幀的試編碼（SPEC §8）：奇數尺寸配 yuv420p、NVENC 開不起來，都在第 0 批就知道，不是整片跑完才失敗。"""
     # testsrc is RGB like the real input. The color source is YUV, and FFmpeg 6.1 silently shrinks it to an even size.
     cmd = ["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", f"testsrc=s={width}x{height}:r=30", "-frames:v", "2",
            "-vf", f"scale=out_color_matrix=bt709:out_range=tv,format={pix_fmt}", *encoder_args, "-pix_fmt", pix_fmt, "-f", "null", "-"]
-    proc = subprocess.run(resolve_ffmpeg_cmd(cmd), capture_output=True, timeout=PROBE_TIMEOUT_SEC, check=False)
+    try:
+        proc = subprocess.run(resolve_ffmpeg_cmd(cmd), capture_output=True, timeout=ENCODER_CHECK_TIMEOUT_SEC, check=False)
+    except subprocess.TimeoutExpired as e:
+        raise ValueError(f"[{label}] 試編碼 {width}x{height} 超過 {ENCODER_CHECK_TIMEOUT_SEC} 秒沒有完成，GPU 可能正忙或編碼器卡住。"
+                         "請稍後再試，或把 codec 改成 h264 (libx264)。") from e
     if proc.returncode == 0:
         return
     if width % 2 or height % 2:
@@ -335,6 +380,8 @@ class BatchSource:
     audio_sample_rate: int
     audio_channels: int
     duration_us: int
+    # The file's own fps, for the summary on End: fps above is what the job decodes at. Empty when the file doesn't say.
+    native_fps: tuple = ()
 
     def read(self, first, b, limit, check_interrupt=None):
         """第 first 幀起最多 b 幀，補到 b 幀；回傳 (frames, 有效幀數 L, 後面是否還有畫面)。
@@ -411,7 +458,8 @@ def open_source(path, resize, width, height, target_fps, label):
     return BatchSource(path=path, fingerprint=opaque_fingerprint(path), fps=fps, size=size, filters=filters,
                        offset_sec=Fraction(video_start - container_start, 1_000_000), stream=info["video_ordinal"],
                        has_audio=info["has_audio"], audio_sample_rate=info["audio_sample_rate"], audio_channels=info["audio_channels"],
-                       duration_us=info["video_duration_us"] if info["video_duration_us"] is not None else info["duration_us"])
+                       duration_us=info["video_duration_us"] if info["video_duration_us"] is not None else info["duration_us"],
+                       native_fps=tuple(info["fps"] or ()))
 
 
 def check_interrupt():
@@ -469,6 +517,8 @@ class VideoBatchJob:
         self.external_audio = None
         self.auto_audio = None
         self.source_audio = {}
+        # One line per source and one for the soundtrack, shown on End under the batch count.
+        self.summary = []
         self.estimated_frames = None
         self.estimated_batches = None
         self.output_dir = None
@@ -588,11 +638,19 @@ class VideoBatchJob:
         self.sources = {start_id: open_source(self._source_path(values), values.get("resize", "none"), values.get("width", 0),
                                               values.get("height", 0), self.target_fps, START_LABEL)
                         for start_id, values in resolved.items()}
-        if len({source.fps for source in self.sources.values()}) > 1:
-            listing = "、".join(f"{os.path.basename(s.path)}（{s.fps[0] / s.fps[1]:.3f}）" for s in self.sources.values())
-            raise ValueError(f"[{END_LABEL}] 影片的 fps 不同：{listing}。請在 {END_LABEL} 的 fps 填一個共同的值。")
+        if self.target_fps is None:
+            # The source whose soundtrack the film keeps sets the pace when the rates differ; the others are resampled to it.
+            with_audio = [start_id for start_id, source in self.sources.items() if source.has_audio]
+            keeps = self.graph.audio_mode == "none" and self.params.keep_source_audio and len(with_audio) == 1
+            entries = [(os.path.basename(s.path), s.fps, keeps and start_id == with_audio[0]) for start_id, s in self.sources.items()]
+            job_fps = choose_job_fps(entries)
+            self.sources = {start_id: replace(source, fps=job_fps) for start_id, source in self.sources.items()}
         self._estimate_length()
         self._plan_audio()
+        audio = {"external": "external", "batch": "batch"}.get(self.graph.audio_mode) or ("source" if self.auto_audio else "none")
+        self.summary = source_summary([(os.path.basename(s.path), s.native_fps or s.fps, s.duration_us, start_id == self.auto_audio)
+                                       for start_id, s in self.sources.items()], self.fps, audio)
+        print(f"[{END_LABEL}] " + "；".join(self.summary))
         self.prepared = True
         return True
 
@@ -699,7 +757,8 @@ class VideoBatchJob:
     def _say(self, text):
         from server import PromptServer
         server = PromptServer.instance
-        server.send_progress_text(text, self.graph.end, server.client_id)
+        # Nodes 2.0 renders this as Markdown, where a bare newline is a space: two spaces before it make a line break there too.
+        server.send_progress_text("  \n".join([text, *self.summary]), self.graph.end, server.client_id)
 
     def _show_progress(self, done):
         """以批為單位，永遠留一格給組裝：只有成品驗證通過才算滿（SPEC §10）。"""
