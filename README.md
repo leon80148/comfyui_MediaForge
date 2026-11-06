@@ -10,7 +10,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 
 ## Highlights
 
-- 🎞️ **35 nodes** across 6 categories — Subtitle / Video / Analysis / Audio (Phase 6 kickoff) / Compose (now with audio chain) / AI (+ Net / Image planned)
+- 🎞️ **36 nodes** across 6 categories — Subtitle / Video / Analysis / Audio (Phase 6 kickoff) / Compose (now with audio chain) / AI (+ Net / Image planned)
 - 🔗 **Dual-input bridge** — file-consumer nodes accept *either* a `video_path` string *or* an in-memory `IMAGE + AUDIO + tensor_fps` triplet, so MediaForge chains with VHS / AnimateDiff / any IMAGE-pipeline plugin without a SaveVideoFrames round-trip
 - 🚀 **Smart GPU codec default** — `h264_nvenc` is auto-selected when NVENC is available, libx264 fallback on CPU-only systems. No per-workflow switching needed
 - 📡 **API-ready output** — every file-producing node emits ComfyUI `ui.images` metadata so `/history/<prompt_id>` exposes the output filename; download via `/view?filename=X&subfolder=Y&type=output` (see [Using via API](#using-via-api))
@@ -31,7 +31,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 4. [Using via API](#using-via-api)
 5. [Smart GPU codec default](#smart-gpu-codec-default)
 6. [Why this plugin (vs VideoHelperSuite)](#why-this-plugin-vs-videohelpersuite)
-7. [Nodes (35)](#nodes-35)
+7. [Nodes (36)](#nodes-36)
 8. [AI Provider Recipes](#ai-provider-recipes)
 9. [Hidden Contracts](#hidden-contracts)
 10. [Architecture](#architecture)
@@ -414,7 +414,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
   -o final.mp4
 ```
 
-`type` is always `output` for MediaForge results. Each run produces a new auto-counter file (`_00001.mp4` → `_00002.mp4` → ...), so multiple workflow runs never silently overwrite.
+`type` is always `output` for MediaForge results. Each run produces a new auto-counter file (`_00001.mp4` → `_00002.mp4` → ...), so multiple workflow runs never silently overwrite. 💾 Save Video writes a new `<prefix>-<id>/video.mp4` directory per run instead.
 
 ### Subtitle / text outputs
 
@@ -532,7 +532,7 @@ To override per-node, just pick from the dropdown — existing workflows that ha
 
 **TL;DR:** Install both. VHS for fast IMAGE-batch workflows; MediaForge for broadcast encoding, file-level ops, Compose pipeline, and AI-driven subtitle work.
 
-## Nodes (35)
+## Nodes (36)
 
 Each node section below follows the same template: **purpose → when to use → required widgets → optional inputs → output → example**. Skim the widget tables to find the knob you need; fall back to the example for typical wiring.
 
@@ -542,7 +542,7 @@ Each node section below follows the same template: **purpose → when to use →
 >
 > Some dual-input nodes key off an **AUDIO** pin instead of `frames` — `MF_ComposeAudioMix` / `MF_DetectSilence` / `MF_ExtractAudio` hide their `audio_path` / `audio_source` STRING widget when the `audio` pin is wired. Same mechanism (`DUAL_INPUT_NODES` in `web/dual_input_lock.js`), just a different trigger socket.
 >
-> **Output filename pattern**: every file-producing node uses `filename_prefix` + auto-counter (same pattern as ComfyUI core `SaveImage`). Each run writes `output/<prefix>_00001.mp4` → `_00002.mp4` → ... so repeated workflow runs never silently overwrite earlier results. Subdirectories in the prefix are fine (e.g. `MediaForge/subtitled`).
+> **Output filename pattern**: every file-producing node uses `filename_prefix` + auto-counter (same pattern as ComfyUI core `SaveImage`). Each run writes `output/<prefix>_00001.mp4` → `_00002.mp4` → ... so repeated workflow runs never silently overwrite earlier results. Subdirectories in the prefix are fine (e.g. `MediaForge/subtitled`). Exception: 💾 Save Video writes one directory per run, `output/<prefix>-<id>/video.mp4`.
 
 ### `MediaForge/Subtitle`
 
@@ -723,6 +723,33 @@ Tensor → encoded video file. The canonical tensor→file producer; pairs with 
 **Output**: `final_video_path` STRING.
 
 **Notes**: ProRes outputs `.mov` (`prores_ks` uses `yuv422p10le` for 10-bit precision). `gif (palette)` outputs `.gif` via a two-pass `palettegen`/`paletteuse` filter (diff-stats palette + Bayer dither) for higher quality than FFmpeg's default GIF encoder. All other codecs → `.mp4`. NVENC variants use `-cq` instead of `-crf` internally but the UI is unified (see [Smart GPU codec default](#smart-gpu-codec-default)).
+
+---
+
+#### 💾 Save Video · Serial H.264 (`MF_SaveVideo`)
+
+ComfyUI `VIDEO` → H.264 MP4, AAC when the video has audio. Every stage runs on one thread: decoding a loaded file, the RGB→YUV conversion (swscale), libx264 and the AAC encoder. A ComfyUI V3 output node: it shows a video preview and passes the input on unchanged.
+
+**When to use**: saving any `VIDEO` (core Load Video, Create Video, other `VIDEO` nodes) when a serial, repeatable export matters more than encode speed — on a machine that is busy sampling, or to rule threading out when a save misbehaves.
+
+| Widget | Default | Notes |
+|---|---|---|
+| `video` | (required VIDEO) | Core `VideoFromFile` (Load Video) keeps core's trim / crop / rotation / audio-track rules and decodes with single-threaded decoders. Already-decoded videos (`VideoFromComponents`, e.g. Create Video) are used as they are. Other `VIDEO` types provide their own components; the report marks their decode threads as unknown. |
+| `filename_prefix` | `MediaForge/serial_video` | Relative to `output/`, may contain subfolders. Absolute paths, `..` and symlinks / junctions that lead out of `output/` are refused before anything is written. Each run writes `output/<prefix>-<32-hex id>/video.mp4`. |
+
+**Outputs**: `video` (the input object itself), `video_path` (absolute path of the finished MP4), `report_json`. The node shows the finished MP4 as its preview.
+
+**Encoding**: libx264 CRF 23, preset `medium` (x264's defaults); `yuv420p` for 8-bit sources, `yuv420p10le` for 10-bit (the 10-bit path keeps 16-bit RGB until the YUV conversion). Colour follows ComfyUI's tags: `sRGB` → BT.709 / sRGB transfer, `HDR` → BT.2020 / HLG, `HDR PQ` → BT.2020 / PQ; a source that does not say is saved as `sRGB`. fps is kept to three decimals like core (`24000/1001` → `23.976`); frames are never dropped or duplicated. Audio keeps its sample rate and channel layout (1 = mono, 2 = stereo, 6 = 5.1) and is cut at `ceil(sample_rate × frames / fps)`. The MP4 uses `faststart`.
+
+**Refused with an error, no file written**: alpha (H.264 has none; core gives GIFs an alpha channel, so a GIF from Load Video needs Get Video Components → Create Video without alpha first), sources that are not 8- or 10-bit, odd width or height, NaN / ±Infinity in frames or audio, audio with other channel counts or a sample rate AAC does not support, and HDR on PyAV 17 (its colour conversion has no BT.2020 matrix; needs `av` 18 or newer).
+
+**Writing**: encodes to `video.partial.mp4`, then flushes, closes, `fsync`s and renames it to `video.mp4` in the same directory. Cancelling (checked before decoding, at every frame and before the rename) or a failure never leaves a `video.mp4` and returns no path or preview; a partial file that already holds data stays for diagnosis. Runs with the same prefix at the same time each get their own directory.
+
+**Metadata**: follows `--disable-metadata`. Otherwise each top-level `extra_pnginfo` field (e.g. `workflow`) and the running `prompt` become one strict-JSON MP4 tag each. `NaN` / `±Infinity` — such as the `is_changed: [NaN]` cache marker that nodes like 🎬 End Video Batch leave in the running prompt — are written as `null`; the prompt and workflow themselves are not changed, and Unicode is written as-is.
+
+**`report_json`**: `status`, `path`, `subfolder`, `width`, `height`, `frames`, `fps` / `fps_fraction`, `source_fps` / `source_fps_fraction`, `bit_depth`, `pix_fmt`, `color_space`, `video` (encoder settings and the thread counts read back from the codec and from x264's own settings string), `audio` (or `null`), `color_conversion`, `source` (its type and how it was decoded), `metadata`, and `checks` — only the checks that actually ran.
+
+**Notes**: a loaded file is decoded into memory in full, like core's Get Video Components. Core itself converts the decoded YUV to RGB with PyAV's automatic thread count; that step is outside this node, and the report says so. PyAV feeds AAC through a small libavfilter graph whose thread pool cannot be configured; it stays idle.
 
 ---
 
@@ -1905,6 +1932,8 @@ Timeline tests (`test_timeline_*.py`, `test_latent_carry.py`, `test_segment_spil
 
 Video Batch tests: `test_video_batch_plan.py` (rules and batch math), `test_video_batch_decode.py` (each batch window against a continuous decode; run it on every FFmpeg version you support), `test_video_batch_core.py` (the real core executor in five cache modes; needs ComfyUI, set `COMFYUI_ROOT`), `test_video_io_streaming.py` (peak memory of Load / Save Video Frames).
 
+Save Video tests: `test_serial_h264.py` (paths, metadata, the encoded files checked with ffprobe and a full decode, cancel and failure, same-prefix runs in parallel, thread counts; runs on Linux and Windows), `test_save_video_core.py` (the real core executor, plus a server with `--disable-metadata`; needs ComfyUI, set `COMFYUI_ROOT`).
+
 ```bash
 python -m pytest -q tests/test_timeline_core_cache.py tests/test_h3_adapter_core.py tests/test_sample_segments_core.py   # inside ComfyUI's Linux / WSL environment
 node --test tests/js/timeline_grid.test.mjs tests/js/timeline_edit.test.mjs
@@ -1933,3 +1962,4 @@ MIT — © YingLiang Lu (leon80148).
 - **VideoHelperSuite** — the prior art that defined the IMAGE-batch contracts MediaForge interoperates with
 - **faster-whisper / CTranslate2** — local Whisper backend
 - Timeline planning, the material timeline and latent tail-carry concepts were inspired by [ComfyUI MiniMax H3 Timeline Director](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector); MediaForge implements these features independently, reuses no code from that project, and remains MIT-licensed.
+- 💾 Save Video · Serial H.264 follows the export behaviour of the serial video saver in [MiniMax H3 Audio T8](https://github.com/T8mars/comfyui-minimax-h3-audio-T8); it was written from a behaviour spec, reuses no code from that project, and is MIT-licensed like the rest of MediaForge.

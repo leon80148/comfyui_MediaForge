@@ -10,7 +10,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## 亮點
 
-- 🎞️ **35 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）
+- 🎞️ **36 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）
 - 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + tensor_fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
 - 🚀 **智慧 GPU codec 預設** — 偵測到 NVENC 自動用 `h264_nvenc`，沒 GPU 的機器自動 fallback `libx264`。不必手動切、不會在沒卡的環境壞掉
 - 📡 **API-ready 輸出** — 每個產出檔案的節點都同時 emit ComfyUI `ui.images` metadata，`/history/<prompt_id>` 直接看到輸出檔名，`/view?filename=X&subfolder=Y&type=output` 可下載（見 [Using via API](#using-via-api)）
@@ -31,7 +31,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 4. [Using via API（API 工作流）](#using-via-api)
 5. [智慧 GPU codec 預設](#智慧-gpu-codec-預設)
 6. [為什麼選這個 plugin（vs VideoHelperSuite）](#為什麼選這個-pluginvs-videohelpersuite)
-7. [節點清單（35）](#節點清單35)
+7. [節點清單（36）](#節點清單36)
 8. [AI Provider Recipes](#ai-provider-recipes)
 9. [Hidden Contracts（內部型別契約）](#hidden-contracts內部型別契約)
 10. [Architecture](#architecture)
@@ -414,7 +414,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
   -o final.mp4
 ```
 
-`type` 永遠是 `output`。每次跑 workflow 自動接 counter（`_00001.mp4` → `_00002.mp4` → ...）、不會 silently 覆蓋前次成品。
+`type` 永遠是 `output`。每次跑 workflow 自動接 counter（`_00001.mp4` → `_00002.mp4` → ...）、不會 silently 覆蓋前次成品。💾 Save Video 則是每次執行寫一個新的 `<前綴>-<識別碼>/video.mp4` 資料夾。
 
 ### 字幕 / 文字輸出
 
@@ -532,7 +532,7 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 
 **結論**：兩個都裝。VHS 用於快速 IMAGE batch workflow；MediaForge 用於廣播級編碼、檔案級操作、Compose pipeline、AI 字幕。
 
-## 節點清單（35）
+## 節點清單（36）
 
 每個節點區段都遵循同一個模板：**用途 → 適用情境 → 必填欄位 → 選用輸入 → 輸出 → 範例**。Widget 表掃過去就能找到要調的旋鈕，範例則給典型接線方式。
 
@@ -542,7 +542,7 @@ Probe 在 ComfyUI 啟動時跑一次（走 `utils/encoder.py:pick_default_codec(
 >
 > 有些 dual-input node 是靠 **AUDIO** pin 觸發、不是 `frames` — `MF_ComposeAudioMix` / `MF_DetectSilence` / `MF_ExtractAudio` 在 `audio` pin 接上時會隱藏各自的 `audio_path` / `audio_source` STRING widget。機制相同（`web/dual_input_lock.js` 的 `DUAL_INPUT_NODES`），只是觸發的 socket 不同。
 >
-> **輸出檔名 pattern**：所有產出檔的 node 都用 `filename_prefix` + auto-counter（跟 ComfyUI 核心 `SaveImage` 同 pattern）。每次跑 workflow 寫 `output/<prefix>_00001.mp4` → `_00002.mp4` → ...，重跑不會 silently 覆蓋舊輸出。`filename_prefix` 可含子目錄（例 `MediaForge/subtitled`）。
+> **輸出檔名 pattern**：所有產出檔的 node 都用 `filename_prefix` + auto-counter（跟 ComfyUI 核心 `SaveImage` 同 pattern）。每次跑 workflow 寫 `output/<prefix>_00001.mp4` → `_00002.mp4` → ...，重跑不會 silently 覆蓋舊輸出。`filename_prefix` 可含子目錄（例 `MediaForge/subtitled`）。例外：💾 Save Video 每次執行一個資料夾，`output/<前綴>-<識別碼>/video.mp4`。
 
 ### `MediaForge/Subtitle`
 
@@ -723,6 +723,33 @@ Tensor → 編碼影片檔。Canonical 的 tensor→file producer；跟 `MF_Load
 **輸出**：`final_video_path` STRING。
 
 **說明**：ProRes 輸出 `.mov`（`prores_ks` 用 `yuv422p10le` 保留 10-bit 精度）。`gif (palette)` 輸出 `.gif`，走雙 pass `palettegen`/`paletteuse` filter（diff-stats palette + Bayer dither），畫質比 FFmpeg 預設 GIF encoder 好很多。其他 codec 一律 `.mp4`。NVENC 內部用 `-cq` 而非 `-crf`，但 UI 統一（見[智慧 GPU codec 預設](#智慧-gpu-codec-預設)）。
+
+---
+
+#### 💾 Save Video · Serial H.264 (`MF_SaveVideo`)
+
+ComfyUI `VIDEO` → H.264 MP4，有音訊時編成 AAC。每個階段都只用一條執行緒：讀檔時的解碼、RGB→YUV 轉換（swscale）、libx264 與 AAC 編碼。ComfyUI V3 輸出節點：完成後顯示影片預覽，原輸入物件照樣往下傳。
+
+**適用情境**：存任何 `VIDEO`（core Load Video、Create Video 或其他輸出 `VIDEO` 的節點），要的是單執行緒、可重現的匯出而不是編碼速度——例如機器正在跑取樣，或存檔出問題時要先排除多執行緒。
+
+| Widget | 預設 | 說明 |
+|---|---|---|
+| `video` | (必填 VIDEO) | core 的 `VideoFromFile`（Load Video）沿用 core 的時間截取／裁切／旋轉／音軌選擇規則，解碼器設成單執行緒。已解碼的影片（`VideoFromComponents`，例如 Create Video）直接取用。其他 `VIDEO` 型別由來源自己提供元件，報告標示其解碼執行緒未知。 |
+| `filename_prefix` | `MediaForge/serial_video` | 相對於 `output/`，可含子資料夾。絕對路徑、`..`、經由符號連結或 junction 指到 `output/` 外的路徑，在寫入任何東西前就拒絕。每次執行寫 `output/<前綴>-<32 位十六進位識別碼>/video.mp4`。 |
+
+**輸出**：`video`（輸入物件本身）、`video_path`（完成的 MP4 絕對路徑）、`report_json`。節點以完成的 MP4 當預覽。
+
+**編碼**：libx264 CRF 23、preset `medium`（x264 預設值）；8-bit 來源用 `yuv420p`，10-bit 用 `yuv420p10le`（10-bit 路徑保留 16-bit RGB 直到轉 YUV）。色彩沿用 ComfyUI 的標記：`sRGB` → BT.709／sRGB 轉換曲線，`HDR` → BT.2020／HLG，`HDR PQ` → BT.2020／PQ；來源沒標的當 `sRGB` 存。fps 跟 core 一樣取到小數第三位（`24000/1001` → `23.976`），不補幀也不丟幀。音訊保留取樣率與聲道配置（1 = mono、2 = stereo、6 = 5.1），超過影片的部分依 `ceil(取樣率 × 幀數 / fps)` 裁掉。MP4 使用 `faststart`。
+
+**直接報錯、不寫檔**：alpha（H.264 沒有透明度；core 會給 GIF 一個 alpha 通道，所以 Load Video 讀進來的 GIF 要先用 Get Video Components → Create Video 不接 alpha 重建）、不是 8 或 10-bit 的來源、奇數寬高、畫面或音訊含 NaN／±Infinity、其他聲道數或 AAC 不支援的取樣率，以及 PyAV 17 上的 HDR（它的色彩轉換沒有 BT.2020 矩陣，需要 `av` 18 以上）。
+
+**寫檔**：先寫 `video.partial.mp4`，編碼器 flush、容器關閉、`fsync` 之後，在同一資料夾改名成 `video.mp4`。取消（解碼前、每一幀、改名前都會檢查）或失敗時一定不會留下 `video.mp4`，也不回傳路徑或預覽；已經寫入資料的暫存檔保留供診斷。同一前綴同時跑多次，各自有自己的資料夾。
+
+**中繼資料**：遵守 `--disable-metadata`。啟用時，`extra_pnginfo` 的每個頂層欄位（例如 `workflow`）和執行中的 `prompt` 各寫成一個嚴格 JSON 的 MP4 標籤。`NaN`／`±Infinity`——例如 🎬 End Video Batch 這類節點留在執行中 prompt 的 `is_changed: [NaN]` 快取標記——寫成 `null`；prompt 和 workflow 本身不會被改，Unicode 原樣寫入。
+
+**`report_json`**：`status`、`path`、`subfolder`、`width`、`height`、`frames`、`fps`／`fps_fraction`、`source_fps`／`source_fps_fraction`、`bit_depth`、`pix_fmt`、`color_space`、`video`（編碼設定，以及從編碼器和 x264 自己的設定字串讀回的執行緒數）、`audio`（沒有音訊時為 `null`）、`color_conversion`、`source`（來源型別與解碼方式）、`metadata`，以及 `checks`——只列實際跑過的檢查。
+
+**說明**：讀檔時整段影片會解碼進記憶體，跟 core 的 Get Video Components 一樣。core 把解碼後的 YUV 轉成 RGB 時用 PyAV 的自動執行緒數，這一步不在本節點控制內，報告會照實標示。PyAV 用一個小的 libavfilter 圖把音訊切成 AAC 的幀，它的執行緒池無法設定，但一直閒置。
 
 ---
 
@@ -1905,6 +1932,8 @@ Timeline 測試（`test_timeline_*.py`、`test_latent_carry.py`、`test_segment_
 
 Video Batch 測試：`test_video_batch_plan.py`（規則與分批數學）、`test_video_batch_decode.py`（每個批次窗口與連續解碼比對；支援的 FFmpeg 版本都要跑）、`test_video_batch_core.py`（真 core 執行器，五種快取模式；需要 ComfyUI，設定 `COMFYUI_ROOT`）、`test_video_io_streaming.py`（Load / Save Video Frames 的峰值記憶體）。
 
+Save Video 測試：`test_serial_h264.py`（路徑、中繼資料、用 ffprobe 與完整解碼檢查輸出檔、取消與失敗、同前綴並行、執行緒數；Linux 與 Windows 都能跑）、`test_save_video_core.py`（真 core 執行器，另起一個 `--disable-metadata` 的 server；需要 ComfyUI，設定 `COMFYUI_ROOT`）。
+
 ```bash
 python -m pytest -q tests/test_timeline_core_cache.py tests/test_h3_adapter_core.py tests/test_sample_segments_core.py   # 在 ComfyUI 的 Linux / WSL 環境內
 node --test tests/js/timeline_grid.test.mjs tests/js/timeline_edit.test.mjs
@@ -1933,3 +1962,4 @@ MIT — © YingLiang Lu (leon80148)。
 - **VideoHelperSuite** — 先行作品，定義了 IMAGE-batch 契約，MediaForge 與其互通
 - **faster-whisper / CTranslate2** — 本地 Whisper backend
 - 時間軸規劃、素材時間軸與 latent 尾端續接的設計概念受到 [ComfyUI MiniMax H3 Timeline Director](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector) 啟發；MediaForge 獨立實作這些功能，不沿用該專案程式碼，並維持 MIT 授權。
+- 💾 Save Video · Serial H.264 的匯出行為比照 [MiniMax H3 Audio T8](https://github.com/T8mars/comfyui-minimax-h3-audio-T8) 的單執行緒影片存檔節點；依行為規格撰寫，不沿用該專案程式碼，與 MediaForge 其他部分一樣採 MIT 授權。
