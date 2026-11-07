@@ -11,7 +11,7 @@ from ..utils.ass_style import (
 from ..utils.audio_mix import build_amix_filter
 from ..utils.cache_key import path_fingerprint
 from ..utils.encoder import build_encoder_args, get_available_codecs, pick_default_codec
-from ..utils.ffmpeg import ensure_ffmpeg, probe_has_audio_stream, run_ffmpeg
+from ..utils.ffmpeg import ensure_ffmpeg, probe_has_audio_stream, probe_video_duration, run_ffmpeg
 from ..utils.output_path import output_path_to_ui_entry, resolve_output_path
 from ..utils.plugin_tmp import mkstemp_in_plugin_tmp
 from ..utils.video_io import encode_tensor_to_tempfile, write_audio_dict_to_wav
@@ -198,12 +198,25 @@ class MF_BurnSubtitle:
 
                 # Probe source 自帶音軌 — amix 需要兩條 input 都存在、不然 ffmpeg error
                 if keep_source_audio and probe_has_audio_stream(source_path):
-                    # duration=first:輸出長度跟著 input 0 (video 自帶音軌) 走 — 字幕燒錄場景
-                    # 影片是 master timeline;外部音訊比影片長就截掉、短就尾端靜音。
+                    # 為什麼 source 先 apad、最後 atrim:FFmpeg ≤6.x 的 amix 在 input 0 一 EOF
+                    # 就丟掉它 fifo 裡還沒混的樣本;有 video 要編時 ffmpeg 讀 source 會領先外部
+                    # WAV,原音尾端約 0.5s 因此消失(2026-11-07 subtitled_00003)。apad 讓 input 0
+                    # 在 amix 內永不 EOF,atrim 再把混音綁回影片長度 — 影片是 master timeline,
+                    # 外部音訊比影片長就截掉。
                     # dropout_transition=0:關掉 amix 預設 2s 淡入淡出(給「中途某條結束」的
-                    # 平滑用,這裡兩條都跑到尾不需要)
-                    audio_filter_complex = build_amix_filter(
-                        ["0:a", "1:a"], duration="first", dropout_transition=0, out_label="aout"
+                    # 平滑用,這裡不需要)
+                    video_duration = probe_video_duration(source_path)
+                    if video_duration is None:
+                        raise RuntimeError(
+                            f"[Burn Subtitle] 讀不到影片長度,無法混音:{source_path}"
+                            "(請改用 keep_source_audio=False,以外部音訊取代原音)"
+                        )
+                    audio_filter_complex = (
+                        "[0:a]apad[a0];"
+                        + build_amix_filter(
+                            ["a0", "1:a"], duration="first", dropout_transition=0, out_label="mixed"
+                        )
+                        + f";[mixed]atrim=end={video_duration:.6f}[aout]"
                     )
                     audio_map = ["-map", "0:v", "-map", "[aout]"]
                 else:
