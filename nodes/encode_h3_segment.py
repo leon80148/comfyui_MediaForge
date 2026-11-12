@@ -1,8 +1,9 @@
 """MF_EncodeH3Segment — 把一段的 prompt 與素材（參考 / 錨定 / 鎖音）編成 H3 conditioning + 空 AV latent。
 
 conditioning 只透過 core 的 MiniMaxH3ReferenceToVideo / MiniMaxH3AddGuide（utils/h3_adapter.py）；
-參考素材只在這裡短暫解碼，不成為快取中間值。loop 路徑接 MF_SelectSegment，單節點路徑由
-MF_SampleSegments 在 expansion 裡自動使用。
+參考素材只在這裡短暫解碼，不成為快取中間值。
+
+內部節點：由 MF_SampleSegments 展開（graph expansion）時建立，不出現在節點選單。
 """
 from ..utils.h3_adapter import encode_segment
 
@@ -35,6 +36,7 @@ class MF_EncodeH3Segment:
     RETURN_NAMES = ("positive", "latent")
     FUNCTION = "encode"
     CATEGORY = "MediaForge/AI"
+    DEPRECATED = True  # 不是要淘汰：core 只有這個旗標能讓節點不進搜尋與節點庫（另見 web/internal_nodes.js）
 
     def encode(self, segment, clip, vae, width, height, ref_image_size, audio_vae=None, ref_video_short_edge=0):
         return encode_segment(segment, clip, vae, width, height, ref_image_size, audio_vae, ref_video_short_edge)

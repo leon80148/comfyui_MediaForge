@@ -2,6 +2,8 @@
 
 畫面由 latent + vae 在這裡解碼；有接 audio_vae 時，音訊解自同一個 AV latent 的音訊 stream。
 latent 同時是下一段 carry tail 的來源。輸出的 MF_SEGMENT_STATE 是新 dict，輸入的 state 不會被修改。
+
+內部節點：由 MF_SampleSegments 展開（graph expansion）時建立，不出現在節點選單。
 """
 from ..utils import segment_spill
 from ..utils.ffmpeg import ensure_ffmpeg
@@ -10,7 +12,7 @@ from ..utils.timeline_messages import TimelineError, format_message
 from ..utils.timeline_plan import require_segment
 
 LABEL = segment_spill.APPEND_LABEL
-# 正確保留時差在 1e-6 級（float32 累積誤差）；兩段式取樣把雜訊留在續接區時是數十。鎖音同一標準
+# 正確保留時差在 1e-6 級（float32 累積誤差）；sampler 把雜訊留在續接區時是數十。鎖音同一標準
 CARRY_DRIFT_ATOL = 1e-3
 
 
@@ -88,6 +90,7 @@ class MF_AppendSegment:
     RETURN_NAMES = ("state",)
     FUNCTION = "append"
     CATEGORY = "MediaForge/Video"
+    DEPRECATED = True  # 不是要淘汰：core 只有這個旗標能讓節點不進搜尋與節點庫（另見 web/internal_nodes.js）
 
     def append(self, segment, state=None, latent=None, vae=None, audio_vae=None):
         require_segment(segment, ("assemble",), LABEL)

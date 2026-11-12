@@ -1,7 +1,8 @@
 """MF_ExtendLatent — 把前一段 latent 的尾端寫進本段開頭，並用 noise_mask 指定保留程度。
 
-只做 tensor 運算（utils/latent_carry.py）：不載入模型、不取樣，sampler 由使用者自己接。
-續接來源是前一段取樣後的 previous_latent。
+只做 tensor 運算（utils/latent_carry.py）：不載入模型、不取樣。續接來源是前一段取樣後的 previous_latent。
+
+內部節點：由 MF_SampleSegments 展開（graph expansion）時建立，不出現在節點選單。
 """
 import json
 
@@ -42,6 +43,7 @@ class MF_ExtendLatent:
     RETURN_NAMES = ("latent", "report")
     FUNCTION = "extend"
     CATEGORY = "MediaForge/AI"
+    DEPRECATED = True  # 不是要淘汰：core 只有這個旗標能讓節點不進搜尋與節點庫（另見 web/internal_nodes.js）
 
     def extend(self, target_latent, segment, mask, carry_audio, previous_latent=None,
                video_taper_tokens=2, audio_taper_tokens=2, on_conflict="error"):

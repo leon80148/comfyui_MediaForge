@@ -122,13 +122,6 @@ const WIDGET_VALUE_LOCKS = {
     "MF_ConcatVideos": [
         { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
     ],
-    // Taper sizes are only read in taper mode; the audio taper only when audio is carried.
-    // carry_audio is a BOOLEAN widget, so its value is a bare boolean (compared with ===).
-    "MF_ExtendLatent": [
-        { trigger: "mask", value: "hard", hide: ["video_taper_tokens", "audio_taper_tokens"] },
-        { trigger: "mask", value: "linear", hide: ["video_taper_tokens", "audio_taper_tokens"] },
-        { trigger: "carry_audio", value: false, hide: ["audio_taper_tokens"] },
-    ],
     "MF_AssembleSegments": [
         { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
     ],

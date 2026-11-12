@@ -49,7 +49,7 @@ def extract_carry_tail(samples, segment):
 def carry_drift(latent, carry, marker, label):
     """取樣後的 latent 在 noise_mask == 0（完全保留）的續接位置，與 carry tail 的最大絕對差。
 
-    兩段式 KSamplerAdvanced 的第二段以第一段帶殘留雜訊的輸出當保留內容，續接區會被雜訊取代——
+    sampler 沒有原樣保留續接區時（例如把帶殘留雜訊的 latent 當成保留內容），續接區會被雜訊取代——
     MF_AppendSegment 用這個值擋下。latent 沒有 noise_mask 時無從判斷，回傳 None。
     """
     if latent.get("noise_mask") is None:
