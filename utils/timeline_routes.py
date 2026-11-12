@@ -63,8 +63,11 @@ def _endpoint(netloc, scheme):
 
 
 def check_origin(headers, scheme, host):
-    if headers.get("Sec-Fetch-Site") == "cross-site":
+    site = headers.get("Sec-Fetch-Site")
+    if site == "cross-site":
         raise RouteError(403, "cross_site", "拒絕跨站請求。")
+    if site == "same-origin":
+        return  # 瀏覽器依網址列計算、網頁無法偽造；TLS 反向代理後 scheme / Host 對不上時仍正確
     origin = headers.get("Origin")
     if origin is None:
         return  # 非瀏覽器的直接請求（與 core origin-only middleware 相同的判準）
