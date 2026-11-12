@@ -114,6 +114,8 @@ export const S = {
     chipInsert: (name) => `插入 <@${name}> 到這段的 prompt`,
     chipAdd: (name) => `把 ${name} 加入這段的參考，並在 prompt 插入 <@${name}>`,
     chipsBlocked: "素材資訊還沒確認，暫時不能用這些按鈕",
+    sharedChipInsert: (name) => `插入 <@${name}> 到共用 prompt`,
+    sharedChipAdd: (name, segs) => `把 ${name} 加入第 ${segs.join("、")} 段的參考，並在共用 prompt 插入 <@${name}>`,
     // the @ material list of the prompt boxes
     mention: {
         segIn: (tag) => `✓ 本段 ${tag}`,

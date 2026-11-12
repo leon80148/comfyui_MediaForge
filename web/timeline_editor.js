@@ -30,7 +30,7 @@ import { attachMention } from "./timeline_mention.js";
 import { S } from "./timeline_strings.js";
 
 const NODE_TYPE = "MF_EditTimeline";
-const freshView = () => ({ active: 0, zoom: null, playhead: 0, sel: null, open: {} });
+const freshView = () => ({ active: 0, zoom: null, playhead: 0, sel: null, open: {}, caret: {} });
 const OWNERS = new WeakMap();      // editor root → its editor
 const HANDOVER = new Map();        // node id → { graphId, view } of an editor destroyed during the current task
 const UPLOAD_SUBFOLDER = "mediaforge_timeline";
@@ -1190,7 +1190,35 @@ class TimelineEditor {
             this.promptBox(el("textarea", { class: "full", "data-fk": "shared",
                 onchange: (e) => e.target.value !== this.data.prompt && this.propose({ ...this.data, prompt: e.target.value }) }, [text]),
             { kind: "shared" }),
+            ...this.sharedTagRow(),
         ]);
+    }
+
+    // The segment row's counterpart for mouse users: the same states and command as the shared prompt's @ list.
+    sharedTagRow() {
+        const b = sharedTagButtons(this.data, this.ctx);
+        if (b.hidden || !this.data.materials.length || b.blocked === "manifest") return [];
+        if (b.blocked) return [el("div", { class: "hint", text: S.chipsBlocked })];
+        return [el("div", { class: "mf-tl-chips" }, this.data.materials.map((m) => {
+            const item = b.items[m.id];
+            const chip = el("button", {
+                class: item.state === "add" ? "add" : "", "data-fk": `stag:${m.id}`,
+                text: item.state === "blocked" ? m.name : `${item.state === "add" ? "＋" : "✓"} ${m.name}`,
+                title: item.state === "blocked" ? `${S.segment(item.segment + 1)}：${this.refusalText(item)}`
+                    : item.state === "add" ? S.sharedChipAdd(m.name, item.missing.map((i) => i + 1)) : S.sharedChipInsert(m.name),
+                onclick: () => this.apply(useSharedTag(this.data, m.id, this.editContext(), { at: this.caretFor({ kind: "shared" }) })),
+            });
+            chip.disabled = item.state === "blocked";
+            return chip;
+        }))];
+    }
+
+    // Where the caret was when the box last lost focus, while the box still holds that text; else null (append).
+    caretFor(scope) {
+        const shared = scope.kind === "shared";
+        const c = this.view.caret[shared ? "shared" : `segment:${scope.index}`];
+        const stored = shared ? this.data.prompt : this.data.segments[scope.index]?.prompt;
+        return c && c.text === stored ? c : null;
     }
 
     // ---- prompt boxes: the @ material list and Ctrl+Z after a pick ----
@@ -1205,6 +1233,11 @@ class TimelineEditor {
             }));
         }
         area.addEventListener("input", () => this.lastPick === area && (this.lastPick = null));
+        // the tag buttons insert here: they take focus, so the caret is read on the way out
+        area.addEventListener("blur", () => {
+            this.view.caret[scope.kind === "shared" ? "shared" : `segment:${scope.index}`] =
+                { text: area.value, start: area.selectionStart, end: area.selectionEnd };
+        });
         // The browser's own undo would take the tag out of the text but leave the reference the pick added.
         area.addEventListener("keydown", (e) => {
             if (this.lastPick !== area || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== "z") return;
@@ -1326,7 +1359,7 @@ class TimelineEditor {
                 class: item.state === "add" ? "add" : "", "data-fk": `tag:${m.id}`,
                 text: item.state === "blocked" ? m.name : `${item.state === "add" ? "＋" : "✓"} ${m.name}`,
                 title: item.state === "insert" ? S.chipInsert(m.name) : item.state === "add" ? S.chipAdd(m.name) : this.refusalText(item),
-                onclick: () => this.apply(useRefTag(this.data, i, m.id, this.editContext())),
+                onclick: () => this.apply(useRefTag(this.data, i, m.id, this.editContext(), { at: this.caretFor({ kind: "segment", index: i }) })),
             });
             chip.disabled = item.state === "blocked";
             return chip;
@@ -1615,7 +1648,7 @@ class TimelineEditor {
         if (st.h3) {
             const item = tagButtons(this.data, i, this.ctx).items?.[id];
             const use = button(item?.state === "insert" ? S.insertTag(m.name, i + 1) : S.useInSegment(i + 1),
-                () => this.apply(useRefTag(this.data, i, id, this.editContext())),
+                () => this.apply(useRefTag(this.data, i, id, this.editContext(), { at: this.caretFor({ kind: "segment", index: i }) })),
                 { title: item?.state === "blocked" ? this.refusalText(item) : S.useInSegmentTitle, "data-fk": "use" });
             use.disabled = !item || item.state === "blocked";
             uses.push(use);
