@@ -23,9 +23,10 @@ import { MAX_MATERIALS, refOk, strictParse } from "./timeline_materials.js";
 import {
     addMaterials, aliasRawTags, checkEdit, conformSegments, createFromCard, deleteBar, deleteCut, deleteMaterial, editBar,
     emitIntervals, inputImpact, insertCut, markCut, moveRefInOrder, patchBar, pickSnap, probeIssue, refChanges, refillSegments,
-    removeAllMaterials, renameMaterial, segmentInputs, setShotBoundary, snapTargets, splitBar, tagButtons, timelineProblems,
-    useRefTag,
+    removeAllMaterials, renameMaterial, segmentInputs, setShotBoundary, sharedTagButtons, snapTargets, splitBar, tagButtons,
+    timelineProblems, useRefTag, useSharedTag,
 } from "./timeline_edit.js";
+import { attachMention } from "./timeline_mention.js";
 import { S } from "./timeline_strings.js";
 
 const NODE_TYPE = "MF_EditTimeline";
@@ -321,6 +322,8 @@ class TimelineEditor {
         this.fixKey = "";
         this.gutterKey = "";
         this.destroyed = false;
+        this.mentions = [];              // @ lists of the current form's prompt boxes
+        this.lastPick = null;            // the prompt box whose last change was an @ pick (Ctrl+Z undoes the pick)
         this.view = freshView();
         this.build();
         OWNERS.set(this.root, this);
@@ -367,6 +370,8 @@ class TimelineEditor {
         // dropped / rebuilt.
         this.endGesture();
         this.endPress();
+        this.closeMentions();
+        this.lastPick = null;
         this.fieldCommit = false;
         clearTimeout(this.fieldTimer);
         this.loadGen++;
@@ -1138,6 +1143,7 @@ class TimelineEditor {
     // ---------- inspector ----------
 
     renderForm(st) {
+        this.closeMentions();
         this.placeButton = null;
         this.keepSections(this.form);
         const sel = this.view.sel;
@@ -1181,8 +1187,96 @@ class TimelineEditor {
         // decided once: writing the first words must not close the section under the user
         this.view.open.shared ??= this.isFresh();
         return this.details("shared", `${S.globalPrompt}：${text || S.sharedEmpty}`, [
-            el("textarea", { class: "full", "data-fk": "shared", onchange: (e) => this.propose({ ...this.data, prompt: e.target.value }) }, [text]),
+            this.promptBox(el("textarea", { class: "full", "data-fk": "shared",
+                onchange: (e) => e.target.value !== this.data.prompt && this.propose({ ...this.data, prompt: e.target.value }) }, [text]),
+            { kind: "shared" }),
         ]);
+    }
+
+    // ---- prompt boxes: the @ material list and Ctrl+Z after a pick ----
+
+    // scope: {kind: "shared"} | {kind: "segment", index}
+    promptBox(area, scope) {
+        if (this.settings().h3) {
+            this.mentions.push(attachMention(area, document.body, {
+                items: () => this.mentionItems(scope),
+                pick: (item, range) => this.pickTag(scope, item, range, area),
+                hint: S.mention.hint,
+            }));
+        }
+        area.addEventListener("input", () => this.lastPick === area && (this.lastPick = null));
+        // The browser's own undo would take the tag out of the text but leave the reference the pick added.
+        area.addEventListener("keydown", (e) => {
+            if (this.lastPick !== area || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== "z") return;
+            e.preventDefault();
+            e.stopPropagation();
+            this.lastPick = null;
+            changeTracker()?.undo?.();
+        });
+        return area;
+    }
+
+    closeMentions() {
+        for (const m of this.mentions) m.close();
+        this.mentions = [];
+    }
+
+    mentionItems(scope) {
+        const shared = scope.kind === "shared";
+        const ctx = this.editContext();
+        const b = shared ? sharedTagButtons(this.data, ctx) : tagButtons(this.data, scope.index, ctx);
+        if (b.hidden) return [];
+        const rows = [];
+        for (const m of this.data.materials) {
+            const item = b.items?.[m.id];
+            const base = { id: m.id, name: m.name, icon: KIND_ICON[m.kind],
+                thumb: m.kind === "image" ? viewURL({ ...splitSource(m.ref), type: "input" }) : null };
+            if (!item) {
+                rows.push({ ...base, key: m.id, label: m.name, audio: false, status: S.chipsBlocked, disabled: true });
+                continue;
+            }
+            rows.push({ ...base, key: m.id, label: m.name, audio: false, ...this.mentionStatus(item, b, shared, false) });
+            if (item.audioTag || item.audio) {
+                rows.push({ ...base, key: `${m.id}:audio`, label: `${m.name}:audio`, icon: KIND_ICON.audio, thumb: null, audio: true,
+                    ...this.mentionStatus(item, b, shared, true) });
+            }
+        }
+        return rows;
+    }
+
+    mentionStatus(item, b, shared, audio) {
+        if (item.state === "blocked") {
+            const why = this.refusalText(item);
+            const status = shared ? `${S.segment(item.segment + 1)}：${why}` : why;
+            return { status, title: status, disabled: true };
+        }
+        if (item.state === "add") {
+            return { tone: "add", disabled: false,
+                status: shared ? S.mention.sharedAdd(item.missing.map((i) => i + 1)) : audio ? S.mention.soundAdd : S.mention.segAdd };
+        }
+        if (!shared) return { tone: "ok", disabled: false, status: S.mention.segIn(audio ? item.audioTag : item.tag) };
+        return b.inheritors.length ? { tone: "ok", disabled: false, status: S.mention.sharedAll(b.inheritors.length) }
+            : { disabled: false, status: S.mention.sharedNone };
+    }
+
+    // Text typed since the last save is committed first, as its own undo step (the pick is the next one), so an
+    // undo right after the pick keeps what was typed.
+    pickTag(scope, item, range, area) {
+        if (this.broken || this.destroyed || !area.isConnected) return;
+        const shared = scope.kind === "shared";
+        const stored = () => (shared ? this.data.prompt : this.data.segments[scope.index]?.prompt);
+        if (stored() === undefined) return;
+        if (area.value !== stored()) {
+            const saved = this.propose(shared ? { ...this.data, prompt: area.value } : this.withSegment(scope.index, { prompt: area.value }));
+            if (!saved) return;
+        }
+        const opts = { at: { text: area.value, start: range.start, end: range.end }, audio: item.audio };
+        const ctx = this.editContext();
+        const r = shared ? useSharedTag(this.data, item.id, ctx, opts) : useRefTag(this.data, scope.index, item.id, ctx, opts);
+        if (!this.apply(r)) return;
+        area.value = stored();
+        area.setSelectionRange(r.caret, r.caret);
+        this.lastPick = area;
     }
 
     segmentForm(st) {
@@ -1199,8 +1293,9 @@ class TimelineEditor {
             el("div", { class: "full" }, [el("b", { text: S.segment(i + 1) }),
                 ` · ${S.range(sec(s.start), sec(s.end))}${overlap ? ` · ${S.overlapPrev(sec(overlap), i)}` : ""}`]),
             el("span", { text: S.prompt }),
-            el("textarea", { class: "main", "data-fk": "prompt", placeholder: S.inheritGlobal,
-                onchange: (e) => this.propose(this.withSegment(i, { prompt: e.target.value })) }, [s.prompt]),
+            this.promptBox(el("textarea", { class: "main", "data-fk": "prompt", placeholder: S.inheritGlobal,
+                onchange: (e) => e.target.value !== this.data.segments[i]?.prompt && this.propose(this.withSegment(i, { prompt: e.target.value })) },
+            [s.prompt]), { kind: "segment", index: i }),
             ...this.promptSource(i),
             ...this.tagRow(i),
             el("span", { text: S.lengthLabel }), this.lengthStepper(st, i),
@@ -2398,6 +2493,7 @@ class TimelineEditor {
         this.resizeObserver?.disconnect();
         this.endGesture();
         this.endPress();
+        this.closeMentions();
         clearTimeout(this.fieldTimer);
         for (const video of [this.video, this.materialVideo]) {
             video.pause();

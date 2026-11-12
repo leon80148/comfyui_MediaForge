@@ -114,6 +114,16 @@ export const S = {
     chipInsert: (name) => `插入 <@${name}> 到這段的 prompt`,
     chipAdd: (name) => `把 ${name} 加入這段的參考，並在 prompt 插入 <@${name}>`,
     chipsBlocked: "素材資訊還沒確認，暫時不能用這些按鈕",
+    // the @ material list of the prompt boxes
+    mention: {
+        segIn: (tag) => `✓ 本段 ${tag}`,
+        segAdd: "＋ 會加入本段參考",
+        soundAdd: "＋ 影片的音軌",
+        sharedAll: (n) => `✓ ${n} 段都有`,
+        sharedNone: "目前沒有段落使用共用 prompt",
+        sharedAdd: (segs) => `＋ 會補上第 ${segs.join("、")} 段的參考`,
+        hint: "↑↓ 選擇 · Enter / Tab 插入 · Esc 關閉",
+    },
     lengthLabel: "長度",
     seam: "成品銜接方式",
     seamCut: "直接切換",
