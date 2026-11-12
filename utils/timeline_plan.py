@@ -4,7 +4,6 @@ Python 是唯一權威；web/timeline_grid.js 鏡射同一套規則給 GUI 即�
 tests/golden/timeline_vectors.json 對拍。所有邊界都是整數幀與有理數 fps，秒只
 用來顯示——浮點 fps（例如 23.976）換算 NTSC 會挑錯分母，所以連輸入都不收浮點。
 """
-import copy
 import hashlib
 import json
 from fractions import Fraction
@@ -455,8 +454,6 @@ VIEW_FIELDS = {
                  "effective_grid", "emit_interval", "overlap_in", "overlap_out", "carry_in", "carry_out",
                  "seam_in", "seam_out", "is_last", "audio_locks", "latent_locks", "source_window"),
 }
-# full 被每個消費端接受（LoadSegmentFrames 只收 full），所以要帶齊任何一個 view 會讀的欄位
-FULL_REQUIRED = tuple(dict.fromkeys(k for fields in VIEW_FIELDS.values() for k in fields))
 
 
 def segment_view(spec, view):
@@ -468,7 +465,10 @@ def segment_view(spec, view):
 
 
 def require_segment(segment, views, label):
-    """消費端入口檢查：MF_SEGMENT v2、view 被接受（full 一律接受）、必要欄位齊全（full 也要齊）。"""
+    """消費端入口檢查：MF_SEGMENT v2、view 是這個消費端收的、該 view 的欄位齊全。
+
+    計畫內的完整規格（view = full）不是任何節點的輸入：一律經 segment_view() 取精簡版。
+    """
     if not isinstance(segment, dict) or segment.get("type") != "MF_SEGMENT":
         raise ValueError(f"[{label}] segment 必須由 Sample Segments 提供。這是內部節點，請改接 Sample Segments。")
     index = segment.get("index")
@@ -482,21 +482,12 @@ def require_segment(segment, views, label):
     if segment.get("version") != 2:
         fail("stale_version", "version", "segment 是舊版格式，請重新執行 Edit Timeline")
     view = segment.get("view")
-    if view != "full" and view not in views:
+    if view not in views:
         fail("view_not_accepted", "view", f"不接受 {view} view")
-    missing = [k for k in (FULL_REQUIRED if view == "full" else VIEW_FIELDS[view]) if k not in segment]
+    missing = [k for k in VIEW_FIELDS[view] if k not in segment]
     if missing:
         fail("missing_fields", missing[0], f"缺少欄位 {missing}")
     return segment
-
-
-def segment_spec(plan, index):
-    """MF_SEGMENT（full view）：Extend / Append / Load / Encode 共用的不可變衍生快照。"""
-    specs = plan["specs"]
-    if not 0 <= index < len(specs):
-        raise TimelineError("Select Segment", "E_SEGMENT_INDEX", count=len(specs), index=index,
-                            detail={"reason": "out_of_range", "field": "segment_index"})
-    return copy.deepcopy(specs[index])
 
 
 def cut_ranges_seconds(plan):

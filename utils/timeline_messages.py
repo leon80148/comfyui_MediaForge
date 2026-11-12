@@ -8,7 +8,6 @@ emoji，print() 會直接丟 UnicodeEncodeError，讓「警告後繼續」變成
 MESSAGES = {
     "E_SEQUENCE": "預期第 {expected} 段，收到第 {actual} 段。請連接前一段的 state。",
     "E_PLAN": "分段與 state 屬於不同計畫。請重新執行整個流程。",
-    "E_SEGMENT_INDEX": "segment_index 超出範圍：計畫共 {count} 段（0 起算），收到 {index}。",
     "E_PROVENANCE": "續接標記與本段不符（{field}）。請檢查分段接線。",
     "W_PROVENANCE": "缺少續接標記；將繼續執行。請檢查分段與 guide 接線。",
     "E_CARRY_SOURCE": "本段需要續接資料。請把前一段取樣後的 latent 接到 previous_latent。",
