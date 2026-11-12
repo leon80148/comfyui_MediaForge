@@ -288,7 +288,7 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。四�
 
 一般：
 
-- `timeline_data` JSON 是唯一會被存檔與送出執行的狀態；編輯器的檢視狀態（縮放、選取、播放頭、區塊開合）只存在 editor 裡，不寫進 workflow，所以選取或移動播放頭不算一個 undo 步驟，也不會進入 prompt。重新載入同一個 graph（undo / redo，或 graph id 相同的 workflow，例如同一個檔案再開一次）時會沿用檢視狀態；其他 graph 從預設檢視開始。素材讀取結果只存在編輯器裡。
+- `timeline_data` JSON 是唯一會被存檔與送出執行的狀態；編輯器的檢視狀態（縮放、選取、播放頭、區塊開合）只存在 editor 裡，不寫進 workflow，所以選取或移動播放頭不算一個 undo 步驟，也不會進入 prompt。重新載入同一個 graph（undo / redo，或 graph id 相同的 workflow，例如同一個檔案再開一次）時會沿用檢視狀態；其他 graph 從預設檢視開始。素材讀取結果只存在編輯器裡。prompt 框可以從右下角拉高；高度（共用 prompt 一個、段落 prompt 一個）存在瀏覽器的儲存空間，重畫與重新整理頁面後都保留，所有 workflow 共用。
 - 打字後可以直接點按鈕或換欄位：文字先存，點擊照常生效；鍵盤操作後焦點留在同一個控制項。字母快捷鍵不會攔截 `Ctrl` / `Cmd` 組合鍵。
 - 編輯器載入失敗時會改顯示原始 JSON widget，仍可直接編輯。
 - 介面文字為繁體中文；技術名稱與儲存值保留英文，顯示標籤可中英並列。

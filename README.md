@@ -288,7 +288,7 @@ Status line:
 
 General:
 
-- `timeline_data` JSON is the only state that is saved and queued; the editor's view state (zoom, selection, playhead, open sections) lives only in the editor and is not written into the workflow, so selecting or moving the playhead is not an undo step and never reaches the prompt. When the same graph is reloaded (undo / redo, or a workflow with the same graph id, such as the same file opened again) the view carries over; any other graph starts from the default view. Probe results live only in the editor.
+- `timeline_data` JSON is the only state that is saved and queued; the editor's view state (zoom, selection, playhead, open sections) lives only in the editor and is not written into the workflow, so selecting or moving the playhead is not an undo step and never reaches the prompt. When the same graph is reloaded (undo / redo, or a workflow with the same graph id, such as the same file opened again) the view carries over; any other graph starts from the default view. Probe results live only in the editor. Prompt boxes can be dragged taller from their corner; the height (one for the shared prompt, one for segment prompts) is kept in the browser's storage, so it survives rebuilds and page reloads and applies to every workflow.
 - After typing you can go straight to a button or another field: the text is saved and the click still lands; after a keyboard action focus stays on the same control. Letter shortcuts leave `Ctrl` / `Cmd` combinations alone.
 - If the editor fails to load, the raw JSON widget is shown and stays editable.
 - UI text is Traditional Chinese; technical names and stored values stay English, and display labels may show both.

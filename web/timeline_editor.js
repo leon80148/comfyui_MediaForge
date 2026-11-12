@@ -41,6 +41,30 @@ const DEFAULT_OVERLAP = { "h3_5+17n": 22, "causal_4n+1": 5, "causal_8n+1": 9, fr
 const SEGMENT_COLORS = ["#3d7bd9", "#d98a3d", "#3dae73", "#a95ad1", "#d14f6b", "#4cb0c2"];
 const KIND_COLORS = { image: "#5c8f3a", video: "#3a6f8f", audio: "#8f6a3a" };
 const KIND_ICON = { image: "🖼", video: "🎞", audio: "🔊" };
+const PROMPT_HEIGHTS_KEY = "mediaforge.timelineEditor.promptHeights";
+const DEFAULT_PROMPT_HEIGHT = { shared: 120, segment: 84 };   // px: about 6 and 4 lines
+
+function promptHeights() {
+    try {
+        const stored = JSON.parse(localStorage.getItem(PROMPT_HEIGHTS_KEY) ?? "{}");
+        return stored && typeof stored === "object" ? stored : {};
+    } catch {
+        return {};   // storage switched off, or a value this code did not write
+    }
+}
+
+function promptHeight(kind) {
+    const h = promptHeights()[kind];
+    return Number.isFinite(h) && h > 0 ? h : DEFAULT_PROMPT_HEIGHT[kind];
+}
+
+function savePromptHeight(kind, px) {
+    try {
+        localStorage.setItem(PROMPT_HEIGHTS_KEY, JSON.stringify({ ...promptHeights(), [kind]: px }));
+    } catch {
+        // storage switched off: the size lasts until the box is rebuilt
+    }
+}
 const ACCEPTS = { image: ["refs", "visual"], video: ["refs", "visual"], audio: ["refs", "audio"] };  // createFromCard's table
 const LANE_TOP = 100;
 const LANE_ROW = 22;
@@ -322,7 +346,7 @@ class TimelineEditor {
         this.fixKey = "";
         this.gutterKey = "";
         this.destroyed = false;
-        this.mentions = [];              // @ lists of the current form's prompt boxes
+        this.boxHandles = [];            // the current form's prompt boxes: their @ lists and size observers
         this.lastPick = null;            // the prompt box whose last change was an @ pick (Ctrl+Z undoes the pick)
         this.view = freshView();
         this.build();
@@ -370,7 +394,7 @@ class TimelineEditor {
         // dropped / rebuilt.
         this.endGesture();
         this.endPress();
-        this.closeMentions();
+        this.releaseBoxes();
         this.lastPick = null;
         this.fieldCommit = false;
         clearTimeout(this.fieldTimer);
@@ -1143,7 +1167,7 @@ class TimelineEditor {
     // ---------- inspector ----------
 
     renderForm(st) {
-        this.closeMentions();
+        this.releaseBoxes();
         this.placeButton = null;
         this.keepSections(this.form);
         const sel = this.view.sel;
@@ -1221,12 +1245,25 @@ class TimelineEditor {
         return c && c.text === stored ? c : null;
     }
 
-    // ---- prompt boxes: the @ material list and Ctrl+Z after a pick ----
+    // ---- prompt boxes: their height, the @ material list and Ctrl+Z after a pick ----
 
     // scope: {kind: "shared"} | {kind: "segment", index}
     promptBox(area, scope) {
+        // the box is rebuilt with the form: the height the user dragged it to is kept in the browser, not the workflow
+        const kind = scope.kind === "shared" ? "shared" : "segment";
+        let applied = promptHeight(kind);
+        area.style.height = `${applied}px`;
+        const sizes = new ResizeObserver((entries) => {
+            const h = Math.round(entries[0]?.borderBoxSize?.[0]?.blockSize ?? area.offsetHeight);
+            // 0: the section holding the box is closed
+            if (!area.isConnected || !(h > 0) || Math.abs(h - applied) < 1) return;
+            applied = h;
+            savePromptHeight(kind, h);
+        });
+        sizes.observe(area);
+        this.boxHandles.push({ close: () => sizes.disconnect() });
         if (this.settings().h3) {
-            this.mentions.push(attachMention(area, document.body, {
+            this.boxHandles.push(attachMention(area, document.body, {
                 items: () => this.mentionItems(scope),
                 pick: (item, range) => this.pickTag(scope, item, range, area),
                 hint: S.mention.hint,
@@ -1249,9 +1286,9 @@ class TimelineEditor {
         return area;
     }
 
-    closeMentions() {
-        for (const m of this.mentions) m.close();
-        this.mentions = [];
+    releaseBoxes() {
+        for (const h of this.boxHandles) h.close();
+        this.boxHandles = [];
     }
 
     mentionItems(scope) {
@@ -1551,7 +1588,8 @@ class TimelineEditor {
             el("span", { text: S.start }), this.number(s.start, (v) => this.editEdge(i, "left", v), { "data-fk": "start" }),
             el("span", { text: S.end }), this.number(s.end, (v) => this.editEdge(i, "right", v), { "data-fk": "end" }),
             el("span", { text: S.prompt }),
-            el("textarea", { "data-fk": "prompt", onchange: (e) => this.propose(this.withSegment(i, { prompt: e.target.value })) }, [s.prompt]),
+            this.promptBox(el("textarea", { "data-fk": "prompt", onchange: (e) => this.propose(this.withSegment(i, { prompt: e.target.value })) },
+                [s.prompt]), { kind: "segment", index: i }),
             el("span"), el("span", { class: "hint", text: S.cutPromptNote }),
         ];
     }
@@ -2526,7 +2564,7 @@ class TimelineEditor {
         this.resizeObserver?.disconnect();
         this.endGesture();
         this.endPress();
-        this.closeMentions();
+        this.releaseBoxes();
         clearTimeout(this.fieldTimer);
         for (const video of [this.video, this.materialVideo]) {
             video.pause();
