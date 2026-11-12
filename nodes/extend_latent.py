@@ -50,8 +50,10 @@ class MF_ExtendLatent:
                video_taper_tokens=2, audio_taper_tokens=2, experimental_causal=False, on_conflict="error"):
         if state is not None:
             segment_spill.check_state(state, EXTEND_LABEL)  # an old saved state gets the re-run message, not E_PROVENANCE
-        latent, report = extend_latent(target_latent, segment, mask, carry_audio, state, previous_latent,
-                                       video_taper_tokens, audio_taper_tokens, experimental_causal, on_conflict)
+        latent, report = extend_latent(
+            target_latent, segment, mask=mask, carry_audio=carry_audio, state=state, previous_latent=previous_latent,
+            video_taper_tokens=video_taper_tokens, audio_taper_tokens=audio_taper_tokens,
+            experimental_causal=experimental_causal, on_conflict=on_conflict)
         return (latent, json.dumps(report, ensure_ascii=False))
 
 
