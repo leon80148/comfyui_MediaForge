@@ -262,6 +262,18 @@ function installStyle() {
 .mf-tl-chips button { padding: 0 6px; font-size: 11px; }
 .mf-tl-chips button.add { border-style: dashed; }
 .mf-tl-chips input.seed { width: 270px; }
+.mf-tl-mention { position: fixed; z-index: 10000; min-width: 260px; max-width: 440px; max-height: 260px; overflow-y: auto;
+  font: 12px sans-serif; color: var(--fg-color, #ddd); background: var(--comfy-menu-bg, #2b2d31);
+  border: 1px solid var(--border-color, #4a4e57); border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+.mf-tl-mention .row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; cursor: pointer; }
+.mf-tl-mention .row.on { background: #3b5b8c; }
+.mf-tl-mention .row.off { opacity: .45; cursor: default; }
+.mf-tl-mention .row img, .mf-tl-mention .row .icon { width: 24px; height: 24px; flex: none; border-radius: 3px; object-fit: cover; text-align: center; line-height: 24px; }
+.mf-tl-mention .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mf-tl-mention .status { white-space: nowrap; opacity: .8; }
+.mf-tl-mention .status.ok { color: #8fd18f; opacity: 1; }
+.mf-tl-mention .status.add { color: #e0b25a; opacity: 1; }
+.mf-tl-mention .foot { padding: 3px 8px; font-size: 11px; opacity: .7; border-top: 1px solid var(--border-color, #3a3d44); }
 .mf-tl-stepper { display: flex; align-items: center; gap: 6px; }
 .mf-tl-stepper button { padding: 0 8px; }
 .mf-tl-panel { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 4px; border: 1px dashed var(--border-color, #555); border-radius: 4px; }
