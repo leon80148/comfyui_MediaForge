@@ -93,10 +93,6 @@ def canonical_json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def spec_id(spec):
-    return _digest(canonical_json(spec)) if spec is not None else None
-
-
 def _fail(reason, location, code):
     """code 是機器原因碼（§4.2.5 原因碼表）；reason 是給人看的說明。"""
     raise TimelineError(NODE_LABEL, "E_TIMELINE_JSON", reason=reason, location=location,
@@ -425,7 +421,6 @@ def _build_specs(plan, data, snapshots, h3):
             "emit_interval": emits[index],
             "fps": plan["fps"], "effective_grid": grid,
             "carry_in": carry_in, "carry_out": carry_out,
-            "carry_in_id": spec_id(carry_in), "carry_out_id": spec_id(carry_out),
             "carry_conflicts": manifest["carry_conflicts"],
             "seam_in": seg["seam_in"], "seam_out": nxt["seam_in"] if nxt else None,
             "source_window": window,
@@ -455,10 +450,10 @@ def _build_specs(plan, data, snapshots, h3):
 VIEW_FIELDS = {
     "encode": ("index", "length", "fps", "effective_grid", "prompt", "materials"),
     "extend": ("index", "sampling_id", "prev_sampling_id", "expected_tokens", "length", "overlap_in",
-               "carry_in", "carry_in_id", "effective_grid", "carry_conflicts"),
+               "carry_in", "effective_grid", "carry_conflicts"),
     "assemble": ("index", "assembly_id", "prev_assembly_id", "sampling_id", "start", "end", "length", "fps",
                  "effective_grid", "emit_interval", "overlap_in", "overlap_out", "carry_in", "carry_out",
-                 "carry_out_id", "seam_in", "seam_out", "is_last", "audio_locks", "latent_locks", "source_window"),
+                 "seam_in", "seam_out", "is_last", "audio_locks", "latent_locks", "source_window"),
 }
 # full 被每個消費端接受（LoadSegmentFrames 只收 full），所以要帶齊任何一個 view 會讀的欄位
 FULL_REQUIRED = tuple(dict.fromkeys(k for fields in VIEW_FIELDS.values() for k in fields))

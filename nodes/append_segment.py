@@ -5,7 +5,7 @@ latent 同時是下一段 carry tail 的來源。輸出的 MF_SEGMENT_STATE 是�
 """
 from ..utils import segment_spill
 from ..utils.ffmpeg import ensure_ffmpeg
-from ..utils.latent_carry import carry_drift, extract_carry_tail, latent_space_id, lock_drift, split_streams
+from ..utils.latent_carry import carry_drift, extract_carry_tail, lock_drift, split_streams
 from ..utils.timeline_messages import TimelineError, format_message
 from ..utils.timeline_plan import require_segment
 
@@ -107,16 +107,10 @@ class MF_AppendSegment:
             raise TimelineError(LABEL, "E_LOCK_DRIFT", reason=f"取樣後最大差 {locked:.3g}")
         images = _decode_video(vae, latent, segment)
         wave = _decode_audio(audio_vae, latent) if audio_vae is not None else None
-        carry = None
-        if segment["carry_out"] is not None:
-            samples = latent["samples"]
-            carry = {**extract_carry_tail(samples, segment), "producer_index": segment["index"],
-                     "carry_id": segment["carry_out_id"], "sampling_id": segment["sampling_id"],
-                     "latent_space_id": latent_space_id(samples)}
         new_state = segment_spill.append_segment(
             state, segment, images, wave,
             curve=_audio_curve(segment["seam_in"], audio_vae is not None, provenance, marker),
-            carry=carry, check_interrupt=_check_interrupt, lock_drift=locked)
+            carry=extract_carry_tail(latent["samples"], segment), check_interrupt=_check_interrupt, lock_drift=locked)
         import comfy.model_management
         comfy.model_management.soft_empty_cache()
         return (new_state,)
