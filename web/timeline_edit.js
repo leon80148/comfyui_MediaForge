@@ -668,6 +668,71 @@ export function useRefTag(data, index, materialId, ctx, { at = null, audio = fal
     return r.ok ? { ...r, caret } : r;
 }
 
+// ---- material tags in the shared prompt (H3 only) ----
+
+// The shared prompt is every segment's prompt that has none of its own: tagButtons() of each such segment,
+// folded. "insert": all of them already reference the material (or none uses the shared prompt); "add": the
+// `missing` ones can each take it; "blocked": one of them cannot, named by `segment`.
+export function sharedTagButtons(data, ctx) {
+    if (!ctx.h3) return { hidden: true };
+    const inheritors = data.segments.flatMap((s, i) => (s.prompt ? [] : [i]));
+    const per = [];
+    for (const i of inheritors) {
+        const b = tagButtons(data, i, ctx);
+        if (b.blocked) return { ...b, segment: i };
+        per.push([i, b.items]);
+    }
+    const snaps = verifiedSnapshots(data, ctx.snapshots);
+    const items = {};
+    for (const m of data.materials) {
+        const stuck = per.find(([, it]) => it[m.id].state === "blocked");
+        if (stuck) {
+            items[m.id] = { ...stuck[1][m.id], segment: stuck[0], missing: [] };
+            continue;
+        }
+        const missing = per.filter(([, it]) => it[m.id].state === "add").map(([i]) => i);
+        const audio = m.kind === "video" && !!snaps[m.id]?.has_audio
+            && per.every(([, it]) => it[m.id].state === "add" || it[m.id].audioTag);
+        items[m.id] = { state: missing.length ? "add" : "insert", missing, ...(audio ? { audio: true } : {}) };
+    }
+    return { blocked: null, inheritors, items };
+}
+
+// The tag goes into the shared prompt (at `at`, else appended) and every segment using it that lacks the
+// reference gets one, as one commit. Numbered tags cannot be pinned per segment in one shared text, so a new
+// reference next to them is refused.
+export function useSharedTag(data, materialId, ctx, { at = null, audio = false } = {}) {
+    const m = material(data, materialId);
+    if (!m) return fail("no_material");
+    const b = sharedTagButtons(data, ctx);
+    if (b.hidden) return fail("not_h3");
+    if (b.blocked === "not_ready") return fail("not_ready");
+    if (b.blocked) return problemAt("manifest", b.error, b.segment);
+    const item = b.items[m.id];
+    if (item.state === "blocked") return fail(item.reason, { category: item.category, limit: item.limit, segment: item.segment });
+    const text = at ? at.text : data.prompt;
+    const [start, end] = at ? [at.start, at.end] : [text.length, text.length];
+    if (item.missing.length && `${text.slice(0, start)}${text.slice(end)}`.search(RAW_TAG) >= 0) return fail("shared_raw_tags");
+    let next = data;
+    for (const i of item.missing) {
+        const added = createFromCard(next, m.id, "refs", emitIntervals(next.segments)[i][0], ctx);
+        if (!added.ok) return { ...added, segment: i };
+        next = added.next;
+    }
+    const tag = `<@${m.name}${audio ? ":audio" : ""}>`;
+    const { text: prompt, caret } = spliceTag(text, start, end, tag);
+    next = { ...next, prompt };
+    for (const i of b.inheritors) {
+        const after = segmentInputs(next, i, ctx);
+        if (!after) return fail("not_ready");
+        if (!after.ok) return problemAt("manifest", after.error, i);
+        const resolved = resolvePrompt(tag, after.manifest, next.materials, i, true);
+        if (!resolved.ok) return problemAt("prompt", resolved.error, i);
+    }
+    const r = done(data, next, ctx, [m.id, ...item.missing.map(String)]);
+    return r.ok ? { ...r, caret } : r;
+}
+
 // ---- what an edit did to each segment's references ----
 
 function tagTable(data, index, ctx) {

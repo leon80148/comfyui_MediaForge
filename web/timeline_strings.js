@@ -282,6 +282,7 @@ export const S = {
         too_many_materials: "素材已達上限（64 個）", no_raw_tags: "沒有 <Picture N> 這類編號標籤",
         ambiguous_tags: "無法在不改變指向素材的情況下，轉成 <@名稱>",
         raw_tags_block: "這段的 prompt 有 <Picture N> 這類編號，加入新參考可能改變它指的素材。請先改用 <@名稱>，或把素材拖到參考軌道",
+        shared_raw_tags: "共用 prompt 有 <Picture N> 這類編號，補上新參考可能改變它在各段指的素材。請先改用 <@名稱>",
         tag_full: (r) => `這段的${S.tagKinds[r.category] ?? "參考"}已達上限（${r.limit} 個）`,
         // cut mode
         source_unknown: "來源影片資訊尚未確認，請稍候再試", before_source: "這個位置早於來源影片的開頭",
