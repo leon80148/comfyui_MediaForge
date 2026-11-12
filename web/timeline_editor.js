@@ -1980,7 +1980,7 @@ class TimelineEditor {
             this.notice = note;
             return this.render();
         }
-        const r = addMaterials(this.data, done.map((u) => ({ kind: u.kind, ref: u.ref, filename: u.file.name })), this.editContext());
+        const r = addMaterials(this.data, done.map((u) => ({ kind: u.kind, ref: u.ref })), this.editContext());
         if (r.ok) this.uploads = this.uploads.filter((u) => !done.includes(u));
         else for (const u of done) Object.assign(u, { status: "failed", error: this.refusalText(r) });
         this.apply(r, note);

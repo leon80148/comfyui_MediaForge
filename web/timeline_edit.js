@@ -49,26 +49,15 @@ export function newId(prefix, items) {
     for (let n = 1; ; n++) if (!used.has(`${prefix}${n}`)) return `${prefix}${n}`;
 }
 
-const NAME_RANGES = [[0x30, 0x39], [0x41, 0x5a], [0x61, 0x7a], [0x5f, 0x5f], [0x2d, 0x2d],
-    [0x3040, 0x30ff], [0x3400, 0x4dbf], [0x4e00, 0x9fff], [0xac00, 0xd7af], [0xf900, 0xfaff]];
+const NAME_PREFIX = { image: "img", video: "vid", audio: "aud" };
 
-function nameChar(ch) {
-    const c = ch.codePointAt(0);
-    return NAME_RANGES.some(([lo, hi]) => c >= lo && c <= hi);
-}
-
-// File name → alias: NFC, illegal characters → "_", room kept for a "_N" suffix so the result
-// never exceeds 32 code points.
-export function aliasFromFilename(filename, existingNames) {
-    const stem = filename.replace(/^.*[\\/]/, "").replace(/\.[^.]*$/, "").normalize("NFC");
-    let base = [...stem].map((ch) => (nameChar(ch) ? ch : "_")).join("").replace(/_+/g, "_").replace(/^_|_$/g, "") || "material";
-    const taken = new Set(existingNames);
-    const fit = (b, suffix) => [...b].slice(0, 32 - [...suffix].length).join("") + suffix;
-    if (!taken.has(fit(base, ""))) return fit(base, "");
-    for (let n = 2; ; n++) {
-        const candidate = fit(base, `_${n}`);
-        if (!taken.has(candidate)) return candidate;
-    }
+// Upload → alias: kind prefix + one past the highest number in use. Never the lowest free number: a deleted
+// material's `<@img2>` can still sit in a prompt, and a new upload must not silently take it over.
+export function autoName(kind, existingNames) {
+    const prefix = NAME_PREFIX[kind];
+    const pattern = new RegExp(`^${prefix}([0-9]+)$`);
+    const top = Math.max(0, ...existingNames.map((n) => Number(pattern.exec(n)?.[1] ?? 0)));
+    return `${prefix}${top + 1}`;
 }
 
 function material(data, id) {
@@ -458,13 +447,13 @@ export function moveRefInOrder(data, id, step, ctx) {
 // ---- materials ----
 
 export function addMaterials(data, entries, ctx) {
-    // entries: [{kind, ref, filename}] in upload order → one commit for the whole batch
+    // entries: [{kind, ref}] in upload order → one commit for the whole batch
     if (data.materials.length + entries.length > MAX_MATERIALS) return fail("too_many_materials");
     const materials = data.materials.slice();
     const affected = [];
     for (const e of entries) {
         const id = newId("m", materials);
-        materials.push({ id, kind: e.kind, ref: e.ref, name: aliasFromFilename(e.filename, materials.map((m) => m.name)) });
+        materials.push({ id, kind: e.kind, ref: e.ref, name: autoName(e.kind, materials.map((m) => m.name)) });
         affected.push(id);
     }
     return done(data, { ...data, materials }, ctx, affected);
