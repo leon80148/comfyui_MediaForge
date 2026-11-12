@@ -1128,7 +1128,8 @@ class TimelineEditor {
         const sel = this.view.sel;
         const generate = st.mode === "generate";
         const rows = this.isFresh() ? [el("div", { class: "full hint", text: S.firstRun })] : [];
-        rows.push(this.sharedPrompt());
+        // prompts are only read when segments are generated: in cut the field would change nothing
+        if (generate) rows.push(this.sharedPrompt());
         if (generate && sel?.type === "ref" && this.data.refs.some((r) => r.id === sel.id)) rows.push(...this.refForm(st, sel.id));
         else if (generate && sel?.type === "anchor" && this.data.anchors.some((a) => a.id === sel.id)) rows.push(...this.anchorForm(st, sel.id));
         else if (generate && sel?.type === "material" && this.data.materials.some((m) => m.id === sel.id)) rows.push(...this.materialForm(st, sel.id));
@@ -1160,7 +1161,6 @@ class TimelineEditor {
         return box;
     }
 
-    // Also in cut: Select Segment outputs it there too, so hiding it would hide something that takes effect.
     sharedPrompt() {
         const text = this.data.prompt;
         // decided once: writing the first words must not close the section under the user
@@ -1407,9 +1407,6 @@ class TimelineEditor {
             ]),
             el("span", { text: S.start }), this.number(s.start, (v) => this.editEdge(i, "left", v), { "data-fk": "start" }),
             el("span", { text: S.end }), this.number(s.end, (v) => this.editEdge(i, "right", v), { "data-fk": "end" }),
-            el("span", { text: S.prompt }),
-            el("textarea", { "data-fk": "prompt", onchange: (e) => this.propose(this.withSegment(i, { prompt: e.target.value })) }, [s.prompt]),
-            el("span"), el("span", { class: "hint", text: S.cutPromptNote }),
         ];
     }
 

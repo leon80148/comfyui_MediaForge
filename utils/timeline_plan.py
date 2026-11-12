@@ -480,7 +480,7 @@ def segment_view(spec, view):
 def require_segment(segment, views, label):
     """消費端入口檢查：MF_SEGMENT v2、view 被接受（full 一律接受）、必要欄位齊全（full 也要齊）。"""
     if not isinstance(segment, dict) or segment.get("type") != "MF_SEGMENT":
-        raise ValueError(f"[{label}] segment 必須來自 Select Segment，請檢查接線。")
+        raise ValueError(f"[{label}] segment 必須由 Sample Segments 提供。這是內部節點，請改接 Sample Segments。")
     index = segment.get("index")
 
     def fail(code, field, reason):

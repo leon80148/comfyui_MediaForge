@@ -126,9 +126,6 @@ const WIDGET_VALUE_LOCKS = {
     "MF_EditTimeline": [
         { trigger: "mode", value: "cut", hide: ["grid"] },
     ],
-    "MF_LoadSegmentFrames": [
-        { trigger: "resize", value: "none", hide: ["width", "height"] },
-    ],
     // Taper sizes are only read in taper mode; the audio taper only when audio is carried.
     // carry_audio is a BOOLEAN widget, so its value is a bare boolean (compared with ===).
     "MF_ExtendLatent": [
@@ -149,12 +146,6 @@ const WIDGET_VALUE_LOCKS = {
         { trigger: "mask", value: "hard", hide: ["video_taper_tokens", "audio_taper_tokens"] },
         { trigger: "mask", value: "linear", hide: ["video_taper_tokens", "audio_taper_tokens"] },
         { trigger: "carry_audio", value: false, hide: ["audio_taper_tokens"] },
-    ],
-    // Audio kinds return no image, so the image resize widgets would be dead UI.
-    "MF_LoadSegmentMedia": [
-        { trigger: "resize", value: "none", hide: ["width", "height"] },
-        { trigger: "kind", value: "audio", hide: ["resize", "width", "height"] },
-        { trigger: "kind", value: "lock", hide: ["resize", "width", "height"] },
     ],
 };
 

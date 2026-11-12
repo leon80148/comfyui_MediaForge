@@ -396,7 +396,7 @@ def _check_invariants(new, old):
           and new["committed_end_sample"] >= old["committed_end_sample"]
           and new["available_end_sample"] >= new["committed_end_sample"])
     if not ok or (new["complete"] and not _final_ok(new)):
-        raise RuntimeError(f"[{APPEND_LABEL}] state 不變量檢查失敗（內部錯誤）。請重新執行整個迴圈。")
+        raise RuntimeError(f"[{APPEND_LABEL}] state 不變量檢查失敗（內部錯誤）。請重新執行整個流程。")
 
 
 def _merge_locks(held, added):
@@ -440,7 +440,7 @@ def append_segment(state, segment, frames, audio, *, curve, carry, check_interru
     pending = state["pending"]
     if ((pending["frame_range"] if pending else None) != ([a - x_in, a] if x_in else None)
             or state["processed_end"] != a or state["committed_frames"] != a - x_in):
-        raise RuntimeError(f"[{APPEND_LABEL}] state 的游標 / pending 區間與本段接縫不符（內部錯誤）。請重新執行整個迴圈。")
+        raise RuntimeError(f"[{APPEND_LABEL}] state 的游標 / pending 區間與本段接縫不符（內部錯誤）。請重新執行整個流程。")
     held_frames = pending["frames"].load(APPEND_LABEL) if x_in else None
     held_audio = pending["audio"].load(APPEND_LABEL) if (x_in and pending["audio"] is not None) else None
 
@@ -663,7 +663,7 @@ def assemble(state, filename_prefix, ext, pix_fmt, encoder_args, override, check
     if not state["complete"]:
         raise TimelineError(ASSEMBLE_LABEL, "E_SEQUENCE", expected="最後一段", actual=state["next_index"])
     if not _final_ok(state):
-        raise RuntimeError(f"[{ASSEMBLE_LABEL}] state 不變量檢查失敗（內部錯誤）。請重新執行整個迴圈。")
+        raise RuntimeError(f"[{ASSEMBLE_LABEL}] state 不變量檢查失敗（內部錯誤）。請重新執行整個流程。")
     parts = state["parts"]  # 編碼期間持有全部 SpillPart，避免中途被回收
     video = [p for p in parts if p.kind == "video"]
     audio = [p for p in parts if p.kind == "audio"]

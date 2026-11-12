@@ -137,7 +137,6 @@ export const S = {
     markIn: "設為起點 I",
     markOut: "設為終點 O",
     deleteSegment: "刪除這段",
-    cutPromptNote: "只有把 🎯 Select Segment 的 prompt 接到下游時才會用到",
     movedWhole: "已移動整段",
     movedShortened: (seconds) => `已移動整段，長度縮短為 ${seconds.toFixed(2)} 秒`,
     cutNoDrop: "剪現有影片用不到素材，這些檔案沒有上傳",

@@ -1,4 +1,4 @@
-"""Timeline 來源解析與 FFmpeg 安全輸入（route、MF_EditTimeline、MF_LoadSegmentFrames 共用）。
+"""Timeline 來源解析與 FFmpeg 安全輸入（route、MF_EditTimeline、Video Batch 共用）。
 
 只接受 ComfyUI input/ 內的相對路徑；FFmpeg 一律以 `file:` 協定 + demuxer 白名單
 開檔——使用者給的名字可能是 `concat:` / `http:` 或偽裝成 .mp4 的 playlist，不能交給
