@@ -1,6 +1,6 @@
 """Latent tail-carry 引擎（純 tensor 運算，不載入模型、不取樣）。
 
-LATENT["samples"] 可能是一般 5D tensor，或 core 的 NestedTensor（H3 / LTX-2 的 video + audio）。
+LATENT["samples"] 可能是一般 5D tensor，或 core 的 NestedTensor（H3 的 video + audio）。
 兩者都有 `.is_nested`（torch.Tensor 原生屬性 / core wrapper 的旗標），所以不需要 import comfy
 就能分辨——這也讓 Windows 測試機能用假容器跑。
 """
@@ -171,22 +171,17 @@ def _write_head(stream, time_dim, tail):
 
 
 def _layout(space_id):
-    # 只比第一段（plain / nestedN）：LTX-2 audio 的 time 軸不在最後一維、會被算進簽章，
-    # 段長不同時整串必然不同；video 的 C/H/W 改由 tail 形狀逐維比對
+    # 只比第一段（plain / nestedN）；各 stream 的 channel 與空間尺寸改由 tail 形狀逐維比對，
+    # 錯誤訊息才指得出是哪個 stream
     return space_id.split("|", 1)[0]
 
 
-def _source_tails(spec, state, previous_latent, target_samples, carry_audio):
+def _source_tails(spec, previous_latent, target_samples, carry_audio):
     """→ {stream: (tail view, 在來源中的起點)}；tail 形狀由呼叫端比對。"""
-    if state is not None:
-        src = _layout(state["carry"]["latent_space_id"])
-    else:
-        src = _layout(latent_space_id(previous_latent["samples"]))
+    src = _layout(latent_space_id(previous_latent["samples"]))
     tgt = _layout(latent_space_id(target_samples))
     if src != tgt:
         _fail(f"續接來源的 stream 結構（{src}）與 target_latent（{tgt}）不同。請確認前後段使用同一模型。")
-    if state is not None:
-        return {"video": (state["carry"]["video"], 0), "audio": (state["carry"]["audio"], 0)}
     streams, _ = split_streams(previous_latent["samples"])
     t, k = streams[0].shape[2], spec["video_tokens"]
     tails = {"video": (streams[0][:, :, t - k:], t - k)}
@@ -195,30 +190,24 @@ def _source_tails(spec, state, previous_latent, target_samples, carry_audio):
     return tails
 
 
-def _provenance(segment, state, previous_latent):
+def _provenance(segment, previous_latent):
     """一致性提示，不是來源證明：consistent / absent；任一欄不符直接 E_PROVENANCE。
 
     marker 是取樣前寫的，只能擋「plan 宣告的內容 / seed 不同」的 latent 混接。
     """
-    if state is not None:
-        names = ("sampling_id", "producer_index", "carry_id")
-        carry = state["carry"]
-        got = (carry.get("sampling_id"), carry["producer_index"], carry["carry_id"])
-        want = (segment["prev_sampling_id"], segment["index"] - 1, segment["carry_in_id"])
-    else:
-        marker = previous_latent.get("mf_carry")
-        if marker is None:
-            return "absent"
-        names = ("sampling_id", "segment_index")
-        got = tuple(marker.get(n) for n in names)
-        want = (segment["prev_sampling_id"], segment["index"] - 1)
+    marker = previous_latent.get("mf_carry")
+    if marker is None:
+        return "absent"
+    names = ("sampling_id", "segment_index")
+    got = tuple(marker.get(n) for n in names)
+    want = (segment["prev_sampling_id"], segment["index"] - 1)
     for name, a, b in zip(names, got, want):
         if a != b:
             raise TimelineError(EXTEND_LABEL, "E_PROVENANCE", field=name)
     return "consistent"
 
 
-def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=None, previous_latent=None,
+def extend_latent(target_latent, segment, mask="hard", carry_audio=False, previous_latent=None,
                   video_taper_tokens=2, audio_taper_tokens=2, on_conflict="error"):
     """MF_ExtendLatent 的引擎 → (新 LATENT dict, report dict)。不修改任何輸入。"""
     require_segment(segment, ("extend",), EXTEND_LABEL)
@@ -238,8 +227,6 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
             raise TimelineError(EXTEND_LABEL, "E_TOKENS", expected=audio_tokens, actual=streams[1].shape[-1])
     if carry_audio and not (grid == H3_GRID and len(streams) == 2):
         raise TimelineError(EXTEND_LABEL, "E_AUDIO_CARRY")
-    if state is not None and previous_latent is not None:
-        _fail("state 與 previous_latent 只能擇一，請移除其中一條連線。")
     requested_audio = carry_audio
     # 鎖音的原聲 latent 與 carry 的生成 tail 落在同一批 token 會互相矛盾：原聲優先
     lock_skip = carry_audio and segment["carry_in"] is not None and bool(segment["carry_conflicts"])
@@ -251,13 +238,13 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
     out = dict(target_latent)
     carried, dtypes, details, source, provenance = [], {}, {}, None, None
     if spec is not None:
-        source = "state" if state is not None else "previous_latent" if previous_latent is not None else None
-        if source is None or (state is not None and state["carry"] is None):
+        if previous_latent is None:
             raise TimelineError(EXTEND_LABEL, "E_CARRY_SOURCE")
-        provenance = _provenance(segment, state, previous_latent)
+        source = "previous_latent"
+        provenance = _provenance(segment, previous_latent)
         if provenance == "absent":
             print(format_message(EXTEND_LABEL, "W_PROVENANCE"))
-        tails = _source_tails(spec, state, previous_latent, samples, carry_audio)
+        tails = _source_tails(spec, previous_latent, samples, carry_audio)
 
         jobs = [("video", 0, 2, spec["video_tokens"], video_taper_tokens)]
         if carry_audio:
@@ -270,7 +257,7 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
             tail, offset = tails[name]
             stream = streams[i]
             want = tuple(stream.shape[:dim]) + (k,) + tuple(stream.shape[dim + 1:])
-            got = None if tail is None else tuple(tail.shape)
+            got = tuple(tail.shape)
             if got != want:
                 _fail(f"續接來源的 {name} 形狀 {got} 與本段需要的 {want} 不符。請確認前後段使用同一模型、解析度與 grid。")
             weights = mask_weights(mask, k, taper)
@@ -301,7 +288,6 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
     report = {
         "version": 2,
         "sampling_id": segment["sampling_id"],
-        "session": state["session"] if state is not None else None,
         "segment_index": segment["index"],
         "carry_source": source, "provenance": provenance,
         "latent_space_id": latent_space_id(samples),
@@ -312,7 +298,6 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
         "metadata": {"kept": sorted(key for key in target_latent if key not in changed),
                      "replaced": [key for key in changed if key in target_latent],
                      "added": [key for key in changed if key not in target_latent]},
-        "experimental": bool(carried) and grid != H3_GRID,
         "conditioning_check": "unavailable",
         "effective": [{"feature": "audio_carry", "requested": requested_audio, "applied": "audio" in carried,
                        "reason": audio_reason}],
