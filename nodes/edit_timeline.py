@@ -29,7 +29,7 @@ class MF_EditTimeline:
                 }),
                 "fps": (list(FPS_PRESETS), {
                     "default": "24",
-                    "tooltip": "時間軸每秒幀數。生成新影片且使用 H3 段長規則時，必須設為 24 fps。",
+                    "tooltip": "時間軸每秒幀數。生成新影片時必須設為 24 fps。",
                 }),
                 # 只剩一個值、介面上隱藏：欄位留著是為了不讓舊 workflow 的 widgets_values 錯位（C2）
                 "grid": ([H3_GRID], {
@@ -38,14 +38,16 @@ class MF_EditTimeline:
                 }),
                 "mode": (list(MODES), {
                     "default": "generate",
-                    "tooltip": "generate：規劃要由模型生成的段落。cut：從來源影片選出要保留的區間，不經模型生成。",
+                    "tooltip": "generate：規劃要由模型生成的段落，segment_plan 接 Sample Segments。"
+                               "cut：從來源影片選出要保留的區間，不經模型生成；ranges 與 video_path 接 Trim by Ranges。",
                 }),
                 "timeline_data": ("STRING", {"default": DEFAULT_TIMELINE, "multiline": True, "dynamicPrompts": False}),
             },
         }
 
-    RETURN_TYPES = ("MF_SEGMENT_PLAN", "SILENCE_RANGES", "STRING", "INT", "INT")
-    RETURN_NAMES = ("segment_plan", "ranges", "plan_json", "segment_count", "total_frames")
+    # 新輸出只能加在最後：存檔的連線記的是 slot 編號
+    RETURN_TYPES = ("MF_SEGMENT_PLAN", "SILENCE_RANGES", "STRING", "INT", "INT", "STRING")
+    RETURN_NAMES = ("segment_plan", "ranges", "plan_json", "segment_count", "total_frames", "video_path")
     FUNCTION = "edit"
     CATEGORY = "MediaForge/Video"
 
@@ -57,8 +59,9 @@ class MF_EditTimeline:
         plan = compile_plan(data, mode, fps, grid, source, snapshots)
         if source is not None and source["source_start_us"] is None:
             print(format_message("Edit Timeline", "W_SOURCE_TIME_UNKNOWN"))
+        # video_path：cut 模式的下游（Trim by Ranges）用同一個檔，不必再選一次；沒選來源時是空字串
         return (plan, cut_ranges_seconds(plan), json.dumps(plan, ensure_ascii=False),
-                len(plan["segments"]), plan["total_frames"])
+                len(plan["segments"]), plan["total_frames"], source["path"] if source else "")
 
     @classmethod
     def IS_CHANGED(s, **kwargs):
