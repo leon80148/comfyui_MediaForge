@@ -36,7 +36,7 @@ const UPLOAD_SUBFOLDER = "mediaforge_timeline";
 const NO_SOURCE = "(none)";
 const EDITOR_HEIGHT = 700;
 const MIN_NODE_WIDTH = 700;
-const DEFAULT_OVERLAP = { "h3_5+17n": 22, "causal_4n+1": 5, "causal_8n+1": 9, free: 0 };
+const DEFAULT_OVERLAP = { "h3_5+17n": 22, free: 0 };
 const SEGMENT_COLORS = ["#3d7bd9", "#d98a3d", "#3dae73", "#a95ad1", "#d14f6b", "#4cb0c2"];
 const KIND_COLORS = { image: "#5c8f3a", video: "#3a6f8f", audio: "#8f6a3a" };
 const KIND_ICON = { image: "🖼", video: "🎞", audio: "🔊" };
@@ -326,7 +326,7 @@ class TimelineEditor {
         this.widget.serialize = false;
         this.setJsonVisible(false);
         this.applyWidgetLabels();
-        for (const name of ["fps", "grid", "mode"]) chainWidget(this.w[name], () => this.render());
+        for (const name of ["fps", "mode"]) chainWidget(this.w[name], () => this.render());
         chainWidget(this.w.video, () => this.loadSource());
         // While broken, the raw JSON box is the editing surface; pick the timeline back up once it is fixed.
         chainWidget(this.w.timeline_data, () => this.broken && this.hydrate());
@@ -1481,7 +1481,7 @@ class TimelineEditor {
             rows.push(el("span", { text: S.withAudioGuide }), audio);
         }
         // a keyframe has no length, an H3 guide cannot be split losslessly: no button that can only refuse
-        const canSplit = a.role === "lock" || (a.role === "guide" && !st.h3);
+        const canSplit = a.role === "lock";
         rows.push(el("span"), el("div", { class: "mf-tl-chips" }, [
             canSplit ? button(S.split, () => this.splitSelected()) : null, button(S.remove, () => this.removeSelected()),
         ]));
@@ -1498,17 +1498,12 @@ class TimelineEditor {
                 : `${S.seconds((info.duration_us ?? 0) / 1e6)}${m.kind === "video" ? ` · ${info.display_size?.join("×")}${info.has_audio ? ` · ${S.hasAudio}` : ""}` : ` · ${info.audio_sample_rate} Hz`}`;
         const i = Math.min(this.view.active, this.data.segments.length - 1);
         const place = (lane) => () => this.apply(createFromCard(this.data, id, lane, this.view.playhead, this.editContext()));
-        const uses = [];
-        if (st.h3) {
-            const item = tagButtons(this.data, i, this.ctx).items?.[id];
-            const use = button(item?.state === "insert" ? S.insertTag(m.name, i + 1) : S.useInSegment(i + 1),
-                () => this.apply(useRefTag(this.data, i, id, this.editContext())),
-                { title: item?.state === "blocked" ? this.refusalText(item) : S.useInSegmentTitle, "data-fk": "use" });
-            use.disabled = !item || item.state === "blocked";
-            uses.push(use);
-        } else {
-            uses.push(button(S.addRefPlain(i + 1), () => this.apply(createFromCard(this.data, id, "refs", emitIntervals(this.data.segments)[i][0], this.editContext())), { "data-fk": "use" }));
-        }
+        const item = tagButtons(this.data, i, this.ctx).items?.[id];
+        const use = button(item?.state === "insert" ? S.insertTag(m.name, i + 1) : S.useInSegment(i + 1),
+            () => this.apply(useRefTag(this.data, i, id, this.editContext())),
+            { title: item?.state === "blocked" ? this.refusalText(item) : S.useInSegmentTitle, "data-fk": "use" });
+        use.disabled = !item || item.state === "blocked";
+        const uses = [use];
         const lane = m.kind === "audio" ? "audio" : "visual";
         this.placeButton = { element: button("", place(lane), { "data-fk": "use-lane" }), id, lane };
         this.syncPlaceButton();
@@ -1637,8 +1632,7 @@ class TimelineEditor {
     nextStep(st) {
         const linked = (name) => (this.node.outputs?.find((o) => o.name === name)?.links?.length ?? 0) > 0;
         if (linked("segment_plan") || linked("ranges")) return "";
-        if (st.mode === "cut") return S.next.cut;
-        return st.h3 ? S.next.h3 : S.next.loop;
+        return st.mode === "cut" ? S.next.cut : S.next.h3;
     }
 
     // during a gesture the status line says why the current position cannot be dropped / committed
@@ -2414,11 +2408,27 @@ function fallback(node, error) {
     node.setDirtyCanvas?.(true, true);
 }
 
+// Only MiniMax H3 is left, so `grid` has one value: its dropdown is hidden for good. A value saved by an older version
+// (free / causal_*) is put back, or the server refuses the prompt ("Value not in list") over a widget nobody can see.
+function lockGrid(node) {
+    const w = findWidget(node, "grid");
+    if (!w) return;
+    w.value = H3_GRID;
+    w.hidden = true;
+    w.computeSize = () => [0, -4];
+    // as dual_input_lock's relayout does for the widgets it hides: give the row back, never shrink the user's width
+    if (node.setSize && node.computeSize) {
+        const min = node.computeSize();
+        node.setSize([Math.max(node.size[0], min[0]), min[1]]);
+    }
+}
+
 app.registerExtension({
     name: "MediaForge.TimelineEditor",
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_TYPE) return;
         chainCallback(nodeType.prototype, "onNodeCreated", function () {
+            lockGrid(this);
             try {
                 this.mfTimeline = new TimelineEditor(this);
             } catch (e) {
@@ -2426,6 +2436,7 @@ app.registerExtension({
             }
         });
         chainCallback(nodeType.prototype, "onConfigure", function () {
+            lockGrid(this);  // configure has just restored the saved widget values
             if (!this.mfTimeline) return;
             try {
                 const handover = HANDOVER.get(this.id);

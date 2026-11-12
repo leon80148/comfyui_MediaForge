@@ -8,7 +8,7 @@ import json
 from ..utils.cache_key import path_fingerprint
 from ..utils.timeline_media import describe_material
 from ..utils.timeline_messages import format_message
-from ..utils.timeline_plan import FPS_PRESETS, GRIDS, MODES, compile_plan, cut_ranges_seconds, parse_timeline_data
+from ..utils.timeline_plan import FPS_PRESETS, H3_GRID, MODES, compile_plan, cut_ranges_seconds, parse_timeline_data
 from ..utils.timeline_source import describe_source, resolve_timeline_source
 from .select_video import _list_input_videos
 
@@ -31,9 +31,10 @@ class MF_EditTimeline:
                     "default": "24",
                     "tooltip": "時間軸每秒幀數。生成新影片且使用 H3 段長規則時，必須設為 24 fps。",
                 }),
-                "grid": (list(GRIDS), {
-                    "default": "h3_5+17n",
-                    "tooltip": "決定每段的長度與重疊規則，請依下游模型選擇。此處不會選擇或載入模型。剪現有影片時不使用。",
+                # 只剩一個值、介面上隱藏：欄位留著是為了不讓舊 workflow 的 widgets_values 錯位（C2）
+                "grid": ([H3_GRID], {
+                    "default": H3_GRID,
+                    "tooltip": "固定為 MiniMax H3 的段長規則（每段 5+17n 幀），不需要設定。剪現有影片時不使用。",
                 }),
                 "mode": (list(MODES), {
                     "default": "generate",

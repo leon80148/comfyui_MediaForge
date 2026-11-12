@@ -219,7 +219,7 @@ def _provenance(segment, state, previous_latent):
 
 
 def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=None, previous_latent=None,
-                  video_taper_tokens=2, audio_taper_tokens=2, experimental_causal=False, on_conflict="error"):
+                  video_taper_tokens=2, audio_taper_tokens=2, on_conflict="error"):
     """MF_ExtendLatent 的引擎 → (新 LATENT dict, report dict)。不修改任何輸入。"""
     require_segment(segment, ("extend",), EXTEND_LABEL)
     samples = target_latent["samples"]
@@ -254,8 +254,6 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
         source = "state" if state is not None else "previous_latent" if previous_latent is not None else None
         if source is None or (state is not None and state["carry"] is None):
             raise TimelineError(EXTEND_LABEL, "E_CARRY_SOURCE")
-        if grid.startswith("causal") and not experimental_causal:
-            raise TimelineError(EXTEND_LABEL, "E_CAUSAL")
         provenance = _provenance(segment, state, previous_latent)
         if provenance == "absent":
             print(format_message(EXTEND_LABEL, "W_PROVENANCE"))
@@ -281,8 +279,8 @@ def extend_latent(target_latent, segment, mask="hard", carry_audio=False, state=
                 raise TimelineError(EXTEND_LABEL, "E_MASK_CONFLICT")
             new_streams[i] = _write_head(stream, dim, tail)
             dtypes[name] = str(stream.dtype).removeprefix("torch.")
-            # H3 先把 mask 量化成 ceil(m·256)/256 再換算逐 token timestep；其他模型直接用原值
-            effective = torch.ceil(weights * 256.0) / 256.0 if grid == H3_GRID else weights
+            # H3 先把 mask 量化成 ceil(m·256)/256 再換算逐 token timestep（有 carry 的一定是 H3 grid）
+            effective = torch.ceil(weights * 256.0) / 256.0
             details[name] = {"source_range": [offset, offset + k], "target_range": [0, k], "tokens": k,
                              "taper_tokens": taper if mask == "taper" else None,
                              "requested": weights.tolist(), "effective": effective.tolist(), "conflicts": conflicts}

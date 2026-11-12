@@ -122,10 +122,6 @@ const WIDGET_VALUE_LOCKS = {
     "MF_ConcatVideos": [
         { trigger: "codec", value: "prores (prores_ks)", hide: ["crf", "preset"] },
     ],
-    // cut mode ignores the grid (effective grid is always "free"), so the dropdown would be dead UI.
-    "MF_EditTimeline": [
-        { trigger: "mode", value: "cut", hide: ["grid"] },
-    ],
     // Taper sizes are only read in taper mode; the audio taper only when audio is carried.
     // carry_audio is a BOOLEAN widget, so its value is a bare boolean (compared with ===).
     "MF_ExtendLatent": [

@@ -145,7 +145,7 @@ class MF_SampleSegments:
             ext = graph.node("MF_ExtendLatent", f"ext_{i}", target_latent=enc.out(1),
                              segment=segment_view(spec, "extend"), mask=mask, carry_audio=carry_audio,
                              video_taper_tokens=video_taper_tokens, audio_taper_tokens=audio_taper_tokens,
-                             experimental_causal=False, on_conflict=on_conflict, **carry)
+                             on_conflict=on_conflict, **carry)
             noise = graph.node("RandomNoise", f"noise_{i}",
                                noise_seed=spec["seed"] if spec["seed"] is not None else noise_seed)
             if negative is not None:

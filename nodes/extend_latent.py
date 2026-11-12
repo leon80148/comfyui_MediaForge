@@ -33,7 +33,6 @@ class MF_ExtendLatent:
                     "default": 2, "min": 0, "max": 1000000, "step": 1,
                     "tooltip": "taper 時 audio 續接區尾端放寬的 token 數，不得超過續接 token 數。",
                 }),
-                "experimental_causal": ("BOOLEAN", {"default": False, "tooltip": "啟用 Wan／LTX 等因果 grid 續接；接縫可能不連續。"}),
                 "on_conflict": (["error", "carry_wins"], {
                     "default": "error",
                     "tooltip": "error 停止；carry_wins 覆寫續接區的 samples 與 mask。",
@@ -47,13 +46,12 @@ class MF_ExtendLatent:
     CATEGORY = "MediaForge/AI"
 
     def extend(self, target_latent, segment, mask, carry_audio, state=None, previous_latent=None,
-               video_taper_tokens=2, audio_taper_tokens=2, experimental_causal=False, on_conflict="error"):
+               video_taper_tokens=2, audio_taper_tokens=2, on_conflict="error"):
         if state is not None:
             segment_spill.check_state(state, EXTEND_LABEL)  # an old saved state gets the re-run message, not E_PROVENANCE
         latent, report = extend_latent(
             target_latent, segment, mask=mask, carry_audio=carry_audio, state=state, previous_latent=previous_latent,
-            video_taper_tokens=video_taper_tokens, audio_taper_tokens=audio_taper_tokens,
-            experimental_causal=experimental_causal, on_conflict=on_conflict)
+            video_taper_tokens=video_taper_tokens, audio_taper_tokens=audio_taper_tokens, on_conflict=on_conflict)
         return (latent, json.dumps(report, ensure_ascii=False))
 
 

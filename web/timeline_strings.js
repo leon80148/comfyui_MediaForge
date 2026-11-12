@@ -9,9 +9,6 @@ export const S = {
     modes: { generate: "生成新影片（generate）", cut: "剪現有影片（cut）" },
     grids: {
         "h3_5+17n": "MiniMax H3 段長規則（h3_5+17n）",
-        "causal_4n+1": "Wan 2.2 類段長規則（causal_4n+1；接續實驗性）",
-        "causal_8n+1": "LTX-2 類段長規則（causal_8n+1；接續實驗性）",
-        free: "自由段長（free）",
     },
     fpsOption: (key, value) => (key.includes("/") ? `${value.toFixed(3)} fps（${key}）` : `${key} fps`),
     noneGenerate: "不使用來源影片",
@@ -150,7 +147,6 @@ export const S = {
     useInSegment: (n) => `＋ 用在第 ${n} 段`,
     useInSegmentTitle: "加入這段的參考，並在 prompt 插入標籤",
     insertTag: (name, n) => `插入 <@${name}> 到第 ${n} 段`,
-    addRefPlain: (n) => `＋ 當第 ${n} 段的參考`,
     addVisual: (seconds) => `＋ 在 ${seconds.toFixed(2)} 秒指定畫面`,
     addLock: (seconds) => `＋ 從 ${seconds.toFixed(2)} 秒保留原音`,
     split: "分割（S）",
@@ -262,7 +258,6 @@ export const S = {
     fadeShortened: (list) => `第 ${list.join("、")} 段的交叉淡化已縮短或改回直接切換`,
     next: {
         h3: "下一步：把 segment_plan 接到 🎛️ Sample Segments",
-        loop: "下一步：把 segment_plan 接到 🎯 Select Segment",
         cut: "下一步：把 ranges 接到 ✂️ Trim by Ranges",
     },
     jsonBroken: "timeline_data 內容有誤，圖形編輯已暫停。請在下方文字框修正，修好會自動恢復",

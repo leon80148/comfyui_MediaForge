@@ -20,7 +20,7 @@ FPS_PRESETS = {
     "24000/1001": (24000, 1001), "30000/1001": (30000, 1001),
     "48": (48, 1), "50": (50, 1), "60000/1001": (60000, 1001), "60": (60, 1),
 }
-GRIDS = ("h3_5+17n", "causal_4n+1", "causal_8n+1", "free")
+GRIDS = ("h3_5+17n", "free")
 MODES = ("generate", "cut")
 SEAM_KINDS = ("cut", "crossfade")
 AUDIO_CURVES = ("auto", "linear", "equal_power")
@@ -31,8 +31,8 @@ H3_GRID = "h3_5+17n"
 H3_FPS = (24, 1)
 
 # (合法長度 / carry 重疊的起點, 步長)。h3: 5+17n 幀 ↔ 2+5n token（core VAE 的
-# (1,4,4,4,4) token 週期）；causal: 1+k·n 幀 ↔ 1+n token。
-_GRID_STEPS = {"h3_5+17n": (5, 17), "causal_4n+1": (1, 4), "causal_8n+1": (1, 8)}
+# (1,4,4,4,4) token 週期）。free 沒有格點：cut 模式固定用它，不產生 carry。
+_GRID_STEPS = {"h3_5+17n": (5, 17)}
 
 
 def sample_index(frame, sample_rate, fps):
@@ -59,9 +59,7 @@ def latent_tokens(grid, frames):
     if grid == "free":
         return None
     base, step = _GRID_STEPS[grid]
-    if grid == H3_GRID:
-        return 2 + 5 * ((frames - base) // step)
-    return 1 + (frames - base) // step
+    return 2 + 5 * ((frames - base) // step)
 
 
 def h3_audio_tokens(frames):
@@ -84,10 +82,7 @@ def h3_audio_carry(prev_length, overlap):
 def carry_spec(grid, prev_length, overlap):
     if overlap == 0 or grid == "free":
         return None
-    spec = {"video_tokens": latent_tokens(grid, overlap)}
-    if grid == H3_GRID:
-        spec.update(h3_audio_carry(prev_length, overlap))
-    return spec
+    return {"video_tokens": latent_tokens(grid, overlap), **h3_audio_carry(prev_length, overlap)}
 
 
 def _digest(text):
