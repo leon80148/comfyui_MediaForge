@@ -479,7 +479,10 @@ class TimelineEditor {
     problemText(p) {
         const e = p.error;
         const where = p.segment != null ? `${S.segment(p.segment + 1)}：` : "";
-        const why = () => S.problemReasons[e.reason] ?? S.unknownProblem;
+        const why = () => {
+            const text = S.problemReasons[e.reason];
+            return typeof text === "function" ? text(e) : text ?? S.unknownProblem;
+        };
         if (p.stage === "schema") return S.badField(this.placeText(e.location));
         if (p.stage === "grid") return S.invalid(this.placeText(e.location), S.reasons[e.reason] ?? e.reason);
         if (e.code === "E_ANCHOR_OVERLAP") {
