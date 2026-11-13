@@ -258,7 +258,7 @@ export const S = {
     fadeShortened: (list) => `第 ${list.join("、")} 段的交叉淡化已縮短或改回直接切換`,
     next: {
         h3: "下一步：把 segment_plan 接到 🎛️ Sample Segments",
-        cut: "下一步：把 ranges 與 video_path 接到 ✂️ Trim by Ranges（mode 選 keep），後面再接一顆輸出節點（例如 Preview Any）",
+        cut: "下一步：把 ranges 與 video_path 接到 ✂️ Trim by Ranges（mode 選 keep），後面再接一顆輸出節點（例如 PreviewAny）",
     },
     jsonBroken: "timeline_data 內容有誤，圖形編輯已暫停。請在下方文字框修正，修好會自動恢復",
 
