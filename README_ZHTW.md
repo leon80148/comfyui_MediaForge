@@ -10,7 +10,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## 亮點
 
-- 🎞️ **36 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）
+- 🎞️ **30 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）。另有 3 顆已註冊的內部節點，由 Sample Segments 執行時自己建立
 - 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + tensor_fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
 - 🚀 **智慧 GPU codec 預設** — 偵測到 NVENC 自動用 `h264_nvenc`，沒 GPU 的機器自動 fallback `libx264`。不必手動切、不會在沒卡的環境壞掉
 - 📡 **API-ready 輸出** — 每個產出檔案的節點都同時 emit ComfyUI `ui.images` metadata，`/history/<prompt_id>` 直接看到輸出檔名，`/view?filename=X&subfolder=Y&type=output` 可下載（見 [Using via API](#using-via-api)）
@@ -19,7 +19,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 - 🎚️ **單次編碼、多層 overlay 的 Compose pipeline** — `filter_complex` graph 編譯器，N 層 overlay 仍只走一次 re-encode
 - 🤖 **Provider-agnostic AI** — `MF_AIConfig` 讓 Whisper / Translate 在 OpenAI / Groq / OpenRouter / Gemini / Ollama / 本地 backend 之間一處切換
 - 🎬 **Video Batch** — 十分鐘的影片也能分批通過任何 IMAGE 節點（放大、遮罩、H3）：兩個節點、一個佇列項目，畫面留在磁碟而不是 RAM，最後產出一支完整的影片。見 [Video Batch](#video-batch批次處理長影片)
-- 🧵 **時間軸與長片** — 在附素材庫（參考圖片 / 影片 / 音訊、關鍵幀、錨定片段、鎖定原音）的視覺化編輯器規劃互相重疊的分段，把每段 latent 尾端續接到下一段，逐段解碼並暫存到磁碟，最後只編碼一次。MiniMax H3 AV 在迴圈路徑支援；單節點 H3 取樣器尚待 GPU 驗證；LTX-2 / Wan 2.2 為實驗性（見[時間軸與長片](#時間軸與長片)）
+- 🧵 **時間軸與長片** — 在附素材庫（參考圖片 / 影片 / 音訊、關鍵幀、錨定片段、鎖定原音）的視覺化編輯器規劃互相重疊的分段；一顆取樣節點逐段生成，把每段 latent 尾端續接到下一段、逐段解碼並暫存到磁碟，最後由一顆節點只編碼一次。只支援 MiniMax H3 AV。同一個編輯器也能標出要從現有影片剪出的區間（見[時間軸與長片](#時間軸與長片)）
 - 🪶 **輕量相依** — `requirements.txt` 只有四個小型純 Python 套件，加上找不到系統 `ffmpeg` / `ffprobe` 時才用的 `imageio-ffmpeg` / `static-ffmpeg`。全部用到才 import；`faster-whisper` 維持選裝
 - 🔁 **Tensor-native** — `IMAGE [B,H,W,C] float32` 跟 ComfyUI canonical 的 `AUDIO` dict；rawvideo roundtrip PSNR > 38 dB
 
@@ -31,7 +31,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 4. [Using via API（API 工作流）](#using-via-api)
 5. [智慧 GPU codec 預設](#智慧-gpu-codec-預設)
 6. [為什麼選這個 plugin（vs VideoHelperSuite）](#為什麼選這個-pluginvs-videohelpersuite)
-7. [節點清單（36）](#節點清單36)
+7. [節點清單（30）](#節點清單30)
 8. [AI Provider Recipes](#ai-provider-recipes)
 9. [Hidden Contracts（內部型別契約）](#hidden-contracts內部型別契約)
 10. [Architecture](#architecture)
@@ -102,18 +102,15 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 具體 `base_url` / `model` 組合可直接複貼 — 見下方 [AI Provider Recipes](#ai-provider-recipes)。
 
-### 4. H3 長片迴圈（5 個 MediaForge 節點 + core Start / End Loop）
+### 4. H3 長片（3 個 MediaForge 節點）
 
-把長片拆成互相重疊的 107 幀分段生成，最後只編碼一次。開啟 `example_workflows/timeline_h3_av_loop.json`（ComfyUI 的範本瀏覽器會列出），換成你自己的模型檔；或照下列步驟手動接線：
+把一支長 AV 片段拆成互相重疊的 107 幀分段生成，最後只編碼一次。開啟 `example_workflows/timeline_h3_basic.json`（ComfyUI 的範本瀏覽器會列出）並選自己的模型檔，或手動接線：
 
-1. `⏱️ Edit Timeline` — `fps = 24`、`grid = h3_5+17n`、`mode = generate`；三段 `[0,107)`、`[85,192)`、`[153,260)`，每段各寫一個 prompt。
-2. Core `Start Loop` — mode 選 `For`、`start_iteration_index = 0`、`max_iteration` ← Edit Timeline 的 `segment_count`。
-3. `🎯 Select Segment` — `segment_index` ← Start Loop 的 `iteration_index`；把它的 `prompt` 與 `length` 接到產生 conditioning 與空 latent 的 core H3 節點（例如 `MiniMaxH3ImageToVideo`）。
-4. `🧬 Extend Latent` — `target_latent` 接該空 latent、`mask = hard`、`carry_audio = True`、`state` ← Start Loop 的 `current_iteration_value`；輸出的 `latent` 接你的 sampler。
-5. `➕ Append Segment` — 接取樣後的 `latent` + video `vae` + `audio_vae`，`state` ← Start Loop 的 `current_iteration_value`；輸出的 `state` 同時接 End Loop 的 `next_iteration_value` **與** `output_value`（`accumulate = False`）。
-6. `🧵 Assemble Segments` — `state` ← End Loop 的 `outputs` → 一支 `.mp4`（260 幀、32 kHz 音訊）。
+1. `⏱️ Edit Timeline` — `fps = 24`、`mode = generate`；三段 `[0,107)`、`[85,192)`、`[153,260)`，每段一個 prompt。
+2. `🎛️ Sample Segments` — `segment_plan` ← Edit Timeline；`model`、`clip`、`vae`、`audio_vae`、`sampler`、`sigmas` 接你自己的 core 載入器 / 取樣器節點；`mask = hard`、`carry_audio = True`。
+3. `🧵 Assemble Segments` — `state` ← Sample Segments → 一個 `.mp4`（260 幀、32 kHz 音訊）。
 
-接線細節、其他模型與編輯器說明：見[時間軸與長片](#時間軸與長片)。要用參考素材、以單一取樣節點取代迴圈：`example_workflows/timeline_h3_director.json`。
+編輯器、素材與限制見[時間軸與長片](#時間軸與長片)。要用參考圖片、錨定片段與鎖定原音：`example_workflows/timeline_h3_director.json`。不生成、只剪現有影片：`example_workflows/timeline_cut.json`。
 
 ## Video Batch（批次處理長影片）
 
@@ -196,49 +193,32 @@ Start 的 `audio` 輸出只有接線才解碼，`keep_source_audio` 關閉時也
 
 ## 時間軸與長片
 
-> 將長片拆成互相重疊的短段。Latent 是模型使用的壓縮表示；Extend 把上一段尾端放進下一段開頭，用遮罩指定保留與重新生成的程度。sampler 負責生成；Append 逐段解碼、去重並暫存到磁碟，Assemble 最後編碼成影片。這能減少同時保留的解碼畫面，但不保證接縫無痕或總記憶體固定。
+> 將長片拆成互相重疊的短段。Latent 是模型使用的壓縮表示；每一段從上一段的 latent 尾端開始，用遮罩指定這部分可以改變多少，其餘由 sampler 生成。每段完成後解碼、去掉重複的重疊並暫存到磁碟，最後一次編碼成影片。這能減少同時保留的解碼畫面，但不保證接縫無痕或總記憶體固定。
 
-兩種執行方式：
+生成只有一種接法，剪片也只有一種：
 
-| 路徑 | 節點 | 模型 |
+| 要做的事 | 節點 | 需要 |
 |---|---|---|
-| 單節點 H3 導演 | `⏱️ Edit Timeline`（含素材）→ `🎛️ Sample Segments` → `🧵 Assemble Segments` | 只支援 MiniMax H3 |
-| 迴圈 | `⏱️ Edit Timeline` → core Start Loop → `🎯 Select Segment` → conditioning → `🧬 Extend Latent` → 你的 sampler → `➕ Append Segment` → core End Loop → `🧵 Assemble Segments` | H3，以及 LTX-2 / Wan 2.2（實驗性）—— 見[相容性](#相容性) |
+| 生成長片 | `⏱️ Edit Timeline`（`mode = generate`，可帶素材也可不帶）→ `🎛️ Sample Segments` → `🧵 Assemble Segments` | MiniMax H3 模型（唯一支援的模型家族）、24 fps |
+| 剪現有影片 | `⏱️ Edit Timeline`（`mode = cut`）→ `✂️ Trim by Ranges`（`mode = keep`） | 一支放在 `input/` 的影片；不需要模型 |
 
-**單節點。** `🎛️ Sample Segments` 接你的 model、CLIP、VAE、audio VAE、sampler 與 sigmas，執行時逐段展開成一組節點：`🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider`（接了 `negative` 時改用 `CFGGuider`）+ `SamplerCustomAdvanced` → `➕ Append Segment`。它只組合 ComfyUI core 節點類別與 MediaForge 節點 —— 沒有自己的取樣程式，不載入也不 patch 模型。組內節點的錯誤顯示在 Sample Segments 節點上；訊息標籤寫的是內部節點名稱（例如 `[Encode H3 Segment]`）。
+**生成。** `🎛️ Sample Segments` 接你的 model、CLIP、VAE、audio VAE、sampler 與 sigmas，執行時逐段展開成一組節點：`🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider`（接了 `negative` 則用 `CFGGuider`）+ `SamplerCustomAdvanced` → `➕ Append Segment`。它只負責把 ComfyUI core 節點與 MediaForge 節點接起來 —— 沒有自己的取樣程式碼，也不載入或 patch 模型。其中三顆 MediaForge 節點是[內部節點](#內部節點)：你不需要自己放，節點選單裡也不會出現。展開內部出錯時，錯誤顯示在 Sample Segments 節點上，訊息開頭的標籤是內層節點名稱（例如 `[Encode H3 Segment]`）。模型載入、text encoder、sampler 與 scheduler 仍用你自己的 core 節點。
 
-**迴圈。** `⏱️ Edit Timeline` 規劃分段、`🎯 Select Segment` 每輪取出一段、`🧬 Extend Latent` 把上一段尾端寫進新段的 latent、`➕ Append Segment` 解碼並暫存、`🧵 Assemble Segments` 編碼成品。conditioning 部分：H3 用 `🧩 Encode H3 Segment` 把本段 prompt 與素材編成 conditioning 與空 AV latent（取代 `MiniMaxH3ImageToVideo` 的位置）；其他模型用 `🗂️ Load Segment Media` 把每個素材取成 IMAGE / AUDIO 接到你自己的節點，`📽️ Load Segment Frames` 讀出來源影片對應區間的畫面與音訊（也可不經模型直接組裝）。模型載入、文字編碼與 sampler 仍是你自己的 core 節點。
-
-### 迴圈接線
-
-```
-Start Loop（mode For：start_iteration_index 0，max_iteration ← Edit Timeline.segment_count）
-  ├─ iteration_index ─────────► Select Segment.segment_index
-  └─ current_iteration_value ─► Extend Latent.state + Append Segment.state   （首輪為 None）
-Append Segment.state ─► End Loop.next_iteration_value + End Loop.output_value   （accumulate = False）
-End Loop.outputs ─► Assemble Segments.state
-```
-
-- `Start Loop` / `End Loop` 是 ComfyUI core 節點（`utilities/looping`）。迴圈本體是 Select Segment → 你的 conditioning / 空 latent 節點 → Extend Latent → 你的 sampler → Append Segment。
-- Start Loop 的 `cache_iterations`（advanced）：`True` 時若只改 Assemble 設定，未變動的分段可直接重用；`False` 每輪都重算。
-- 迴圈本體內的 preview 或其他副作用節點必須也接到 End Loop 的 `terminations`，否則 core 會以「Loop body is not closed」拒絕整個 prompt。
-- 不用迴圈、直接線性串接也可以：每段各一組 Select / Extend / sampler / Append，每個 Append 的 `state` 接到下一段 Extend 與 Append 的 `state`（或把前一段取樣後的 latent 接到 Extend 的 `previous_latent`）。
+**剪片。** `cut` 模式的 Edit Timeline 需要來源 `video`，由你標出要保留的區間。把它的 `ranges` 與 `video_path` 輸出接到 `✂️ Trim by Ranges`、`mode` 選 `keep`：區間會從同一個檔案剪出來、依序接起來。區間是用秒傳過去的，成品沿用來源影片自己的幀率 —— 以三個 48 幀（24 fps 時間軸）的區間實測：24 fps 來源得到的正好是這些區間的 144 個來源幀；30 fps 來源得到 180 幀，同樣是 6.000 秒。Trim by Ranges 不是 output node，後面要再接一顆 output node（範例用 core `PreviewAny` 顯示成品路徑），否則 ComfyUI 沒有東西可以執行。cut 模式不接受素材，也沒有 prompt。
 
 ### 範例 workflow
 
-ComfyUI 會在範本瀏覽器列出 plugin 的 `example_workflows/` 目錄。模型欄位是 `SELECT_*` 佔位值 —— 請換成你自己的檔案。codec 為 `h264 (libx264)`。
+ComfyUI 會把 plugin 的 `example_workflows/` 資料夾列在範本瀏覽器。模型欄位是 `SELECT_*` 佔位值 —— 請選自己的檔案。codec 為 `h264 (libx264)`。
 
 | 檔案 | 內容 |
 |---|---|
-| `timeline_h3_av_loop.json` | 三段 MiniMax H3 AV 迴圈，含音訊續接 |
-| `timeline_ltx2_video_carry.json` | 兩段 LTX-2，只續接 video，單段式 sampler |
-| `timeline_wan22_experimental.json` | 兩段 Wan 2.2，high / low sampler 加上 re-Extend 修正 |
-| `timeline_frames_assembly.json` | 不用模型：來源影片 → Load Segment Frames → Append → Assemble |
-| `timeline_h3_director.json` | 兩段 MiniMax H3 經 Sample Segments：一張參考圖、一支參考影片 + 錨定片段、一段鎖定原音；Assemble `lock_audio = original`。三個素材檔是 `input/mediaforge_timeline/` 下的佔位檔名 —— 請換成你自己的 |
+| `timeline_h3_basic.json` | 純文字：3 段 MiniMax H3、每段 107 幀、重疊 22 / 39 → 260 幀。選好模型檔就能執行 |
+| `timeline_h3_director.json` | 2 段帶素材的 MiniMax H3：一張圖片參考、一支影片參考 + 錨定片段、一段鎖定原音；Assemble `lock_audio = original`。三個素材檔是 `input/mediaforge_timeline/` 下的佔位檔名 —— 請換成自己的 |
+| `timeline_cut.json` | 不需要模型：Edit Timeline（`cut`）→ Trim by Ranges（`ranges` + `video_path`、`mode = keep`）→ 預覽。請先選自己的影片 |
 
 ### 時間軸編輯器
 
-Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。四個原生 widget 顯示白話標籤（`來源影片（video）`、`每秒幀數（fps）`、`段長規則（grid）`、`用途（mode）`，以及 `MiniMax H3 段長規則（h3_5+17n）`、`生成新影片（generate）` 這類選項），只改顯示：存檔與 API 用的名稱和值不變。
+Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看得到的三個原生 widget 顯示白話標籤（`來源影片（video）`、`每秒幀數（fps）`、`用途（mode）`，以及 `生成新影片（generate）` 這類選項），只改顯示：存檔與 API 用的名稱和值不變。第四個 `grid` 只剩一個值，維持隱藏。
 
 版面由上而下：預覽與素材庫、工具列、軌道（左欄標示分段 / 參考 / 指定畫面 / 保留原音，空軌道有用途提示）、狀態列、inspector。時間一律秒數在前，例如 `4.46 秒（107 幀）`。`？` 開啟名詞說明與快捷鍵。
 
@@ -246,17 +226,17 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。四�
 
 分段（`generate`，生成新影片）：
 
-- 拖曳分段邊界。右邊界改段長、左邊界改與前段的重疊，後續各段跟著平移（ripple），邊界會吸附到該 grid 的合法值。
-- inspector 第一層：這段的 prompt、參考素材標籤、長度 `[−] 4.46 秒（107 幀） [＋]`（只走合法值；`free` 每次約 1 秒）、`從這段開始新鏡頭` / `接續前一段`。
+- 拖曳分段邊界。右邊界改段長、左邊界改與前段的重疊，後續各段跟著平移（ripple），邊界會吸附到合法值（段長 5 + 17n 幀；重疊 0 或 5 + 17j 幀）。
+- inspector 第一層：這段的 prompt、參考素材標籤、長度 `[−] 4.46 秒（107 幀） [＋]`（只走合法值）、`從這段開始新鏡頭` / `接續前一段`。
 - `進階設定`：與前段重疊、精確起點 / 終點（幀）、成品銜接方式（直接切換，或交叉淡化 + 淡化長度 + 聲音淡化方式）、seed。
-- 自動分段：段數、每段長度、與前段重疊。下拉列出可用的值並顯示秒數與幀數，也可自訂；`free` 直接輸入幀數。套用時依序保留各段的 prompt、seed 與仍放得下的交叉淡化，不會搬動素材；預覽會先說明哪幾段會被移除、哪些淡化會重設、參考歸屬如何改變，以及套用後會出現的問題。一個 undo 步驟。
+- 自動分段：段數、每段長度、與前段重疊。下拉列出可用的值並顯示秒數與幀數，也可自訂。套用時依序保留各段的 prompt、seed 與仍放得下的交叉淡化，不會搬動素材；預覽會先說明哪幾段會被移除、哪些淡化會重設、參考歸屬如何改變，以及套用後會出現的問題。一個 undo 步驟。
 
 剪輯（`cut`，剪現有影片）：
 
 - 播放或拖曳尺規找位置，`設為起點 I` / `設為終點 O` 直接提交，各一個 undo 步驟。起點超過目前終點時整段移過去並保留長度；碰到下一段或來源結尾時縮短，並說明新長度。
 - `在目前位置新增一段` 依影片順序插入；位置已在某段內或已是來源結尾時會拒絕並說明。`刪除這段`（或 `Delete`）可刪任一段，最後一段不能刪。區間一律依影片順序、互不重疊。
 - 拖曳邊界以整數幀在相鄰兩段之間移動；可匯入 🎞️ Detect Scenes 的 `ranges_json`。
-- 共用 prompt 與段落 prompt 都會顯示，因為 Select Segment 會輸出它們。
+- `cut` 沒有 prompt 欄位：只剪片時沒有東西會讀 prompt。
 - 資料裡還有素材時無法執行，狀態列提供 `移除素材`（檔案仍在 `input/`，prompt 不動）與 `切回生成新影片`。
 
 來源影片：預覽選定的來源；瀏覽器無法播放的 codec 會改用小尺寸、無聲的 H.264 proxy。`上傳來源影片` 把來源存到 `input/mediaforge_timeline/`。沒有可播放內容時播放鍵停用並說明。播放的是來源影片或選中的素材，不是生成結果。
@@ -273,17 +253,17 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。四�
   | 音訊 | 參考，範圍 = 該段扣除開頭重疊後的部分 | — | 從落點開始保留原音（`lock`），長度到素材結尾或時間軸結尾 |
 
 - **長條** —— 拖曳移動、拖曳端點修剪，`S`（或「分割」）在播放頭分割，`Delete` / `Backspace` 刪除，`Alt + ←/→` 微調 1 幀（`Shift` ×10），`Escape` 取消拖曳。長條與分段可用 `Tab` 取得焦點。長條在 8 px 內依序吸附段界、播放頭、其他長條的端點；會讓時間軸不合法的編輯（例如「接續前一段」把引導片段推過段界）會被拒絕並說明原因、不寫入。參考會在最接近播放頭的段界分割（不會切在段內）；關鍵畫面與 H3 引導片段不能分割（兩個 17k + 5 長度加起來不會是另一個合法長度），所以不顯示分割按鈕。數值在 inspector 編輯：參考的範圍、`follow` / `fixed`、內容起點 / 長度、音軌與順序（排序上移 / 下移 —— 順序可能影響標籤編號）；指定的位置、內容起點 / 長度與音軌。保留原音的 inspector 另外說明實際範圍、是否被截短，以及成品換回原聲的條件。
-- **標籤按鈕**（只限 H3 grid）—— `✓ 名稱`：已是本段參考，點一下插入 `<@名稱>`。`＋ 名稱`：點一下同時建立本段參考並插入標籤，一個 undo 步驟；prompt 已有該標籤時只補參考。無法使用時停用，並在提示文字說明原因（同素材多條參考、該類已達上限、素材未讀取完成）。只想加參考不插標籤時，把卡片拖到軌道。
-- **Prompt** —— 共用 prompt 給沒寫 prompt 的段使用；段落有自己的 prompt 就取代它、不會合併。表單持續顯示目前是哪一種，並可 `清空，改用共用 prompt`。需要插入標籤而本段空白時，會先把共用文字複製到本段並說明；只補共用 prompt 已有標籤的參考時，繼續使用共用 prompt。影片參考的配對音軌寫 `<@名稱:audio>`。每段把別名解析成自己的 `<Picture N>` / `<Video N>` / `<Audio N>` 標籤（只限 H3 grid）。直接手寫的編號標籤仍可用，但參考順序改變時意義會跟著變；對應明確時可按「轉成 <@名稱>」改寫成別名，新增參考前也會先做這個轉換，轉不了就拒絕並說明。
+- **標籤按鈕** —— `✓ 名稱`：已是本段參考，點一下插入 `<@名稱>`。`＋ 名稱`：點一下同時建立本段參考並插入標籤，一個 undo 步驟；prompt 已有該標籤時只補參考。無法使用時停用，並在提示文字說明原因（同素材多條參考、該類已達上限、素材未讀取完成）。只想加參考不插標籤時，把卡片拖到軌道。
+- **Prompt** —— 共用 prompt 給沒寫 prompt 的段使用；段落有自己的 prompt 就取代它、不會合併。表單持續顯示目前是哪一種，並可 `清空，改用共用 prompt`。需要插入標籤而本段空白時，會先把共用文字複製到本段並說明；只補共用 prompt 已有標籤的參考時，繼續使用共用 prompt。影片參考的配對音軌寫 `<@名稱:audio>`。每段把別名解析成自己的 `<Picture N>` / `<Video N>` / `<Audio N>` 標籤。直接手寫的編號標籤仍可用，但參考順序改變時意義會跟著變；對應明確時可按「轉成 <@名稱>」改寫成別名，新增參考前也會先做這個轉換，轉不了就拒絕並說明。
 - **這段送給模型的內容** —— 收合時一行摘要（例如 `1 張圖、1 支影片、保留原音 3.96 秒`）。展開後每段在所有素材讀取完成時顯示：標籤對照表、每支參考影片實際使用的秒數與幀數（以及未使用多少）、關鍵畫面與引導片段的時間、保留原音的範圍、解析後的 prompt，以及 H3 技術細節（token 範圍以 `[起點, 終點)` 表示、覆蓋圖、接續邊界偏差）。錯誤與「保留原音和接續前段的聲音重疊」的警告不會隨收合隱藏。
 - **Seed** —— 每段可選的 seed，附「換一個」；空白 = 使用 Sample Segments 的 `noise_seed`。只有 Sample Segments 會套用。
-- **鏡頭切換 / 接續** —— 「從這段開始新鏡頭」把該段與前段的重疊設為 0、銜接改為直接切換，生成時不接續前段；本段與後續各段及屬於它們的參考與指定一起平移，跨過舊段界的項目會被標示。「接續前一段」恢復該 grid 的預設重疊（H3：22 幀；段太短時取放得下的最大值）。`free` 沒有預設重疊，不顯示這個按鈕。各是一個 undo 步驟。
+- **鏡頭切換 / 接續** —— 「從這段開始新鏡頭」把該段與前段的重疊設為 0、銜接改為直接切換，生成時不接續前段；本段與後續各段及屬於它們的參考與指定一起平移，跨過舊段界的項目會被標示。「接續前一段」恢復預設重疊（22 幀；段太短時取放得下的最大值）。各是一個 undo 步驟。
 
 狀態列：
 
 - 第一行是持續狀態。`✓ 時間軸檢查通過` 只代表時間軸本身（結構、分段、素材位置、每段的 prompt 與上限），不檢查下游接線或模型。有問題時顯示白話的對象與原因，點一下定位，`詳情` 內有原始位置與代碼。
-- 少數問題附修復按鈕：長度或重疊不符（例如換了 grid）→ `調整段長與重疊`（依序只修不合法的值，後面的段會跟著移，交叉淡化放不下時縮短，不是整體最佳化）；H3 fps 不符 → `改成 24 fps`；cut 缺來源 → `上傳來源影片`；cut 帶素材 → 見上。一個 undo 步驟，並說明總長變化。
-- 第二行是這次操作的通知：哪幾段送給模型的內容變了；參考換了段或編號標籤改指別的素材時會明確點名，因為這些變更全部合法、檢查仍會通過。狀態正常且本節點輸出還沒接線時，提示下一步（H3 → 🎛️ Sample Segments、其他 → 🎯 Select Segment、cut → ✂️ Trim by Ranges）。
+- 少數問題附修復按鈕：長度或重疊不符（例如手改的 JSON）→ `調整段長與重疊`（依序只修不合法的值，後面的段會跟著移，交叉淡化放不下時縮短，不是整體最佳化）；generate 的 fps 不是 24 → `改成 24 fps`；cut 缺來源 → `上傳來源影片`；cut 帶素材 → 見上。一個 undo 步驟，並說明總長變化。
+- 第二行是這次操作的通知：哪幾段送給模型的內容變了；參考換了段或編號標籤改指別的素材時會明確點名，因為這些變更全部合法、檢查仍會通過。狀態正常且本節點輸出還沒接線時，提示下一步（generate → 🎛️ Sample Segments；cut → 把 ranges 與 video_path 接到 ✂️ Trim by Ranges）。
 
 一般：
 
@@ -298,10 +278,9 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。四�
 
 放在「保留原音」軌道上的音訊卡片（`role = lock`，執行訊息與技術段落稱「鎖定原音」）讓時間軸上該位置保留原始音訊，作用在兩個地方：
 
-- **取樣時**（只限 H3 —— Encode H3 Segment，兩條路徑都是；需要 `audio_vae`）：lock 觸及的每一段，完全落在 lock 內的音訊 token（每秒 40 個）會用你的 audio VAE 從原聲編碼 —— 使用前最多 4 秒、後最多 0.4 秒的有限上下文，是整段編碼的近似 —— 寫進音訊 latent 並設 `noise_mask = 0`。lock 邊緣不足一個 token 的部分照常生成。解碼前 Append 會確認鎖定 token 仍是寫入的值（latent 遺失 `mf_lock` metadata 或任一值偏差超過 1e-3 → `E_LOCK_DRIFT`）。這讓模型取樣的 latent 裡保有原聲；不宣稱對嘴。
-- **最終成品**（`generate` 模式的任何 grid）—— Assemble `lock_audio = original`（預設）組出 48 kHz 雙聲道 float 母帶：生成音軌在每個 lock 的區間 `[at, at + length)` 換回原聲，AAC 編碼前逐 sample 精確。`generated` 保留生成音軌。接上 `audio` 時整條取代並隱藏 `lock_audio`。沒有鎖音時此設定沒有作用；report 的 `effective` 欄位寫明實際套用與原因。
+- **取樣時**（在 Sample Segments 內由 Encode H3 Segment 進行；需要 `audio_vae`）：lock 觸及的每一段，完全落在 lock 內的音訊 token（每秒 40 個）會用你的 audio VAE 從原聲編碼 —— 使用前最多 4 秒、後最多 0.4 秒的有限上下文，是整段編碼的近似 —— 寫進音訊 latent 並設 `noise_mask = 0`。lock 邊緣不足一個 token 的部分照常生成。解碼前 Append 會確認鎖定 token 仍是寫入的值（latent 遺失 `mf_lock` metadata 或任一值偏差超過 1e-3 → `E_LOCK_DRIFT`）。這讓模型取樣的 latent 裡保有原聲；不宣稱對嘴。
+- **最終成品** —— Assemble `lock_audio = original`（預設）組出 48 kHz 雙聲道 float 母帶：生成音軌在每個 lock 的區間 `[at, at + length)` 換回原聲，AAC 編碼前逐 sample 精確。`generated` 保留生成音軌。接上 `audio` 時整條取代並隱藏 `lock_audio`。沒有鎖音時此設定沒有作用；report 的 `effective` 欄位寫明實際套用與原因。
 - **與續接的關係** —— lock 與某段從前段續接的音訊 token 重疊時，該段略過音訊續接（`W_LOCK_CARRY`，Sample Segments 的 report 也會記錄）；video 續接不受影響。該接縫的音訊連續性因此不保證。
-- `🗂️ Load Segment Media` 的 `kind = lock` 只把該區間的原聲交給你自己接線，不做任何鎖定。
 
 ### 增量重算
 
@@ -323,31 +302,26 @@ Sample Segments 以常數把每段規格傳進該段的節點組，ComfyUI 的�
 
 驗證環境：ComfyUI core 0.42.5、frontend 1.55.18（Nodes 2.0 與 classic）、RTX 5090 —— 這是測試環境，不是最低版本需求。
 
-| 模型 / 路徑 | 狀態 | 實測紀錄 |
+| 路徑 | 狀態 | 實跑紀錄 |
 |---|---|---|
-| MiniMax H3 AV — `grid = h3_5+17n`、24 fps、batch 1 | **支援** | 三段各 107 幀、重疊 22 與 39 → 260 幀、32 kHz 音訊 346,667 samples（最後 267 samples 為補齊）。續接的 latent token 經 sampler 後完全保留（最大差 ≤ 5e-7，denoise 0.5 亦同）。832×480 實測接縫縮圖 MAE ≈ 1（0–255 刻度）。`carry_audio = True` 僅限 H3 |
-| LTX-2 AV — `grid = causal_8n+1`、25 fps | 實驗性（需開 `experimental_causal`） | 只續接 video；音訊用 core `LTXVAudioVAEDecode` 解碼（輸出 24 kHz）後接 Append 的 `audio`。2 × 97 幀、重疊 17 → 177 幀；續接的 video token 完全保留。單段式 sampler（`SamplerCustomAdvanced`） |
-| Wan 2.2 T2V 14B — `grid = causal_4n+1`、16 fps | 實驗性（需開 `experimental_causal`） | 官方 high / low 兩段式 `KSamplerAdvanced` 需要[兩段式取樣器](#兩段式取樣器)的修正。2 × 81 幀、重疊 9 → 153 幀；Assemble 外接 48 kHz 音訊 → 459,000 samples |
-| 不用模型（frames 路徑） | 可用 | Load Segment Frames → Append 的 `frames` / `audio` → Assemble，搭配 Start / End Loop，在 core 四種快取模式（classic / lru / none / ram_pressure 預設）都通過 |
-| MiniMax H3 — Sample Segments（單節點） | **支援** | 832×480 與 320×192、turbo 4-step。與 loop 路徑同 seed / sampler / sigmas → 取樣後 latent 完全相同（最大差 0），同樣 260 幀 / 346,667 samples。core 收到的 `<Picture N>` / `<Video N>` / `<Audio N>` prompt、圖片順序與裁切後的參考幀數與時間軸一致；keyframe / guide 的 frame index 正確。鎖定的音訊 token 取樣後與原聲編碼差 ≤ 2.4e-7；`lock_audio = original` 的母帶在鎖音區間與原聲 PCM 逐 sample 相同；解碼後生成音訊與原聲的包絡相關 0.997–1.000。832×480 從 2 段到 6 段：觀測峰值 RSS 只多 0.15 GiB（一段 RGB 是 0.48 GiB）。改一段 seed 只重跑該段與下一段；加段只取樣新的一段 |
+| 生成 —— MiniMax H3 AV 經 Sample Segments、24 fps、batch 1 | **支援** | 832×480 與 320×192、turbo 4-step。3 段各 107 幀、重疊 22 與 39 → 260 幀、32 kHz 共 346,667 個音訊 sample（最後補 267 個）。core 收到的是時間軸解析後的 `<Picture N>` / `<Video N>` / `<Audio N>` prompt、圖片順序與裁切後的參考幀；關鍵幀 / 錨定片段的幀位置相符。鎖定的音訊 token 取樣後與編碼的原聲相差 2.4e-7 以內；`lock_audio = original` 的母帶在鎖定區間與原始 PCM 逐 sample 相同；解碼後的生成音訊與原聲的包絡相關係數 0.997–1.000。832×480 從 2 段增加到 6 段：觀察到的 RSS 峰值 +0.15 GiB（一段 RGB 是 0.48 GiB）。只改一段的 seed 只重新取樣該段與下一段；加一段只取樣新的那段 |
+| 剪片 —— Edit Timeline（`cut`）→ Trim by Ranges | 可用 | 不需要模型。來源幀率與時間軸相同時，保留的正好是各區間的來源幀；幀率不同的來源沿用自己的幀率（見[時間軸與長片](#時間軸與長片)） |
 
-2026-10-30 驗證（RTX 5090、ComfyUI 0.42.5、H3 fl2va fp8 + turbo 4-step LoRA）：上表 Sample Segments 一列是以真的 H3 模型量測。此外，Encode H3 Segment 有針對 core `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` 類別的契約測試；Sample Segments 的展開與快取有在真 core executor 上的測試（H3 模型節點用替身：每一種失效情況、LRU / RAM-pressure 模式的實際逐出、編碼 / 取樣 / 附加時中斷）。loop 路徑（core Start / End Loop 內的 Select → Encode H3 Segment → Extend → sampler → Append）也用同一份素材時間軸（2 張圖、3 支參考影片、一個關鍵幀與一個錨定片段）在 GPU 實跑：取樣後的 latent 與 Sample Segments 完全相同（最大差 0），同樣 192 幀 / 256,000 samples。
+2026-10-30 以真的 H3 模型量測（RTX 5090、ComfyUI 0.42.5、H3 fl2va fp8 + turbo 4-step LoRA）。另外兩項結果來自 0.12 以前的迴圈接線，它在相同 seed、sampler 與 sigmas 下取樣出的 latent 與 Sample Segments 逐位元相同（最大差 0）：續接的 latent token 經過 sampler 後完全保留（最大差 ≤ 5e-7）；832×480 的接縫縮圖在 0–255 尺度上相差 MAE ≈ 1。此外，Encode H3 Segment 有針對 core `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` 類別的契約測試；Sample Segments 的展開與快取有在真 core executor 上的測試（H3 模型節點用替身：每一種失效情況、LRU / RAM-pressure 模式的實際逐出、編碼 / 取樣 / 附加時中斷）。
 
-拒絕執行（直接報錯停止）：VACE reference 額外 token、未裁除的 guide、batch > 1、layout 與計畫不符的 latent、非 H3 latent 的音訊續接、Sample Segments / Encode H3 Segment 用在 `generate` + `grid = h3_5+17n` + 24 fps 以外的計畫。
+拒絕執行（直接報錯停止）：batch > 1、layout 與計畫不符的 latent、會改動續接區或鎖定區的 sampler、Sample Segments 用在 `generate`、24 fps 以外的計畫。
 
 「支援」不代表會檢查 conditioning 衝突、保證角色一致或接縫無痕。
 
-### 兩段式取樣器
-
-官方 Wan 2.2 high / low `KSamplerAdvanced` 兩段式串接不會保留續接區：第二段把第一段殘留的雜訊當成保留內容（實測偏差 61.3，每個接縫後的畫面變成雜訊）。修法：在第二個 sampler 前再接一個 `🧬 Extend Latent` —— `target_latent` 接第一個 sampler 的輸出，`segment`、`state` 與其他設定相同，`on_conflict = carry_wins`。實測偏差降為 9.5e-7。沒做這個修正時，Append 會以 `E_CARRY_DRIFT` 停止。
+不支援 LTX-2 與 Wan 2.2；它們的實驗性續接已在 0.13 移除。見[從 0.12 升級](#從-012-升級)。
 
 ### 記憶體與磁碟
 
-- Append 逐段解碼（或直接吃 `frames`）、去掉重疊、做 crossfade，把無損 FFV1 視訊與 float32 WAV 分段檔（1344×768 約每幀 0.5 MB）暫存到 plugin 的 `.mf_tmp/seg_*` 目錄。解碼前預估 RAM（`E_RAM`）、落盤前檢查剩餘磁碟（`E_DISK`）—— 都是估算，不是保證。
+- Append 逐段解碼、去掉重疊、做 crossfade，把無損 FFV1 視訊與 float32 WAV 分段檔（1344×768 約每幀 0.5 MB）暫存到 plugin 的 `.mf_tmp/seg_*` 目錄。解碼前預估 RAM（`E_RAM`）、落盤前檢查剩餘磁碟（`E_DISK`）—— 都是估算，不是保證。
 - Assemble 做唯一一次有損編碼（codec / crf / preset 同其他 MediaForge 編碼節點；ProRes → `.mov`），寫入 BT.709 標記；AAC 編碼前把音軌精確截成影片長度對應的 sample 數，編碼後核對寫出的幀數、音軌與色彩標記。是 Timeline 節點中唯一的 output node。選用的 `audio` 會整條取代音軌（自動補靜音 / 截斷到影片長度）。
 - 音訊時鐘：第一段決定取樣率與聲道（之後不一致 → `E_AUDIO_LAYOUT`）。H3 解碼出的音訊每段約短 8.3 ms，由下一段補上 —— 只有真正的缺口與片尾會補靜音（`W_AUDIO_PAD`）。
 - 快取住的 state 被釋放時，其分段暫存檔會一併刪除；啟動時會清掉超過 24 小時、且所屬程序已不存在的 session 目錄。等待 crossfade 的尾段也存在磁碟，不佔 RAM。
-- 生成畫面只在 Append 內解碼、立即落盤。單節點路徑的參考素材只在 Encode H3 Segment 內短暫解碼，不會成為快取的輸出；迴圈路徑的 Load Segment Media 輸出的 IMAGE / AUDIO 會像一般節點輸出一樣被 core 快取。
+- 生成畫面只在 Append 內解碼、立即落盤。參考素材只在 Encode H3 Segment 內短暫解碼，不會成為快取的輸出。
 - Sample Segments 每段留在 core 快取的主要是 conditioning —— 估計純文字 prompt ≈ 5 MB、每張參考圖約 +10 MB（`ref_image_size = match`）、每秒參考影片約 +20 MB；9 張圖加 3 支 15 秒影片 ≈ 1 GB —— 再加幾個 latent（1344×768 × 107 幀約各 12 MB）。20 段純文字 ≈ 1.2 GB；素材多時可達數 GB。以上是估算，不是 GPU 實測。
 - 要壓低：用 `--cache-lru N` 啟動 ComfyUI、降低 `ref_video_short_edge`、維持 `ref_image_size = match`。不要指望預設的 RAM-pressure 快取釋放 —— 它的掃描可能看不進 H3 的巢狀 latent，會低估用量。
 - 總記憶體仍受段長、素材、crossfade、模型工作集與 core 快取影響。這能減少解碼畫面佔用的記憶體，但不保證總記憶體固定或接縫無痕。
@@ -360,13 +334,30 @@ Sample Segments 以常數把每段規格傳進該段的節點組，ComfyUI 的�
 | Timeline Director 概念 | MediaForge 重建方式 |
 |---|---|
 | Material Planner | Edit Timeline 素材庫：參考、關鍵幀 / 錨定片段、鎖定原音、`<@名稱>` 別名 |
-| Select / Prepare Loop Segment | Select Segment + Extend Latent |
-| Plan Encoder | Encode H3 Segment（迴圈）/ Sample Segments（單節點）；其他模型：Load Segment Media 或 Load Segment Frames + core 模型專屬 conditioning |
-| Initialize / Accumulate / Finish Loop | core Start Loop + Append Segment + End Loop + Assemble Segments |
-| Finite / Low-Memory Sampler | Sample Segments（H3），或你自己的 sampler + 上述迴圈；Assemble 已經寫檔，不需要再接 SaveVideo |
+| Select / Prepare Loop Segment | 由 Sample Segments 內部處理（每段一組節點） |
+| Plan Encoder | Sample Segments（每一段都會執行 Encode H3 Segment） |
+| Initialize / Accumulate / Finish Loop | Sample Segments + Assemble Segments；不需要迴圈節點 |
+| Finite / Low-Memory Sampler | Sample Segments；Assemble 已經寫檔，不需要再接 SaveVideo |
 | Drift-Control / Soft AV | 無等價實作；`hard` / `taper` / `linear` 遮罩不宣稱相同效果 |
 | SelfLift / Omni / presets | 不提供也不匯入；沿用獨立 workflow、手動重建 |
 | 原音鎖定 | 鎖定原音軌道（Encode H3 Segment 的 latent 鎖定）+ Assemble `lock_audio = original`；不宣稱對嘴 |
+
+### 從 0.12 升級
+
+0.13 只留一種生成接法（Edit Timeline → Sample Segments → Assemble Segments，MiniMax H3）與一種剪片接法（Edit Timeline → Trim by Ranges）。手動接線的路徑已移除，用到它們的 workflow 需要重接：
+
+| 0.12 | 0.13 |
+|---|---|
+| `🎯 Select Segment`、`📽️ Load Segment Frames`、`🗂️ Load Segment Media` | 已移除。開啟舊 workflow 時 ComfyUI 會把它們列為缺少的節點 |
+| 迴圈或攤平的接線（core Start / End Loop、每段自己接 sampler） | 改用 `🎛️ Sample Segments`。相同 seed、sampler 與 sigmas 下，它取樣出的 latent 與迴圈相同 |
+| LTX-2 / Wan 2.2（`grid = causal_8n+1` / `causal_4n+1`、`experimental_causal`） | 不支援。要用這些模型請留在 0.12.x |
+| Edit Timeline 的 `grid` | 只剩一個值 `h3_5+17n`。widget 已隱藏，舊 workflow 載入時會被設回這個值；API prompt 送其他值會被 ComfyUI 拒絕（`Value not in list`） |
+| 不經模型的組裝（Load Segment Frames → Append 的 `frames` / `audio`） | `cut` 模式 → `✂️ Trim by Ranges`（`timeline_cut.json`）。它沿用來源影片的幀率，不會重取樣到時間軸幀率 |
+| `cut` 模式的 prompt | 不再顯示，也不再讀取 |
+| 節點選單裡的 `🧬 Extend Latent`、`🧩 Encode H3 Segment`、`➕ Append Segment` | 仍有註冊（Sample Segments 會建立它們），但已隱藏，見[內部節點](#內部節點)。它們的 `state`（Extend）、`frames` / `audio`（Append）與 `experimental_causal` 輸入已移除 |
+| 範例 `timeline_h3_av_loop`、`timeline_ltx2_video_carry`、`timeline_wan22_experimental`、`timeline_frames_assembly` | `timeline_h3_basic`、`timeline_h3_director`、`timeline_cut` |
+
+Edit Timeline 的 widget 順序與前五個輸出不變，所以照 `timeline_h3_director.json` 接的 0.12 workflow 可以直接載入；`video_path` 是新增的第六個輸出。
 
 ## Using via API
 
@@ -422,7 +413,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 
 ### 時間軸 prompt
 
-`MF_EditTimeline` 的 `timeline_data` 是 JSON **字串** input；`video` / `fps` / `grid` / `mode` 是各自獨立的 input（`fps` 是 combo 字串，例如 `"24"` 或 `"30000/1001"`；`generate` 不選來源時 `video` 填 `"(none)"`）。`plan_json` 是衍生輸出 —— 永遠不是 input，也不能貼回 `timeline_data`。
+`MF_EditTimeline` 的 `timeline_data` 是 JSON **字串** input；`video` / `fps` / `grid` / `mode` 是各自獨立的 input（`fps` 是 combo 字串，例如 `"24"` 或 `"30000/1001"`；`grid` 一律是 `"h3_5+17n"`；`generate` 不選來源時 `video` 填 `"(none)"`）。`plan_json` 是衍生輸出 —— 永遠不是 input，也不能貼回 `timeline_data`。
 
 | 欄位 | 規則 |
 |---|---|
@@ -430,7 +421,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 | `source.origin_frame` | 來源時間原點，預設 `0` |
 | `prompt` | 全域 prompt，預設空；段落自己的 `prompt` 空白時沿用 |
 | `segments` | 1–256 段 |
-| `segments[].start` / `end` | 整數幀，`end` 不包含；須通過 `mode` / `grid` 驗證 |
+| `segments[].start` / `end` | 整數幀，`end` 不包含；`generate`：段長 5 + 17n、重疊 0 或 5 + 17j；`cut`：落在來源範圍內、不重疊 |
 | `segments[].prompt` | 字串，預設空 |
 | `segments[].seed` | 選填，`null` 或 0 … 2⁵³ − 1；只有 Sample Segments 會套用 |
 | `segments[].seam_in.kind` | `cut` / `crossfade`；`crossfade` 需合法的 `frames` |
@@ -439,7 +430,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 | `refs` | 最多 256 個；陣列順序 = 標籤順序。圖片 `{id, material, from, to}`；影片再加 `mode`（`follow` 預設，或 `fixed`）、`in`、`audio`，`fixed` 另加 `length`；音訊再加 `in`、`length` |
 | `anchors` | 最多 512 個。圖片：`{id, material, role: "keyframe", at}`；影片：`{…, role: "guide", at, in, length, audio}`；音訊：`{…, role: "lock", at, in, length}` |
 
-`id` 是 1–32 個 `A–Z a–z 0–9 _ -` 字元，在各自的陣列內不重複。所有位置都是時間軸幀；`in` / `length` 以時間軸幀、從素材起點計算。參考屬於所有與它的範圍重疊的段（以各段輸出區間判定）；錨定片段必須完整落在單一段的輸出區間內（H3：長度 5 + 17k）；`cut` 模式不接受素材。`<@名稱>` / `<@名稱:audio>` 別名與 `<Picture N>` / `<Video N>` / `<Audio N>` 標籤只限 H3 grid。
+`id` 是 1–32 個 `A–Z a–z 0–9 _ -` 字元，在各自的陣列內不重複。所有位置都是時間軸幀；`in` / `length` 以時間軸幀、從素材起點計算。參考屬於所有與它的範圍重疊的段（以各段輸出區間判定）；錨定片段必須完整落在單一段的輸出區間內（H3：長度 5 + 17k）；`cut` 模式不接受素材。`<@名稱>` / `<@名稱:audio>` 別名與 `<Picture N>` / `<Video N>` / `<Audio N>` 標籤只用於 `generate` 模式。
 
 未知欄位、重複鍵、拿布林值當整數、非有限數值一律拒絕（`E_TIMELINE_JSON`）。
 
@@ -465,29 +456,22 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 
 搭配 `fps = "24"`、`grid = "h3_5+17n"`、`mode = "generate"`，兩段的 prompt 都解析成 `<Picture 1> …`。Sample Segments 的 API 格式中 `noise_seed` 是單純整數（沒有 `control_after_generate`）。
 
-Core Start Loop 的 API 格式：`"mode": "For", "mode.start_iteration_index": 0, "mode.max_iteration": [<edit_timeline_id>, 3], "mode.step": 1, "cache_iterations": false` —— `mode.max_iteration` 連到 Edit Timeline 的 `segment_count`（輸出 index 3）。Start Loop 的 `iteration_index` 是輸出 0、`current_iteration_value` 是輸出 4；End Loop 的 `outputs` 是輸出 0。
-
-完整、不用模型的 prompt（frames 路徑）：
+完整的剪片 prompt（不需要模型）：
 
 ```json
 {
-  "1": {"class_type": "MF_EditTimeline", "inputs": {"video": "clip.mp4", "fps": "24", "grid": "free", "mode": "generate",
-        "timeline_data": "{\"version\": 1, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 40, \"prompt\": \"a\"}, {\"start\": 30, \"end\": 70, \"prompt\": \"b\", \"seam_in\": {\"kind\": \"crossfade\", \"frames\": 4}}]}"}},
-  "2": {"class_type": "StartLoop", "inputs": {"mode": "For", "mode.start_iteration_index": 0,
-        "mode.max_iteration": ["1", 3], "mode.step": 1, "cache_iterations": false}},
-  "3": {"class_type": "MF_SelectSegment", "inputs": {"segment_plan": ["1", 0], "segment_index": ["2", 0]}},
-  "4": {"class_type": "MF_LoadSegmentFrames", "inputs": {"segment": ["3", 0], "resize": "none",
-        "width": 1344, "height": 768, "shortfall": "error"}},
-  "5": {"class_type": "MF_AppendSegment", "inputs": {"segment": ["3", 0], "state": ["2", 4],
-        "frames": ["4", 0], "audio": ["4", 1]}},
-  "6": {"class_type": "EndLoop", "inputs": {"accumulate": false, "output_value": ["5", 0],
-        "next_iteration_value": ["5", 0]}},
-  "7": {"class_type": "MF_AssembleSegments", "inputs": {"state": ["6", 0], "filename_prefix": "MediaForge/timeline",
-        "codec": "h264 (libx264)", "crf": 18, "preset": "medium"}}
+  "1": {"class_type": "MF_EditTimeline", "inputs": {"video": "clip.mp4", "fps": "24", "grid": "h3_5+17n", "mode": "cut",
+        "timeline_data": "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 48}, {\"start\": 96, \"end\": 144}]}"}},
+  "2": {"class_type": "MF_TrimByRanges", "inputs": {"video_path": ["1", 5], "ranges": ["1", 1], "mode": "keep",
+        "filename_prefix": "MediaForge/timeline_cut", "ranges_json": "[]", "crossfade_sec": 0.0,
+        "codec": "h264 (libx264)", "crf": 18, "preset": "medium"}},
+  "3": {"class_type": "PreviewAny", "inputs": {"source": ["2", 0]}}
 }
 ```
 
-`clip.mp4` 是 `input/` 底下的檔案。Assemble 跟其他產檔節點一樣 emit `ui.images`，`/history` 會列出它的輸出檔。
+`clip.mp4` 是 `input/` 下的檔案。Edit Timeline 的 `ranges` 是 output 1、`video_path` 是 output 5。Trim by Ranges 不是 output node，所以 prompt 後面要再接一顆 —— 這裡用 core `PreviewAny`。
+
+要改成生成：把 `"mode"` 設為 `"generate"`，並把節點 2–3 換成 `MF_SampleSegments`（`"segment_plan": ["1", 0]`、連到你的 model / clip / vae / sampler / sigmas 節點、`noise_seed`、`width`、`height`、`mask`、`carry_audio`）與 `MF_AssembleSegments`（`"state": [<sample_segments_id>, 0]`、`filename_prefix`、`codec`、`crf`、`preset`）。Assemble 與其他寫檔節點一樣會送出 `ui.images`，所以 `/history` 會列出它的輸出。
 
 ## 智慧 GPU codec 預設
 
