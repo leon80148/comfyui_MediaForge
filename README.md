@@ -516,7 +516,7 @@ To override per-node, just pick from the dropdown — existing workflows that ha
 
 **TL;DR:** Install both. VHS for fast IMAGE-batch workflows; MediaForge for broadcast encoding, file-level ops, Compose pipeline, and AI-driven subtitle work.
 
-## Nodes (36)
+## Nodes (30)
 
 Each node section below follows the same template: **purpose → when to use → required widgets → optional inputs → output → example**. Skim the widget tables to find the knob you need; fall back to the example for typical wiring.
 
@@ -805,24 +805,22 @@ Stitch multiple video files end-to-end at the path level. Two strategies for spe
 
 #### ⏱️ Edit Timeline (`MF_EditTimeline`)
 
-Plans a long video as segments on one timeline and outputs the plan the other Timeline nodes read. Edit it in the embedded [timeline editor](#timeline-editor) or send `timeline_data` JSON directly ([Timeline prompts](#timeline-prompts)); the JSON is validated strictly on every run.
+Plans a long video as segments on one timeline, or marks the ranges to cut out of an existing one. Edit it in the embedded [timeline editor](#timeline-editor) or send `timeline_data` JSON directly ([Timeline prompts](#timeline-prompts)); the JSON is validated strictly on every run.
 
-**When to use**: the first node of every Timeline workflow — `generate` plans segments for your model to generate; `cut` picks source ranges without latent carry.
+**When to use**: the first node of every Timeline workflow — `generate` plans the segments 🎛️ Sample Segments generates with MiniMax H3; `cut` picks source ranges for ✂️ Trim by Ranges.
 
 | Widget | Type | Default | Notes |
 |---|---|---|---|
 | `video` | dropdown | `(none)` | Shown as 來源影片（video）. Source video under `input/`. Optional in `generate`, required in `cut`; `(none)` reads 不使用來源影片 or 尚未選擇（必選） depending on the mode |
-| `fps` | dropdown | `24` | Shown as 每秒幀數（fps）. Rational timeline rate: `16` / `24` / `25` / `30` / `24000/1001` / `30000/1001` / `48` / `50` / `60000/1001` / `60`. H3 requires `24` |
-| `grid` | dropdown | `h3_5+17n` | Shown as 段長規則（grid）, options name the model (such as `MiniMax H3 段長規則（h3_5+17n）`). Legal segment lengths and overlaps (table below); does not select or load a model. Hidden when `mode = cut` (cut doesn't use it) |
-| `mode` | dropdown | `generate` | Shown as 用途（mode）: 生成新影片（generate） / 剪現有影片（cut）. `generate` plans generated segments; `cut` selects source ranges without latent carry |
+| `fps` | dropdown | `24` | Shown as 每秒幀數（fps）. Rational timeline rate: `16` / `24` / `25` / `30` / `24000/1001` / `30000/1001` / `48` / `50` / `60000/1001` / `60`. `generate` requires `24` |
+| `grid` | dropdown | `h3_5+17n` | One value, hidden in the UI. It stays in the schema so that saved workflows keep their widget order; a value saved by an older version is set back on load |
+| `mode` | dropdown | `generate` | Shown as 用途（mode）: 生成新影片（generate） / 剪現有影片（cut）. `generate` plans generated segments; `cut` selects source ranges, with no model involved |
 | `timeline_data` | STRING (multiline) | `{"version": 1, "source": {"origin_frame": 0}, "segments": [{"start": 0, "end": 107, "prompt": ""}]}` | The plan as a JSON string (v2 with materials — see [Timeline prompts](#timeline-prompts); the editor saves v2). Hidden while the visual editor works; shown and editable if the editor fails to load |
 
-| `grid` | Legal lengths (frames) | Legal overlaps (frames) | Carry |
+| `mode` | Legal lengths (frames) | Legal overlaps (frames) | Carry |
 |---|---|---|---|
-| `h3_5+17n` | 5 + 17n | 0 or 5 + 17j | video (+ audio with `carry_audio`); fps must be `24` |
-| `causal_4n+1` | 1 + 4n | 0 or 1 + 4j | video; needs `experimental_causal` |
-| `causal_8n+1` | 1 + 8n | 0 or 1 + 8j | video; needs `experimental_causal` |
-| `free` | any ≥ 1 | any | none — the overlap is only trimmed |
+| `generate` | 5 + 17n | 0 or 5 + 17j | video (+ audio with `carry_audio`); fps must be `24` |
+| `cut` | any ≥ 1 | none — ranges may touch but not overlap | none |
 
 `generate`: the first segment starts at 0; starts and ends strictly increase with no gaps, so each overlap is shorter than both neighbours; a `crossfade` seam needs 1 … min(overlap, previous segment's output length) frames. `cut`: needs `video`; segments are sorted, don't overlap (they may touch), stay inside the source and use `cut` seams only.
 
@@ -830,109 +828,16 @@ Plans a long video as segments on one timeline and outputs the plan the other Ti
 
 | Output | Type | Notes |
 |---|---|---|
-| `segment_plan` | MF_SEGMENT_PLAN | Wire to Select Segment |
-| `ranges` | SILENCE_RANGES | `cut`: the selected source ranges in seconds (same convention as `MF_DetectScenes`, so it can feed `MF_TrimByRanges`); `generate`: empty list |
+| `segment_plan` | MF_SEGMENT_PLAN | `generate`: wire to Sample Segments |
+| `ranges` | SILENCE_RANGES | `cut`: the selected source ranges in seconds (same convention as `MF_DetectScenes`) — wire to `MF_TrimByRanges`; `generate`: empty list |
 | `plan_json` | STRING | The validated plan as JSON, for inspection — never an input |
-| `segment_count` | INT | Wire to Start Loop `max_iteration` |
+| `segment_count` | INT | Number of segments |
 | `total_frames` | INT | Output length in frames |
+| `video_path` | STRING | Absolute path of the selected `video`, empty when none is selected. `cut`: wire to `MF_TrimByRanges` `video_path`, so both nodes read the same file |
 
-**Notes**: `IS_CHANGED` fingerprints the selected `video` and every material file, so replacing a file re-plans (when `timeline_data` or `video` is a linked input, Edit Timeline re-runs every time). Every run probes the materials (`E_MATERIAL`), checks references and anchors against them (`E_REF`, `E_ANCHOR`, `E_ANCHOR_OVERLAP`), and with the H3 grid applies the per-segment limits and tags (`E_REF_LIMIT`, `E_REF_SHORT`) and resolves the prompts (`E_PROMPT_REF`). Prints `W_SOURCE_TIME_UNKNOWN` when the source's start time can't be read.
+**Notes**: `IS_CHANGED` fingerprints the selected `video` and every material file, so replacing a file re-plans (when `timeline_data` or `video` is a linked input, Edit Timeline re-runs every time). Every run probes the materials (`E_MATERIAL`), checks references and anchors against them (`E_REF`, `E_ANCHOR`, `E_ANCHOR_OVERLAP`), and in `generate` applies the per-segment limits and tags (`E_REF_LIMIT`, `E_REF_SHORT`) and resolves the prompts (`E_PROMPT_REF`). Prints `W_SOURCE_TIME_UNKNOWN` when the source's start time can't be read.
 
-**Example**: H3 — `fps = 24`, `grid = h3_5+17n`, segments `[0,107)`, `[85,192)`, `[153,260)` (overlaps 22 and 39, both 5 + 17j) → `segment_count = 3`, `total_frames = 260`.
-
----
-
-#### 🎯 Select Segment (`MF_SelectSegment`)
-
-Picks one segment of the plan (loop path). Its `segment` output is the shared spec that Load Segment Frames, Load Segment Media, Encode H3 Segment, Extend Latent and Append Segment read — fps, overlaps, carry sizes and the segment's materials are computed once, in Edit Timeline.
-
-**When to use**: once per loop iteration, or once per segment in a linear chain.
-
-| Widget | Type | Default | Notes |
-|---|---|---|---|
-| `segment_index` | INT | `0` (0–255, step 1) | 0-based; in a loop, wire Start Loop `iteration_index`. Out of range → `E_SEGMENT_INDEX` |
-
-**Input**: `segment_plan` (MF_SEGMENT_PLAN) from Edit Timeline.
-
-**Outputs**: `segment` (MF_SEGMENT), `prompt` STRING (this segment's prompt — the global prompt if its own is empty, aliases resolved to tags; wire to your text encoder), `length` INT (frames — wire to your empty-latent node), `start_sec` FLOAT (timeline seconds), `segment_count` INT. Per-segment seeds are not output — only Sample Segments applies them.
-
----
-
-#### 📽️ Load Segment Frames (`MF_LoadSegmentFrames`)
-
-Decodes the frames and audio of the plan's source video that fall inside one segment, resampled to the timeline fps (frame-exact for same-fps sources, nearest frame otherwise).
-
-**When to use**: reference material for a model (e.g. video-to-video conditioning), or the frames themselves for a model-free assembly (`timeline_frames_assembly.json`). Requires a `video` in Edit Timeline.
-
-| Widget | Type | Default | Notes |
-|---|---|---|---|
-| `resize` | dropdown | `none` | `none` keeps the source size; `fit` scales with padding; `fill` scales and crops; `stretch` stretches |
-| `width` | INT | `1344` (2–7680, step 2) | Hidden when `resize = none` |
-| `height` | INT | `768` (2–4320, step 2) | Hidden when `resize = none` |
-| `shortfall` | dropdown | `error` | When the source doesn't cover the segment: `error` (`E_SOURCE_SHORTFALL`), `hold_last` (repeat the nearest frame — impossible when there is no frame at all), `black` (pad black) |
-
-**Input**: `segment` (MF_SEGMENT).
-
-**Outputs**: `frames` IMAGE, `audio` AUDIO (`None` when the source has no audio; silence where the segment lies outside the source), `frame_count` INT.
-
-**Notes**: the source is re-resolved and fingerprinted on every run; if it changed since Edit Timeline ran → `E_SOURCE_CHANGED`. Reads the first video stream that isn't cover art.
-
----
-
-#### 🗂️ Load Segment Media (`MF_LoadSegmentMedia`)
-
-Returns one of a segment's materials — the N-th of a kind, in tag order — as IMAGE / AUDIO for your own wiring in the loop path.
-
-**When to use**: models other than H3 (e.g. a reference image or anchor frames for Wan / LTX conditioning nodes). For H3 use `🧩 Encode H3 Segment`, which builds all of a segment's materials into the conditioning in one go.
-
-| Widget | Type | Default | Notes |
-|---|---|---|---|
-| `kind` | dropdown | `picture` | `picture` / `video` / `audio` (references), `keyframe` / `guide` / `lock` (anchors) |
-| `ordinal` | INT | `1` (1–512, step 1) | Which item of that kind in this segment, 1-based. Out of range → `E_MEDIA_MISSING` (no black frame or silence is made up) |
-| `resize` | dropdown | `none` | `none` / `fit` / `fill` / `stretch`, as Load Segment Frames. Hidden when `kind = audio` or `lock` |
-| `width` | INT | `1344` (2–7680, step 2) | Hidden when `resize = none` or `kind = audio` / `lock` |
-| `height` | INT | `768` (2–4320, step 2) | Same |
-
-**Input**: `segment` (MF_SEGMENT) from Select Segment.
-
-**Outputs** — `count` INT is always the number of items of this `kind` in this segment; audio is always stereo (mono duplicated, more channels downmixed) at the material's own sample rate:
-
-| `kind` | `image` IMAGE | `audio` AUDIO | `frame_idx` INT |
-|---|---|---|---|
-| `picture` | `[1,H,W,3]` (EXIF orientation, `resize` applied) | None | 0 (a reference has no position) |
-| `video` | the effective frames `[F,H,W,3]` at the timeline fps | the soundtrack when the reference has `audio = true`, else None | 0 |
-| `audio` | None | the reference audio `[in, in + length)` | 0 |
-| `keyframe` | `[1,H,W,3]` | None | frame inside the segment |
-| `guide` | the anchored clip `[F,H,W,3]` | its soundtrack when `audio = true`, else None | frame inside the segment |
-| `lock` | None | this segment's part of the original audio | frame inside the segment |
-
-**Notes**: a None output wired into a node that doesn't accept None fails in that node. `kind = lock` only hands you the audio — it doesn't lock anything in a latent. Material files are fingerprinted against Edit Timeline's snapshot (`E_SOURCE_CHANGED`).
-
----
-
-#### ➕ Append Segment (`MF_AppendSegment`)
-
-Takes one finished segment, decodes it with your VAE (or takes `frames`), removes the overlap with the previous segment, applies the incoming crossfade and spills lossless parts to disk. Returns a new state; the input state is not modified.
-
-**When to use**: after your sampler, once per segment.
-
-No widgets — sockets only:
-
-| Input | Type | Notes |
-|---|---|---|
-| `segment` | MF_SEGMENT | Required; from Select Segment (Sample Segments passes a reduced view) |
-| `state` *(optional)* | MF_SEGMENT_STATE | Previous segment's state; leave empty for the first segment (in a loop: Start Loop `current_iteration_value`) |
-| `latent` *(optional)* | LATENT | This segment's sampled latent; also the carry source for the next segment |
-| `vae` *(optional)* | VAE | Decodes the latent's video; required when `frames` is not connected |
-| `audio_vae` *(optional)* | VAE | Decodes the audio stream of the same AV latent |
-| `frames` *(optional)* | IMAGE | This segment's frames, no VAE involved |
-| `audio` *(optional)* | AUDIO | This segment's audio |
-
-**Rules**: `frames` excludes `vae` / `audio_vae` (with `frames`, `latent` may stay connected as the carry source); without `frames`, both `latent` and `vae` are required; `audio` excludes `audio_vae`; `latent` is required when the next segment carries from this one.
-
-**Output**: `state` (MF_SEGMENT_STATE) → End Loop `next_iteration_value` + `output_value`, or the next segment's Extend / Append in a linear chain.
-
-**Checks**: segment order and the identity of everything assembled so far (`E_SEQUENCE`, `E_PLAN`); carry marker on the latent (`W_PROVENANCE` if absent, `E_PROVENANCE` if it doesn't match); carried region unchanged by the sampler (`E_CARRY_DRIFT`); locked audio tokens unchanged and their `mf_lock` metadata present (`E_LOCK_DRIFT`); RAM / disk estimates (`E_RAM`, `E_DISK`); the same resolution and audio layout in every segment (`E_AUDIO_LAYOUT`). A crossfade with `audio_curve = auto` uses `linear` when the audio was decoded with `audio_vae` from the same carried H3 latent, otherwise `equal_power`.
+**Example**: `fps = 24`, segments `[0,107)`, `[85,192)`, `[153,260)` (overlaps 22 and 39, both 5 + 17j) → `segment_count = 3`, `total_frames = 260`.
 
 ---
 
@@ -940,7 +845,7 @@ No widgets — sockets only:
 
 Encodes the spilled parts into the final video — the single lossy encode of the Timeline chain — and is its output node.
 
-**When to use**: after End Loop (wire `outputs` to `state`) or after the last Append of a linear chain.
+**When to use**: after 🎛️ Sample Segments — wire its `state` here.
 
 | Widget | Type | Default | Notes |
 |---|---|---|---|
@@ -950,11 +855,11 @@ Encodes the spilled parts into the final video — the single lossy encode of th
 | `preset` | dropdown | `medium` | `ultrafast` … `veryslow`. Hidden for `prores (prores_ks)` |
 | `lock_audio` *(optional)* | dropdown | `original` | `original`: the [locked](#lock-audio) ranges get the original audio (48 kHz stereo master); `generated`: keep the generated soundtrack. No effect without locks. Hidden when `audio` is connected |
 
-**Inputs**: `state` (MF_SEGMENT_STATE, required) — from End Loop, the last Append, or Sample Segments; `audio` (AUDIO, optional) — replaces the whole soundtrack, padded with silence / trimmed to the video length.
+**Inputs**: `state` (MF_SEGMENT_STATE, required) — from Sample Segments; `audio` (AUDIO, optional) — replaces the whole soundtrack, padded with silence / trimmed to the video length.
 
 **Outputs**: `final_video_path` STRING; `report` STRING (JSON: frames, fps, size, color assumption, audio source (`internal` / `override` / `locked_original` / `none`) / sample rate / samples, padded samples, per-seam diagnostics, `effective` lock-audio entry). Emits `ui.images` for `/history`.
 
-**Notes**: assumes BT.709 (full-range RGB → limited-range YUV) and writes those tags; verifies the frame count, and with internal audio the exact sample count; `E_SPILL_MISSING` if parts were deleted (e.g. `.mf_tmp/` cleaned up, or a cache eviction) — rerun the loop. Spill parts are not deleted here, because the cached state may still be reused.
+**Notes**: assumes BT.709 (full-range RGB → limited-range YUV) and writes those tags; verifies the frame count, and with internal audio the exact sample count; `E_SPILL_MISSING` if parts were deleted (e.g. `.mf_tmp/` cleaned up, or a cache eviction) — queue the workflow again. Spill parts are not deleted here, because the cached state may still be reused.
 
 ---
 
@@ -1469,78 +1374,25 @@ SRT text → translated SRT (timestamps preserved). Uses `/v1/chat/completions` 
 
 ---
 
-#### 🧬 Extend Latent (`MF_ExtendLatent`)
-
-Copies the previous segment's latent tail into the start of this segment's empty latent and sets `noise_mask` so the sampler keeps (or partly re-generates) that region. Tensor work only — no model is loaded and nothing is sampled.
-
-**When to use**: between your empty-latent node and your sampler, for every segment. The first segment (no incoming overlap) passes through without a carry.
-
-| Widget | Type | Default | Notes |
-|---|---|---|---|
-| `mask` | dropdown | `hard` | `hard` keeps every carried token; `taper` relaxes the tail of the carried region; `linear` relaxes progressively (the last carried token becomes fully denoisable, except when only 1 token is carried) |
-| `carry_audio` | BOOLEAN | `False` | H3 audio carry only (`E_AUDIO_CARRY` on other latents); off leaves audio latents and masks unchanged |
-| `video_taper_tokens` *(optional)* | INT | `2` (0–1000000, step 1) | Video tokens relaxed at the tail in `taper` mode; must not exceed the carried token count. Hidden when `mask = hard` or `linear` |
-| `audio_taper_tokens` *(optional)* | INT | `2` (0–1000000, step 1) | Same for audio. Hidden when `mask = hard` or `linear`, and when `carry_audio` is off |
-| `experimental_causal` *(optional)* | BOOLEAN | `False` | Enables carry on the causal grids (Wan / LTX); joins may be discontinuous. Off → a carry on those grids raises `E_CAUSAL` |
-| `on_conflict` *(optional)* | dropdown | `error` | `error` stops when an existing mask conflicts with the carry region (`E_MASK_CONFLICT`); `carry_wins` overwrites samples and mask there |
-
-**Sockets**:
-
-| Input | Type | Notes |
-|---|---|---|
-| `target_latent` | LATENT | Required. This segment's empty latent, already at final size; its time length must equal the segment's token count (`E_TOKENS` otherwise) |
-| `segment` | MF_SEGMENT | Required; from Select Segment |
-| `state` *(optional)* | MF_SEGMENT_STATE | Previous Append `state` (loop: Start Loop `current_iteration_value`); either this or `previous_latent` |
-| `previous_latent` *(optional)* | LATENT | Previous segment's sampled latent (linear chain); either this or `state` |
-
-**Outputs**: `latent` LATENT (→ your sampler); `report` STRING (JSON: copied ranges, token counts, requested and effective mask values, conflicts, provenance, warnings).
-
-**Notes**: the output latent carries an `mf_carry` marker that Append checks. Conditioning (prompts, keyframes, references) is not inspected — `report` always says `conditioning_check: "unavailable"`. An overlapping segment with neither `state` nor `previous_latent` raises `E_CARRY_SOURCE`. When a [lock](#lock-audio) overlaps the carried audio tokens, the audio carry of that segment is skipped (`W_LOCK_CARRY`; the report's `effective` entry says `lock_conflict`).
-
-**Example**: H3 loop — `mask = hard`, `carry_audio = True`, `state` ← Start Loop `current_iteration_value`. For Wan 2.2 high / low see [Two-stage samplers](#two-stage-samplers).
-
----
-
-#### 🧩 Encode H3 Segment (`MF_EncodeH3Segment`)
-
-Builds one segment's MiniMax H3 conditioning and empty AV latent from its prompt and materials: references go through core `MiniMaxH3ReferenceToVideo`, keyframes and guides through core `MiniMaxH3AddGuide` in frame order, then the [audio locks](#lock-audio) are written into the latent. Materials are decoded here only for that call.
-
-**When to use**: the H3 loop path, in place of `MiniMaxH3ImageToVideo` (Select Segment `segment` → here → Extend Latent `target_latent`). Sample Segments uses it internally.
-
-| Widget | Type | Default | Notes |
-|---|---|---|---|
-| `width` | INT | `1344` (32–8192, step 32) | Generated size |
-| `height` | INT | `768` (32–8192, step 32) | |
-| `ref_image_size` | dropdown | `match` | `match`: reference images scaled to the generated area (faster); `max`: short edge 2048 (closer to the source, several times slower). Images with a short edge above 2048 are scaled down on load either way |
-| `ref_video_short_edge` *(optional)* | INT | `0` (0–4096, step 32) | Reference videos are decoded at most this short edge (32-aligned), which cuts reference tokens and memory. `0`: videos with a short edge above 768 are decoded at 768, then core resizes as usual |
-
-**Sockets**: `segment` (MF_SEGMENT), `clip` (H3 text encoder), `vae` (H3 video VAE), `audio_vae` *(optional)* — required when the segment has reference audio, a reference or guide with `audio = true`, or a lock.
-
-**Outputs**: `positive` CONDITIONING; `latent` LATENT (with locks: `noise_mask` and the `mf_lock` metadata Append checks).
-
-**Notes**: H3 grid only. Per-segment limits and crops are applied by Edit Timeline: ≤ 9 pictures, ≤ 3 videos, ≤ 3 standalone audio references (`E_REF_LIMIT`); a reference video is cut to the segment length and down to 5 + 17k frames (< 5 → `E_REF_SHORT`). Core's H3 nodes missing or changed → `E_H3_NODES`. Material files changed since Edit Timeline ran → `E_SOURCE_CHANGED`.
-
----
-
 #### 🎛️ Sample Segments (`MF_SampleSegments`)
 
-Low-memory single-node sampler for a MiniMax H3 timeline. When it runs it expands into one group per segment — `🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider` / `CFGGuider` + `SamplerCustomAdvanced` → `➕ Append Segment` — and returns the last Append's state. See [Timeline & Long Video](#timeline--long-video), [Lock audio](#lock-audio) and [Incremental re-render](#incremental-re-render).
+Generates a MiniMax H3 timeline one segment at a time, in one node. When it runs it expands into one group per segment — `🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider` / `CFGGuider` + `SamplerCustomAdvanced` → `➕ Append Segment` — and returns the last Append's state. See [Timeline & Long Video](#timeline--long-video), [Lock audio](#lock-audio) and [Incremental re-render](#incremental-re-render).
 
-**When to use**: H3 timelines (`generate`, `grid = h3_5+17n`, 24 fps; anything else raises before expanding), instead of the loop.
+**When to use**: between ⏱️ Edit Timeline (`generate`, 24 fps; anything else raises before expanding) and 🧵 Assemble Segments.
 
 | Widget | Type | Default | Notes |
 |---|---|---|---|
 | `noise_seed` | INT | `0` (+ `control_after_generate`) | Seed of every segment that has no seed of its own in the timeline |
 | `width` | INT | `1344` (32–8192, step 32) | Generated size |
 | `height` | INT | `768` (32–8192, step 32) | |
-| `mask` | dropdown | `hard` | As Extend Latent |
-| `carry_audio` | BOOLEAN | `True` | H3 audio carry; skipped per segment where a lock sits on the carried audio (`W_LOCK_CARRY`) |
+| `mask` | dropdown | `hard` | How much of the carried region the sampler may change: `hard` keeps every carried token; `taper` relaxes the tail of the carried region; `linear` relaxes progressively (the last carried token becomes fully denoisable, except when only 1 token is carried) |
+| `carry_audio` | BOOLEAN | `True` | Carry the audio tail as well as the video tail; skipped per segment where a lock sits on the carried audio (`W_LOCK_CARRY`). Off leaves audio latents and masks unchanged |
 | `cfg` *(optional)* | FLOAT | `1.0` (0–100, step 0.1) | Used only with `negative` (CFG guider); hidden while `negative` isn't connected |
-| `ref_image_size` *(optional)* | dropdown | `match` | As Encode H3 Segment |
-| `ref_video_short_edge` *(optional)* | INT | `0` (0–4096, step 32) | As Encode H3 Segment |
-| `video_taper_tokens` *(optional)* | INT | `2` (0–1000000, step 1) | As Extend Latent. Hidden when `mask = hard` or `linear` |
-| `audio_taper_tokens` *(optional)* | INT | `2` (0–1000000, step 1) | As Extend Latent. Hidden when `mask = hard` or `linear`, and when `carry_audio` is off |
-| `on_conflict` *(optional)* | dropdown | `error` | As Extend Latent |
+| `ref_image_size` *(optional)* | dropdown | `match` | `match`: reference images scaled to the generated area (faster); `max`: short edge 2048 (closer to the source, several times slower). Images with a short edge above 2048 are scaled down on load either way |
+| `ref_video_short_edge` *(optional)* | INT | `0` (0–4096, step 32) | Reference videos are decoded at most this short edge (32-aligned), which cuts reference tokens and memory. `0`: videos with a short edge above 768 are decoded at 768, then core resizes as usual |
+| `video_taper_tokens` *(optional)* | INT | `2` (0–1000000, step 1) | Video tokens relaxed at the tail in `taper` mode; must not exceed the carried token count. Hidden when `mask = hard` or `linear` |
+| `audio_taper_tokens` *(optional)* | INT | `2` (0–1000000, step 1) | Same for audio. Hidden when `mask = hard` or `linear`, and when `carry_audio` is off |
+| `on_conflict` *(optional)* | dropdown | `error` | `error` stops when an existing mask conflicts with the carry region (`E_MASK_CONFLICT`); `carry_wins` overwrites samples and mask there |
 
 **Sockets**:
 
@@ -1557,7 +1409,21 @@ Low-memory single-node sampler for a MiniMax H3 timeline. When it runs it expand
 
 **Outputs**: `state` (MF_SEGMENT_STATE) → Assemble Segments; `report` STRING (JSON per segment: effective seed, whether it starts a shot, its three identities, tags, reference-video requested / effective frames, anchors, latent lock tokens, whether audio carry was skipped, material fingerprints, each lock's encoding policy (`ctx_v1`) and planned context tokens, a planned per-segment `effective` list (seed, audio carry, taper, lock — verified later by Append's drift check — and reference crops) and `estimates` (decoded RGB bytes, spill bytes, reference-material decode sizes); plus `effective` entries for `cfg` and audio decoding). Estimates are sizes, not a memory guarantee.
 
-**Notes**: every model input is wired from your own nodes into the group; each segment's spec goes in as a constant, so unchanged segments come from the cache. Errors inside the group show on this node, labelled with the inner node's name. Batch 1 only.
+**Notes**: every model input is wired from your own nodes into the group; each segment's spec goes in as a constant, so unchanged segments come from the cache. Errors inside the group show on this node, labelled with the inner node's name. Batch 1 only. Per-segment limits and crops are applied by Edit Timeline: ≤ 9 pictures, ≤ 3 videos, ≤ 3 standalone audio references (`E_REF_LIMIT`); a reference video is cut to the segment length and down to 5 + 17k frames (< 5 → `E_REF_SHORT`).
+
+---
+
+#### Internal nodes
+
+Three nodes exist only because Sample Segments builds them. They are registered (graph expansion needs that), flagged deprecated so that the node search and the node library skip them, and taken out of the right-click Add Node menu. "Deprecated" is just the flag ComfyUI offers for this; they are not going away. You meet their names in two places: as the label of an error raised inside Sample Segments, and in the API's `/object_info`.
+
+| Node | What it does for one segment | Messages it can raise |
+|---|---|---|
+| `🧩 Encode H3 Segment` (`MF_EncodeH3Segment`) | Builds the MiniMax H3 conditioning and the empty AV latent from the segment's prompt and materials: references through core `MiniMaxH3ReferenceToVideo`, keyframes and guides through core `MiniMaxH3AddGuide` in frame order, then the [audio locks](#lock-audio) written into the latent (`noise_mask` and the `mf_lock` metadata). Materials are decoded here only for that call | `E_H3_NODES`, `E_SOURCE_CHANGED`, `E_SOURCE_SHORTFALL`, `W_AUDIO_PAD` |
+| `🧬 Extend Latent` (`MF_ExtendLatent`) | Copies the previous segment's sampled latent tail into the start of this segment's latent and sets `noise_mask` so the sampler keeps (or partly re-generates) that region. Tensor work only: no model is loaded and nothing is sampled. Adds the `mf_carry` marker Append checks | `E_TOKENS`, `E_AUDIO_CARRY`, `E_CARRY_SOURCE`, `E_MASK_CONFLICT`, `E_PROVENANCE`, `W_PROVENANCE`, `W_LOCK_CARRY` |
+| `➕ Append Segment` (`MF_AppendSegment`) | Decodes the sampled latent with your VAE (and audio VAE), removes the overlap with the previous segment, applies the incoming crossfade and spills lossless parts to disk. Returns a new state; the input state is not modified | `E_SEQUENCE`, `E_PLAN`, `E_PROVENANCE`, `W_PROVENANCE`, `E_CARRY_DRIFT`, `E_LOCK_DRIFT`, `E_RAM`, `E_DISK`, `E_AUDIO_LAYOUT`, `W_AUDIO_PAD` |
+
+A crossfade with `audio_curve = auto` uses `linear` when the segment's audio was carried from the previous one, otherwise `equal_power`. Extend Latent does not inspect conditioning (prompts, keyframes, references); its report always says `conditioning_check: "unavailable"`.
 
 ## AI Provider Recipes
 
@@ -1641,9 +1507,9 @@ For **translate only** — Ollama / LM Studio don't expose Whisper. Pair with `f
 - **MF_COMPOSE_AUDIO_OPS**: `list[dict]` — same idea for the audio chain (`{"type": "volume" | "amix" | "afade" | "loudnorm", "params": {...}}`), appended by `MF_ComposeVolume` / `MF_ComposeAudioMix` / `MF_ComposeAudioFade` / `MF_ComposeNormalize`. `MF_ComposeVideo` resolves both chains into the internal `ComposeIR` dataclass (`utils/compose_ir.py`) via `utils/compose_ops.py` dispatch at compile time — the IR itself is no longer a cross-node wire type (that was Compose v1's `MF_COMPOSE`, retired with `ComposeStart`/`ComposeFinalize`).
 - **AI_CONFIG**: `dict` with keys `provider / base_url / api_key / model / device` (`api_key` arrives resolved — `env:` indirection is expanded by `MF_AIConfig` before the dict leaves the node). Experimental.
 - **MF_SEGMENT_PLAN** (v2): immutable plan dict from `MF_EditTimeline` — `plan_id` / `execution_id`, mode, fps, grid, source reference, global prompt, material snapshots (relative `ref`, fingerprint, probed length / size / audio layout), refs, anchors, segments, per-segment specs, `total_frames`. No absolute paths.
-- **MF_SEGMENT** (v2): immutable per-segment spec — index, start / end / length, overlaps, carry sizes, seams, source window, resolved prompt, the segment's materials, audio locks and three identities: `encode_id` (what goes into the encoder), `sampling_id` (chained back to the last shot cut, plus the seed), `assembly_id` (chained through every earlier segment). `view` is `full` from `MF_SelectSegment`; Sample Segments gives each inner node a reduced `encode` / `extend` / `assemble` view. Consumers check the view and its fields (`E_VIEW`).
+- **MF_SEGMENT** (v2): immutable per-segment spec — index, start / end / length, overlaps, carry sizes, seams, source window, resolved prompt, the segment's materials, audio locks and three identities: `encode_id` (what goes into the encoder), `sampling_id` (chained back to the last shot cut, plus the seed), `assembly_id` (chained through every earlier segment). The full spec lives in the plan only; Sample Segments gives each inner node a reduced `encode` / `extend` / `assemble` view, the one form a node accepts (`E_VIEW` otherwise).
 - **MF_SEGMENT_STATE** (v2): immutable dict; every `MF_AppendSegment` returns a new one (session, spill folder, committed frames / samples, `assembly_id`, locks, pending crossfade tail on disk, carried latent tail). It owns the spill parts in-process, so it can't be serialized into a workflow.
-- **LATENT `mf_carry`**: `MF_ExtendLatent` adds `{sampling_id, segment_index, streams_carried, carry_dtypes, mask, taper}` to its output LATENT dict; core samplers keep it. It is written before sampling: it stops latents whose planned content or seed differ from being joined, but can't prove a sampler actually used that seed, model or sigmas, and it doesn't cover the main source video (Edit Timeline's fingerprint and Load Segment Frames check that). Append reads it as a consistency hint (consistent / absent / mismatch), not as proof of origin, and uses `carry_dtypes` (the dtype the carry was written in, e.g. `bfloat16`) as the baseline of its `E_CARRY_DRIFT` check.
+- **LATENT `mf_carry`**: `MF_ExtendLatent` adds `{sampling_id, segment_index, streams_carried, carry_dtypes, mask, taper}` to its output LATENT dict; core samplers keep it. It is written before sampling: it stops latents whose planned content or seed differ from being joined, but can't prove a sampler actually used that seed, model or sigmas, and it doesn't cover the main source video (Edit Timeline's fingerprint covers that). Append reads it as a consistency hint (consistent / absent / mismatch), not as proof of origin, and uses `carry_dtypes` (the dtype the carry was written in, e.g. `bfloat16`) as the baseline of its `E_CARRY_DRIFT` check.
 - **LATENT `mf_lock`**: `MF_EncodeH3Segment` adds `{policy, tokens: [[K0, K1], …], target: [tensor, …]}` when it writes locked audio — the locked audio-token ranges and independent copies of the written values. Append compares the sampled tokens against `target` (`E_LOCK_DRIFT`).
 
 ## Architecture
@@ -1655,7 +1521,7 @@ comfyui_MediaForge/
 ├── requirements.txt         # ffmpeg-binary fallbacks + small pure-Python deps; heavy optional deps stay lazy-imported
 ├── nodes/                   # one file per node, MF_<Verb><Noun>
 │   ├── ai_config.py            # MF_AIConfig
-│   ├── append_segment.py       # MF_AppendSegment  — Timeline: decode, de-overlap, spill to .mf_tmp/
+│   ├── append_segment.py       # MF_AppendSegment  — Timeline, internal: decode, de-overlap, spill to .mf_tmp/
 │   ├── assemble_segments.py    # MF_AssembleSegments  — Timeline: final encode (OUTPUT_NODE)
 │   ├── start_video_batch.py    # MF_StartVideoBatch  — Video Batch: decodes one batch per run
 │   ├── end_video_batch.py      # MF_EndVideoBatch  — Video Batch: drives the batches, final encode (OUTPUT_NODE)
@@ -1674,17 +1540,14 @@ comfyui_MediaForge/
 │   ├── detect_scenes.py        # MF_DetectScenes  — MediaForge/Analysis
 │   ├── detect_silence.py       # MF_DetectSilence
 │   ├── edit_timeline.py        # MF_EditTimeline  — Timeline plan (+ web/timeline_editor.js)
-│   ├── encode_h3_segment.py    # MF_EncodeH3Segment  — Timeline: H3 conditioning + empty AV latent via core MiniMaxH3* nodes
-│   ├── extend_latent.py        # MF_ExtendLatent  — Timeline latent tail-carry (MediaForge/AI)
+│   ├── encode_h3_segment.py    # MF_EncodeH3Segment  — Timeline, internal: H3 conditioning + empty AV latent via core MiniMaxH3* nodes
+│   ├── extend_latent.py        # MF_ExtendLatent  — Timeline, internal: latent tail-carry
 │   ├── extract_audio.py        # MF_ExtractAudio  — MediaForge/Audio (Phase 6 first node)
-│   ├── load_segment_frames.py  # MF_LoadSegmentFrames  — Timeline: source frames / audio per segment
-│   ├── load_segment_media.py   # MF_LoadSegmentMedia  — Timeline: one material of a segment as IMAGE / AUDIO
 │   ├── load_video_frames.py    # MF_LoadVideoFrames
 │   ├── loop_video.py           # MF_LoopVideo
 │   ├── probe_media.py          # MF_ProbeMedia
 │   ├── sample_segments.py      # MF_SampleSegments  — Timeline: H3 single-node sampler (graph expansion of core nodes)
 │   ├── save_video_frames.py    # MF_SaveVideoFrames
-│   ├── select_segment.py       # MF_SelectSegment  — Timeline: one segment spec per iteration
 │   ├── select_video.py         # MF_SelectVideo  — dropdown picker for input/ videos
 │   ├── translate_subtitle.py   # MF_TranslateSubtitle
 │   ├── trim_by_ranges.py       # MF_TrimByRanges
@@ -1720,6 +1583,7 @@ comfyui_MediaForge/
 │   ├── dual_input_lock.js   # frontend extension: hide widgets per dual-input mode
 │   │                        #   - lock_widget / hidden_when_connected: hide on tensor mode
 │   │                        #   - linked_widgets: hide on path mode
+│   ├── internal_nodes.js    # frontend extension: keep the three expansion-only nodes out of the Add Node menu
 │   ├── timeline_edit.js     # editor edit commands (pure functions: create / move / trim / split, shot cut)
 │   ├── timeline_editor.js   # Edit Timeline visual editor (DOM widget)
 │   ├── timeline_grid.js     # grid / validation rules mirrored from utils/timeline_plan.py
@@ -1729,7 +1593,7 @@ comfyui_MediaForge/
     ├── test_compose_ir.py        # IR spike cases (Phase 4 prerequisite)
     ├── test_compose_e2e.py       # real-ffmpeg e2e
     ├── test_video_io_roundtrip.py# PSNR > 38 dB rawvideo roundtrip
-    ├── test_timeline_*.py        # Timeline plan / materials / nodes / routes / examples / real-core cache (T09)
+    ├── test_timeline_*.py        # Timeline plan / materials / nodes / routes / examples / single-path guards
     ├── test_sample_segments_core.py # Sample Segments expansion + cache on the real core executor (T19)
     ├── js/*.test.mjs             # grid / material / edit-command rules vs. shared golden vectors (node --test)
     └── test_codex_r*_fixes.py    # regression tests across Codex review rounds
@@ -1799,40 +1663,36 @@ Timeline nodes report problems as `[<node>] <KEY>：<message>`. The message text
 | Key | Node | Message (English translation) | Fix |
 |---|---|---|---|
 | `E_TIMELINE_JSON` | Edit Timeline | Invalid timeline JSON: {reason}. Fix {location}. | Correct the named field (format: [Timeline prompts](#timeline-prompts)); the editor marks the same error on the segment |
-| `E_H3_FPS` | Edit Timeline | The H3 grid supports only 24 fps. Set fps to 24. | Set `fps = 24`, or pick another `grid` |
+| `E_H3_FPS` | Edit Timeline | Generating a new video (MiniMax H3) supports only 24 fps. Set fps to 24. | Set `fps = 24` |
 | `W_SOURCE_TIME_UNKNOWN` | Edit Timeline | Can't read the source's start time; using 0. Preview and source times may be slightly offset. | Warning only; the run continues |
-| `E_SEGMENT_INDEX` | Select Segment | segment_index out of range: the plan has {count} segments (0-based), got {index}. | Wire Start Loop `max_iteration` to Edit Timeline `segment_count` |
-| `E_SOURCE_CHANGED` | Load Segment Frames / Encode H3 Segment / Load Segment Media / Assemble Segments | The source video changed; rerun Edit Timeline. | The source or a material file changed after Edit Timeline ran — queue again so Edit Timeline re-reads it |
-| `E_SOURCE_SHORTFALL` | Load Segment Frames / Encode H3 Segment / Load Segment Media | The source video does not cover segment {segment}. Use hold_last / black or adjust the time window. | Load Segment Frames: set `shortfall = hold_last` / `black`, or move the segment inside the source. Materials: the video decodes fewer frames than probed — re-encode it or use a shorter content range |
+| `E_SOURCE_CHANGED` | Encode H3 Segment / Assemble Segments | The source video changed; rerun Edit Timeline. | The source or a material file changed after Edit Timeline ran — queue again so Edit Timeline re-reads it |
+| `E_SOURCE_SHORTFALL` | Encode H3 Segment | The material video's frames do not cover the range segment {segment} uses. Shorten the reference or anchor range, or use a longer material. | The video decodes fewer frames than probed — re-encode it or use a shorter content range |
 | `E_MATERIAL` | Edit Timeline | Material "{name}" can't be used: {reason}. Make sure the file is inside input/ and in a supported format. | Fix or replace the file (select the card, change its file), or delete the material |
 | `E_REF` | Edit Timeline | Reference {ref} is invalid: {reason}. Adjust it on the timeline. | The reference starts past the timeline end, needs frames past the end of the material, or has `audio` on a file without audio — move or shorten it, or turn `audio` off |
 | `E_ANCHOR` | Edit Timeline | Anchor {anchor} is invalid: {reason}. Adjust it on the timeline. | An anchor must start before the timeline end; a guide must lie inside one segment's output range and, with H3, be 5, 22, 39 … (17k + 5) frames long; the content must fit in the material; `audio` needs an audio track |
 | `E_ANCHOR_OVERLAP` | Edit Timeline | {stream} anchors {first} and {second} overlap in time. Move them apart. | video: keyframes and guides; audio: locks and guides with `audio` on — move one of the two |
 | `E_REF_LIMIT` | Edit Timeline | Segment {segment} has {count} {kind}, above the H3 limit {limit}. Narrow the reference ranges or move them to other segments. | H3 allows per segment ≤ 9 pictures, ≤ 3 videos, ≤ 3 standalone audio references |
 | `E_REF_SHORT` | Edit Timeline | Reference video "{name}" in segment {segment} has only {frames} frames (at least 5). Extend the reference or move it out of this segment. | A reference video needs ≥ 5 frames inside each segment it belongs to |
-| `E_PROMPT_REF` | Edit Timeline | Material reference in segment {segment}'s prompt is invalid: {reason}. | `<@name>`: no such material; the material isn't referenced in this segment (or only anchored); it has two references there — write the tag instead; `:audio` on a reference without soundtrack; a tag number above this segment's count; aliases or tags on a non-H3 grid |
+| `E_PROMPT_REF` | Edit Timeline | Material reference in segment {segment}'s prompt is invalid: {reason}. | `<@name>`: no such material; the material isn't referenced in this segment (or only anchored); it has two references there — write the tag instead; `:audio` on a reference without soundtrack; a tag number above this segment's count |
 | `E_H3_NODES` | Encode H3 Segment | Can't find usable core MiniMax H3 nodes ({nodes}). Update ComfyUI. | Core's `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` are missing or changed (or the audio VAE returned an unexpected shape) — update ComfyUI; tested with core 0.42.5 |
-| `E_MEDIA_MISSING` | Load Segment Media | Segment {segment} has no {kind} number {ordinal} (it has {count}). Adjust ordinal. | Keep `ordinal` ≤ `count`; a material only appears in the segments it belongs to |
-| `E_VIEW` | nodes that take `segment` | Segment format mismatch: {reason}. | An old segment — rerun Edit Timeline; or a reduced view where a full one is needed — wire Select Segment's `segment` |
-| `E_TOKENS` | Extend Latent | Latent time length mismatch: expected {expected}, got {actual}. Check the grid, VACE reference and guide wiring. | Build the empty latent from Select Segment `length` with the model's `grid`; `target_latent` must not contain VACE reference or guide tokens |
-| `E_AUDIO_CARRY` | Extend Latent | This latent does not support audio carry. Turn off carry_audio. | Turn `carry_audio` off (H3 only); for LTX-2, decode the audio into Append `audio` |
-| `E_CARRY_SOURCE` | Extend Latent | This segment needs carry data. Connect state or previous_latent (one of them). | Loop: Start Loop `current_iteration_value` → `state`; linear chain: previous sampled latent → `previous_latent` |
-| `E_CAUSAL` | Extend Latent | This carry mode is still experimental. Turn on experimental_causal to confirm. | Turn on `experimental_causal` (causal grids: Wan / LTX) |
-| `E_MASK_CONFLICT` | Extend Latent | The carry region conflicts with an existing mask. Adjust the wiring or choose carry_wins. | Set `on_conflict = carry_wins`, or remove the other mask |
+| `E_VIEW` | internal nodes | Segment format mismatch: {reason}. | An old segment — rerun Edit Timeline. Otherwise an internal node was wired by hand: use Sample Segments, which hands each one the view it accepts |
+| `E_TOKENS` | Extend Latent | Latent time length mismatch: expected {expected}, got {actual}. Make sure target_latent comes from the same segment's Encode H3 Segment. | Not reachable through Sample Segments unless core's H3 latent layout changed — report it with your ComfyUI version |
+| `E_AUDIO_CARRY` | Extend Latent | This latent does not support audio carry. Turn off carry_audio. | Turn `carry_audio` off on Sample Segments (the latent has no H3 audio stream) |
+| `E_CARRY_SOURCE` | Extend Latent | This segment needs carry data. Wire the previous segment's sampled latent into previous_latent. | Not reachable through Sample Segments, which wires it for every overlapping segment |
+| `E_MASK_CONFLICT` | Extend Latent | The carry region conflicts with an existing mask. Set on_conflict to carry_wins, or move the anchor out of the overlap with the previous segment. | As stated: `on_conflict = carry_wins` on Sample Segments, or move the keyframe / guide |
 | `W_LOCK_CARRY` | Extend Latent | Segment {segment}'s lock audio lies in the carried region; skipping this segment's audio carry (video carry continues). | Warning only. Move the lock past the overlap if that seam needs audio carry |
-| `E_PROVENANCE` | Extend Latent / Append Segment | Carry metadata does not match this segment ({field}). Check the segment wiring. | All nodes of one iteration must use the same Select Segment output; the latent must come from that segment's Extend → sampler |
-| `W_PROVENANCE` | Extend Latent / Append Segment | Carry metadata is absent; continuing. Check the segment and guide wiring. | Make sure the latent reaching Append (or `previous_latent`) went through Extend Latent |
-| `E_SEQUENCE` | Append Segment / Assemble Segments | Expected segment {expected}, got segment {actual}. Connect the previous segment's state. | First segment: leave `state` empty; later segments: the previous Append `state`; Assemble needs the state after the last segment |
-| `E_PLAN` | Append Segment | Segment and state belong to different plans. Rerun the whole loop. | The state's segments so far don't match this plan's — rerun the whole loop after changing the timeline or the source |
-| `E_CARRY_DRIFT` | Append Segment | The carried region changed after sampling (max diff {drift}). For two-stage sampling (e.g. Wan 2.2 high / low), add another Extend Latent before the second sampler with on_conflict set to carry_wins. | See [Two-stage samplers](#two-stage-samplers) |
+| `E_PROVENANCE` | Extend Latent / Append Segment | Carry metadata does not match this segment ({field}). Rerun the whole workflow. | Queue again; if it persists, a custom sampler is rewriting the latent's `mf_carry` |
+| `W_PROVENANCE` | Extend Latent / Append Segment | Carry metadata (the latent's mf_carry) is absent; continuing, but the carry can't be confirmed. Make sure the sampler keeps the latent's extra fields. | The sampler dropped `mf_carry` from the latent dict — use one that keeps the input latent's keys (core samplers do) |
+| `E_SEQUENCE` | Append Segment / Assemble Segments | Expected segment {expected}, got segment {actual}. Rerun the whole workflow. | Queue again. Assemble needs the state Sample Segments returns |
+| `E_PLAN` | Append Segment | Segment and state belong to different plans. Rerun the whole workflow. | Queue again after changing the timeline or the source |
+| `E_CARRY_DRIFT` | Append Segment | The carried region changed after sampling (max diff {drift}). It must stay as it is: check the sampler and sigmas wired into Sample Segments. | Use a sampler that honours `noise_mask` |
 | `E_LOCK_DRIFT` | Append Segment | Lock-audio check failed ({reason}). Make sure the sampler keeps noise_mask and the latent's mf_lock, or use a full schedule. | The sampled latent lost `mf_lock` (a node between Encode H3 Segment and Append dropped it) or the locked tokens changed — use a core sampler that honours `noise_mask`, with a complete schedule |
 | `E_RAM` | Append Segment | This segment needs an estimated {gib} GiB of RAM, above the preflight threshold. Shorten the segments or lower the resolution. | As stated; the threshold is 80% of available RAM |
 | `E_DISK` | Append Segment | Not enough temporary space; at least {gib} GiB is needed. Free up space and retry. | Free space on the drive that holds the plugin's `.mf_tmp/` |
 | `E_AUDIO_LAYOUT` | Append Segment | All segments must agree on audio presence, sample rate and channels. Unify the audio format upstream. | Give every segment audio from the same source / VAE, or none |
-| `W_AUDIO_PAD` | Append Segment / Encode H3 Segment / Load Segment Media / Assemble Segments | Inserted {samples} samples of silence at a seam or the end. | Append: informational (H3 runs pad the final tail, e.g. 267 samples). Material nodes: the material's audio ends earlier than its probed length — re-encode the file or use a shorter range |
-| `E_SPILL_MISSING` | Assemble Segments | Segment spill files no longer exist. Rerun the whole loop, then assemble. | The parts were deleted (e.g. `.mf_tmp/` cleaned up, or a cache eviction); rerun the loop |
+| `W_AUDIO_PAD` | Append Segment / Encode H3 Segment / Assemble Segments | Inserted {samples} samples of silence at a seam or the end. | Append: informational (H3 runs pad the final tail, e.g. 267 samples). Encode H3 Segment: the material's audio ends earlier than its probed length — re-encode the file or use a shorter range |
+| `E_SPILL_MISSING` | Assemble Segments | Segment spill files no longer exist. Rerun the whole workflow, then assemble. | The parts were deleted (e.g. `.mf_tmp/` cleaned up, or a cache eviction); queue again |
 | `W_PROXY` | timeline editor | Preview creation failed; the timeline is still editable. Retry. | The editor shows 「預覽失敗（時間軸仍可編輯）」 with a 重試 (Retry) button; editing works without the preview |
-| — | core Start / End Loop | `Loop body is not closed` | A preview / side-effect node inside the loop body isn't wired into End Loop `terminations` — wire it there, or move it out of the loop |
 
 ### Video Batch messages
 
@@ -1912,14 +1772,14 @@ python -m pytest tests/ -k "video_io"        # only rawvideo roundtrip
 
 Real-ffmpeg tests require `ffmpeg` on PATH.
 
-Timeline tests (`test_timeline_*.py`, `test_latent_carry.py`, `test_segment_spill.py`, `test_load_segment_frames.py`, `test_h3_adapter_core.py`, `test_sample_segments_core.py`) are developer-local like the rest of `tests/`. The real-core tests `tests/test_timeline_core_cache.py`, `tests/test_h3_adapter_core.py` and `tests/test_sample_segments_core.py` must run inside the ComfyUI Linux / WSL environment, because they use ComfyUI's interpreter and core classes (the cache tests spawn `main.py --cpu` instances). The JS tests need Node.js:
+Timeline tests (`test_timeline_*.py`, `test_latent_carry.py`, `test_segment_spill.py`, `test_h3_adapter_core.py`, `test_sample_segments_core.py`) are developer-local like the rest of `tests/`. The real-core tests `tests/test_h3_adapter_core.py` and `tests/test_sample_segments_core.py` must run inside the ComfyUI Linux / WSL environment, because they use ComfyUI's interpreter and core classes (the cache tests spawn `main.py --cpu` instances). The JS tests need Node.js:
 
 Video Batch tests: `test_video_batch_plan.py` (rules and batch math), `test_video_batch_decode.py` (each batch window against a continuous decode; run it on every FFmpeg version you support), `test_video_batch_core.py` (the real core executor in five cache modes; needs ComfyUI, set `COMFYUI_ROOT`), `test_video_io_streaming.py` (peak memory of Load / Save Video Frames).
 
 Save Video tests: `test_serial_h264.py` (paths, metadata, the encoded files checked with ffprobe and a full decode, cancel and failure, same-prefix runs in parallel, thread counts; runs on Linux and Windows), `test_save_video_core.py` (the real core executor, plus a server with `--disable-metadata`; needs ComfyUI, set `COMFYUI_ROOT`).
 
 ```bash
-python -m pytest -q tests/test_timeline_core_cache.py tests/test_h3_adapter_core.py tests/test_sample_segments_core.py   # inside ComfyUI's Linux / WSL environment
+python -m pytest -q tests/test_h3_adapter_core.py tests/test_sample_segments_core.py   # inside ComfyUI's Linux / WSL environment
 node --test tests/js/timeline_grid.test.mjs tests/js/timeline_edit.test.mjs
 ```
 
@@ -1931,8 +1791,8 @@ node --test tests/js/timeline_grid.test.mjs tests/js/timeline_edit.test.mjs
 - **Phase 4.5** ✅ Compose pipeline v2 — merged ComposeVideo + subtitle-in-chain + audio chain (Volume / AudioMix / Fade / Normalize)
 - **Phase 5** 🚧 AI — WhisperTranscribe / TranslateSubtitle (experimental schema)
 - **Phase 6** 🚧 Standalone Audio domain — `MF_ExtractAudio` ships first; file-level denoise, normalize-file, audio cut/trim, ducking still planned (the Compose chain audio ops in Phase 4.5 are a subset)
-- **Timeline** ✅ Timeline & long video — Edit Timeline editor, segment loop, latent tail-carry, spill-to-disk assembly (MiniMax H3 AV supported; LTX-2 / Wan 2.2 experimental)
-- **Timeline v2** ✅ Director — material library, references / keyframes / guides / lock audio, Encode H3 Segment, Load Segment Media, single-node H3 Sample Segments (GPU-verified with H3 turbo 4-step, see [Compatibility](#compatibility))
+- **Timeline** ✅ Timeline & long video — Edit Timeline editor, latent tail-carry, spill-to-disk assembly (MiniMax H3 AV; the loop wiring and the LTX-2 / Wan 2.2 experiments were removed in 0.13)
+- **Timeline v2** ✅ Director — material library, references / keyframes / guides / lock audio, single-node H3 Sample Segments (GPU-verified with H3 turbo 4-step, see [Compatibility](#compatibility))
 - **Phase 7** ⏳ Net domain — yt-dlp ingest, HTTP fetch (lazy-import)
 
 ## License
