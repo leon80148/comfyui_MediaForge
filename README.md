@@ -1302,7 +1302,7 @@ If you have workflow JSONs containing `MF_ComposeStart` / `MF_ComposeFinalize`, 
 
 ### `MediaForge/AI` — latent tools and provider-agnostic AI services
 
-Schema marked **experimental** — `AI_CONFIG` API may change inside Phase 5 until Whisper / Translate are validated end-to-end across all provider recipes. `🧬 Extend Latent`, `🧩 Encode H3 Segment` and `🎛️ Sample Segments` (last in this section) are Timeline nodes — they take no `AI_CONFIG` and make no network requests.
+Schema marked **experimental** — `AI_CONFIG` API may change inside Phase 5 until Whisper / Translate are validated end-to-end across all provider recipes. `🎛️ Sample Segments` and the [internal nodes](#internal-nodes) it builds (last in this section) are Timeline nodes — they take no `AI_CONFIG` and make no network requests.
 
 #### ⚙️ AI Config (`MF_AIConfig`)
 

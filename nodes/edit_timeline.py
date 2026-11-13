@@ -39,7 +39,7 @@ class MF_EditTimeline:
                 "mode": (list(MODES), {
                     "default": "generate",
                     "tooltip": "generate：規劃要由模型生成的段落，segment_plan 接 Sample Segments。"
-                               "cut：從來源影片選出要保留的區間，不經模型生成；ranges 與 video_path 接 Trim by Ranges。",
+                               "cut：從來源影片選出要保留的區間，不經模型生成；ranges 與 video_path 接 Trim by Ranges，後面再接一顆輸出節點。",
                 }),
                 "timeline_data": ("STRING", {"default": DEFAULT_TIMELINE, "multiline": True, "dynamicPrompts": False}),
             },

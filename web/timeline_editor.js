@@ -344,9 +344,8 @@ class TimelineEditor {
         const hasSource = !!this.w.video?.value && this.w.video.value !== NO_SOURCE;
         const d = this.source?.duration_us;
         const sourceFrames = hasSource && d != null ? Math.floor((d * fps[0]) / (fps[1] * 1e6)) : null;
-        const grid = this.w.grid?.value ?? H3_GRID;
         const mode = this.w.mode?.value ?? "generate";
-        return { fpsKey, fps, grid, mode, hasSource, sourceFrames, h3: mode === "generate" && grid === H3_GRID };
+        return { fpsKey, fps, grid: H3_GRID, mode, hasSource, sourceFrames, h3: mode === "generate" };
     }
 
     hydrate() {
@@ -1127,8 +1126,9 @@ class TimelineEditor {
         this.keepSections(this.form);
         const sel = this.view.sel;
         const generate = st.mode === "generate";
-        const rows = this.isFresh() ? [el("div", { class: "full hint", text: S.firstRun })] : [];
-        // prompts are only read when segments are generated: in cut the field would change nothing
+        // prompts are only read when segments are generated: in cut the field would change nothing,
+        // and the first-run hint is about writing one
+        const rows = generate && this.isFresh() ? [el("div", { class: "full hint", text: S.firstRun })] : [];
         if (generate) rows.push(this.sharedPrompt());
         if (generate && sel?.type === "ref" && this.data.refs.some((r) => r.id === sel.id)) rows.push(...this.refForm(st, sel.id));
         else if (generate && sel?.type === "anchor" && this.data.anchors.some((a) => a.id === sel.id)) rows.push(...this.anchorForm(st, sel.id));
@@ -1631,8 +1631,9 @@ class TimelineEditor {
     // Only looks at this node's own outputs; whether the rest of the workflow is complete is not for this node to judge.
     nextStep(st) {
         const linked = (name) => (this.node.outputs?.find((o) => o.name === name)?.links?.length ?? 0) > 0;
-        if (linked("segment_plan") || linked("ranges")) return "";
-        return st.mode === "cut" ? S.next.cut : S.next.h3;
+        // cut needs both links: with ranges alone, Trim by Ranges reads whatever file its own widget names
+        if (st.mode === "cut") return linked("ranges") && linked("video_path") ? "" : S.next.cut;
+        return linked("segment_plan") ? "" : S.next.h3;
     }
 
     // during a gesture the status line says why the current position cannot be dropped / committed
@@ -2410,10 +2411,12 @@ function fallback(node, error) {
 
 // Only MiniMax H3 is left, so `grid` has one value: its dropdown is hidden for good. A value saved by an older version
 // (free / causal_*) is put back, or the server refuses the prompt ("Value not in list") over a widget nobody can see.
+// serializeValue covers the loads that never call onConfigure (an API-format JSON writes widget values directly).
 function lockGrid(node) {
     const w = findWidget(node, "grid");
     if (!w) return;
     w.value = H3_GRID;
+    w.serializeValue = () => H3_GRID;
     w.hidden = true;
     w.computeSize = () => [0, -4];
     // as dual_input_lock's relayout does for the widgets it hides: give the row back, never shrink the user's width

@@ -1302,7 +1302,7 @@ EBU R128 / streaming 級響度標準化（走 `loudnorm` 單 pass）。
 
 ### `MediaForge/AI` — Latent 工具與 provider-agnostic AI 服務
 
-Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改，直到 Whisper / Translate 在所有 provider recipe 都 e2e 驗證完才會凍結。`🧬 Extend Latent`、`🧩 Encode H3 Segment`、`🎛️ Sample Segments`（本分類最後三個）是 Timeline 節點 —— 不吃 `AI_CONFIG`，也不發任何網路請求。
+Schema 標記為 **experimental** — `AI_CONFIG` API 在 Phase 5 內可能改，直到 Whisper / Translate 在所有 provider recipe 都 e2e 驗證完才會凍結。`🎛️ Sample Segments` 與它建立的[內部節點](#內部節點)（本分類最後）是 Timeline 節點 —— 不吃 `AI_CONFIG`，也不發任何網路請求。
 
 #### ⚙️ AI Config (`MF_AIConfig`)
 

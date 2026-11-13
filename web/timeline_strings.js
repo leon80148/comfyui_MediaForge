@@ -258,7 +258,7 @@ export const S = {
     fadeShortened: (list) => `第 ${list.join("、")} 段的交叉淡化已縮短或改回直接切換`,
     next: {
         h3: "下一步：把 segment_plan 接到 🎛️ Sample Segments",
-        cut: "下一步：把 ranges 與 video_path 接到 ✂️ Trim by Ranges（mode 選 keep）",
+        cut: "下一步：把 ranges 與 video_path 接到 ✂️ Trim by Ranges（mode 選 keep），後面再接一顆輸出節點（例如 Preview Any）",
     },
     jsonBroken: "timeline_data 內容有誤，圖形編輯已暫停。請在下方文字框修正，修好會自動恢復",
 
@@ -320,7 +320,7 @@ export const S = {
         first_seam_cut: "第 1 段只能使用「直接切換」",
         not_increasing: "這段起點須晚於前段起點，終點也須晚於前段終點",
         gap: "生成新影片時，段與段之間不能有空隙",
-        illegal_overlap: "與前一段的重疊只能是 0，或 5、22、39…幀（每級多 17 幀）",
+        illegal_overlap: "與前一段的重疊只能是 0，或 5、22、39…幀（每級多 17 幀），而且要比段長短",
         crossfade_limit: "淡化長度不能超過重疊長度，也不能超過前一段扣除開頭重疊後的長度",
         needs_source: "剪現有影片要先選來源影片",
         cut_no_materials: "剪現有影片不能帶素材，這個節點還有素材",
