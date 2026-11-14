@@ -6,24 +6,24 @@ emoji，print() 會直接丟 UnicodeEncodeError，讓「警告後繼續」變成
 """
 
 MESSAGES = {
-    "E_SEQUENCE": "預期第 {expected} 段，收到第 {actual} 段。請連接前一段的 state。",
-    "E_PLAN": "分段與 state 屬於不同計畫。請重新執行整個迴圈。",
-    "E_SEGMENT_INDEX": "segment_index 超出範圍：計畫共 {count} 段（0 起算），收到 {index}。",
-    "E_PROVENANCE": "續接標記與本段不符（{field}）。請檢查分段接線。",
-    "W_PROVENANCE": "缺少續接標記；將繼續執行。請檢查分段與 guide 接線。",
-    "E_CARRY_SOURCE": "本段需要續接資料。請連接 state 或 previous_latent（擇一）。",
-    "E_CARRY_DRIFT": "續接區在取樣後被改變（最大差 {drift}）。兩段式取樣（例如 Wan 2.2 high / low）"
-                     "請在第二個 sampler 前再接一次 Extend Latent，on_conflict 設 carry_wins。",
-    "E_CAUSAL": "此續接模式仍在實驗階段。確認後開啟 experimental_causal。",
-    "E_SPILL_MISSING": "分段暫存檔已不存在。請重跑整個迴圈，再組裝。",
+    "E_SEQUENCE": "預期第 {expected} 段，收到第 {actual} 段。請重新執行整個流程。",
+    "E_PLAN": "分段與 state 屬於不同計畫。請重新執行整個流程。",
+    "E_PROVENANCE": "續接標記與本段不符（{field}）。請重新執行整個流程。",
+    "W_PROVENANCE": "缺少續接標記（latent 的 mf_carry）；將繼續執行，但無法確認續接是否正確。"
+                    "請確認 sampler 會保留 latent 的附加欄位。",
+    "E_CARRY_SOURCE": "本段需要續接資料。請把前一段取樣後的 latent 接到 previous_latent。",
+    "E_CARRY_DRIFT": "續接區在取樣後被改變（最大差 {drift}）。續接區必須原樣保留："
+                     "請檢查接到 Sample Segments 的 sampler 與 sigmas。",
+    "E_SPILL_MISSING": "分段暫存檔已不存在。請重新執行整個流程，再組裝。",
     "E_RAM": "本段估計需 {gib:.2f} GiB RAM，超過預檢門檻。請縮短段長或降低解析度。",
     "E_DISK": "暫存空間不足，需至少 {gib:.2f} GiB。請釋出空間後重試。",
     "E_SOURCE_CHANGED": "來源影片已變更，請重新執行 Edit Timeline。",
-    "E_SOURCE_SHORTFALL": "來源影片不足以涵蓋第 {segment} 段。請改用 hold_last / black 或調整時間框。",
-    "E_TOKENS": "latent 時間長度不符：預期 {expected}，收到 {actual}。請檢查 grid、VACE reference 與 guide 接線。",
-    "E_H3_FPS": "H3 grid 僅支援 24 fps。請將 fps 設為 24。",
+    "E_SOURCE_SHORTFALL": "素材影片的畫面不足以涵蓋第 {segment} 段要用的範圍。請縮短參考或錨定的範圍，或換一支夠長的素材。",
+    "E_TOKENS": "latent 時間長度不符：預期 {expected}，收到 {actual}。請確認 target_latent 來自同一段的 Encode H3 Segment。",
+    "E_H3_FPS": "生成新影片（MiniMax H3）僅支援 24 fps。請將 fps 設為 24。",
     "E_TIMELINE_JSON": "時間軸 JSON 無效：{reason}。請修正 {location}。",
-    "E_MASK_CONFLICT": "續接區與既有遮罩衝突。請調整接線，或選擇 carry_wins。",
+    "E_MASK_CONFLICT": "續接區與既有遮罩衝突。請把 on_conflict 設為 carry_wins，"
+                       "或把錨定移出與前一段重疊的範圍。",
     "E_AUDIO_CARRY": "此 latent 不支援音訊續接。請關閉 carry_audio。",
     "E_AUDIO_LAYOUT": "各段音訊的有無、取樣率或聲道必須一致。請在上游統一音訊格式。",
     "W_AUDIO_PAD": "已在接縫或結尾補入 {samples} 個靜音樣本。",
@@ -37,7 +37,6 @@ MESSAGES = {
     "E_REF_SHORT": "第 {segment} 段的參考影片「{name}」只有 {frames} 幀（至少 5 幀）。請延長參考或移出本段。",
     "E_PROMPT_REF": "第 {segment} 段 prompt 的素材引用無效：{reason}。",
     "E_H3_NODES": "找不到可用的 core MiniMax H3 節點（{nodes}）。請更新 ComfyUI。",
-    "E_MEDIA_MISSING": "第 {segment} 段沒有第 {ordinal} 個 {kind}（本段共 {count} 個）。請調整 ordinal。",
     "E_LOCK_DRIFT": "鎖定原音檢查失敗（{reason}）。請確認 sampler 保留 noise_mask 與 latent 的 mf_lock，或改用完整 schedule。",
     "E_VIEW": "segment 格式不符：{reason}。",
     "W_LOCK_CARRY": "第 {segment} 段的鎖定原音落在續接區，略過本段音訊續接（video 續接照常）。",

@@ -4,7 +4,6 @@ Python 是唯一權威；web/timeline_grid.js 鏡射同一套規則給 GUI 即�
 tests/golden/timeline_vectors.json 對拍。所有邊界都是整數幀與有理數 fps，秒只
 用來顯示——浮點 fps（例如 23.976）換算 NTSC 會挑錯分母，所以連輸入都不收浮點。
 """
-import copy
 import hashlib
 import json
 from fractions import Fraction
@@ -20,7 +19,7 @@ FPS_PRESETS = {
     "24000/1001": (24000, 1001), "30000/1001": (30000, 1001),
     "48": (48, 1), "50": (50, 1), "60000/1001": (60000, 1001), "60": (60, 1),
 }
-GRIDS = ("h3_5+17n", "causal_4n+1", "causal_8n+1", "free")
+GRIDS = ("h3_5+17n", "free")
 MODES = ("generate", "cut")
 SEAM_KINDS = ("cut", "crossfade")
 AUDIO_CURVES = ("auto", "linear", "equal_power")
@@ -31,8 +30,8 @@ H3_GRID = "h3_5+17n"
 H3_FPS = (24, 1)
 
 # (合法長度 / carry 重疊的起點, 步長)。h3: 5+17n 幀 ↔ 2+5n token（core VAE 的
-# (1,4,4,4,4) token 週期）；causal: 1+k·n 幀 ↔ 1+n token。
-_GRID_STEPS = {"h3_5+17n": (5, 17), "causal_4n+1": (1, 4), "causal_8n+1": (1, 8)}
+# (1,4,4,4,4) token 週期）。free 沒有格點：cut 模式固定用它，不產生 carry。
+_GRID_STEPS = {"h3_5+17n": (5, 17)}
 
 
 def sample_index(frame, sample_rate, fps):
@@ -59,9 +58,7 @@ def latent_tokens(grid, frames):
     if grid == "free":
         return None
     base, step = _GRID_STEPS[grid]
-    if grid == H3_GRID:
-        return 2 + 5 * ((frames - base) // step)
-    return 1 + (frames - base) // step
+    return 2 + 5 * ((frames - base) // step)
 
 
 def h3_audio_tokens(frames):
@@ -84,10 +81,7 @@ def h3_audio_carry(prev_length, overlap):
 def carry_spec(grid, prev_length, overlap):
     if overlap == 0 or grid == "free":
         return None
-    spec = {"video_tokens": latent_tokens(grid, overlap)}
-    if grid == H3_GRID:
-        spec.update(h3_audio_carry(prev_length, overlap))
-    return spec
+    return {"video_tokens": latent_tokens(grid, overlap), **h3_audio_carry(prev_length, overlap)}
 
 
 def _digest(text):
@@ -96,10 +90,6 @@ def _digest(text):
 
 def canonical_json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def spec_id(spec):
-    return _digest(canonical_json(spec)) if spec is not None else None
 
 
 def _fail(reason, location, code):
@@ -430,7 +420,6 @@ def _build_specs(plan, data, snapshots, h3):
             "emit_interval": emits[index],
             "fps": plan["fps"], "effective_grid": grid,
             "carry_in": carry_in, "carry_out": carry_out,
-            "carry_in_id": spec_id(carry_in), "carry_out_id": spec_id(carry_out),
             "carry_conflicts": manifest["carry_conflicts"],
             "seam_in": seg["seam_in"], "seam_out": nxt["seam_in"] if nxt else None,
             "source_window": window,
@@ -460,13 +449,11 @@ def _build_specs(plan, data, snapshots, h3):
 VIEW_FIELDS = {
     "encode": ("index", "length", "fps", "effective_grid", "prompt", "materials"),
     "extend": ("index", "sampling_id", "prev_sampling_id", "expected_tokens", "length", "overlap_in",
-               "carry_in", "carry_in_id", "effective_grid", "carry_conflicts"),
+               "carry_in", "effective_grid", "carry_conflicts"),
     "assemble": ("index", "assembly_id", "prev_assembly_id", "sampling_id", "start", "end", "length", "fps",
                  "effective_grid", "emit_interval", "overlap_in", "overlap_out", "carry_in", "carry_out",
-                 "carry_out_id", "seam_in", "seam_out", "is_last", "audio_locks", "latent_locks", "source_window"),
+                 "seam_in", "seam_out", "is_last", "audio_locks", "latent_locks", "source_window"),
 }
-# full 被每個消費端接受（LoadSegmentFrames 只收 full），所以要帶齊任何一個 view 會讀的欄位
-FULL_REQUIRED = tuple(dict.fromkeys(k for fields in VIEW_FIELDS.values() for k in fields))
 
 
 def segment_view(spec, view):
@@ -478,9 +465,12 @@ def segment_view(spec, view):
 
 
 def require_segment(segment, views, label):
-    """消費端入口檢查：MF_SEGMENT v2、view 被接受（full 一律接受）、必要欄位齊全（full 也要齊）。"""
+    """消費端入口檢查：MF_SEGMENT v2、view 是這個消費端收的、該 view 的欄位齊全。
+
+    計畫內的完整規格（view = full）不是任何節點的輸入：一律經 segment_view() 取精簡版。
+    """
     if not isinstance(segment, dict) or segment.get("type") != "MF_SEGMENT":
-        raise ValueError(f"[{label}] segment 必須來自 Select Segment，請檢查接線。")
+        raise ValueError(f"[{label}] segment 必須由 Sample Segments 提供。這是內部節點，請改接 Sample Segments。")
     index = segment.get("index")
 
     def fail(code, field, reason):
@@ -492,21 +482,12 @@ def require_segment(segment, views, label):
     if segment.get("version") != 2:
         fail("stale_version", "version", "segment 是舊版格式，請重新執行 Edit Timeline")
     view = segment.get("view")
-    if view != "full" and view not in views:
+    if view not in views:
         fail("view_not_accepted", "view", f"不接受 {view} view")
-    missing = [k for k in (FULL_REQUIRED if view == "full" else VIEW_FIELDS[view]) if k not in segment]
+    missing = [k for k in VIEW_FIELDS[view] if k not in segment]
     if missing:
         fail("missing_fields", missing[0], f"缺少欄位 {missing}")
     return segment
-
-
-def segment_spec(plan, index):
-    """MF_SEGMENT（full view）：Extend / Append / Load / Encode 共用的不可變衍生快照。"""
-    specs = plan["specs"]
-    if not 0 <= index < len(specs):
-        raise TimelineError("Select Segment", "E_SEGMENT_INDEX", count=len(specs), index=index,
-                            detail={"reason": "out_of_range", "field": "segment_index"})
-    return copy.deepcopy(specs[index])
 
 
 def cut_ranges_seconds(plan):

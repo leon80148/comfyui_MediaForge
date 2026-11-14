@@ -1,0 +1,379 @@
+{
+  "id": "38858c63-388e-416a-947a-7bebc5de14a5",
+  "revision": 0,
+  "last_node_id": 4,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MF_EditTimeline",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        760,
+        900
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "video",
+          "name": "video",
+          "type": "COMBO",
+          "widget": {
+            "name": "video"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "fps",
+          "name": "fps",
+          "type": "COMBO",
+          "widget": {
+            "name": "fps"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "grid",
+          "name": "grid",
+          "type": "COMBO",
+          "widget": {
+            "name": "grid"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mode",
+          "name": "mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "timeline_data",
+          "name": "timeline_data",
+          "type": "STRING",
+          "widget": {
+            "name": "timeline_data"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "segment_plan",
+          "name": "segment_plan",
+          "type": "MF_SEGMENT_PLAN",
+          "links": null
+        },
+        {
+          "localized_name": "ranges",
+          "name": "ranges",
+          "type": "SILENCE_RANGES",
+          "links": [
+            1
+          ]
+        },
+        {
+          "localized_name": "plan_json",
+          "name": "plan_json",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "localized_name": "segment_count",
+          "name": "segment_count",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "localized_name": "total_frames",
+          "name": "total_frames",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "localized_name": "video_path",
+          "name": "video_path",
+          "type": "STRING",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_EditTimeline"
+      },
+      "widgets_values": [
+        "(none)",
+        "24",
+        "h3_5+17n",
+        "cut",
+        "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 48}, {\"start\": 96, \"end\": 144}, {\"start\": 168, \"end\": 216}]}"
+      ],
+      "widgets_values_named": {
+        "video": "(none)",
+        "fps": "24",
+        "grid": "h3_5+17n",
+        "mode": "cut",
+        "timeline_data": "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 48}, {\"start\": 96, \"end\": 144}, {\"start\": 168, \"end\": 216}]}"
+      }
+    },
+    {
+      "id": 2,
+      "type": "MF_TrimByRanges",
+      "pos": [
+        850,
+        0
+      ],
+      "size": [
+        340,
+        330
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "ranges",
+          "name": "ranges",
+          "shape": 7,
+          "type": "SILENCE_RANGES",
+          "link": 1
+        },
+        {
+          "localized_name": "frames",
+          "name": "frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "localized_name": "audio",
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "localized_name": "video_path",
+          "name": "video_path",
+          "type": "STRING",
+          "widget": {
+            "name": "video_path"
+          },
+          "link": 2
+        },
+        {
+          "localized_name": "filename_prefix",
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": {
+            "name": "filename_prefix"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mode",
+          "name": "mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "ranges_json",
+          "name": "ranges_json",
+          "type": "STRING",
+          "widget": {
+            "name": "ranges_json"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "crossfade_sec",
+          "name": "crossfade_sec",
+          "type": "FLOAT",
+          "widget": {
+            "name": "crossfade_sec"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "codec",
+          "name": "codec",
+          "type": "COMBO",
+          "widget": {
+            "name": "codec"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "crf",
+          "name": "crf",
+          "type": "INT",
+          "widget": {
+            "name": "crf"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "preset",
+          "name": "preset",
+          "type": "COMBO",
+          "widget": {
+            "name": "preset"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "tensor_fps",
+          "name": "tensor_fps",
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "tensor_fps"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "precision",
+          "name": "precision",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "precision"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "final_video_path",
+          "name": "final_video_path",
+          "type": "STRING",
+          "links": [
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_TrimByRanges"
+      },
+      "widgets_values": [
+        "",
+        "MediaForge/timeline_cut",
+        "keep",
+        "[[0.0, 1.0], [5.0, 7.5]]",
+        0.0,
+        "h264 (libx264)",
+        18,
+        "medium",
+        30.0,
+        "precise (re-encode)"
+      ],
+      "widgets_values_named": {
+        "video_path": "",
+        "filename_prefix": "MediaForge/timeline_cut",
+        "mode": "keep",
+        "ranges_json": "[[0.0, 1.0], [5.0, 7.5]]",
+        "crossfade_sec": 0.0,
+        "codec": "h264 (libx264)",
+        "crf": 18,
+        "preset": "medium",
+        "tensor_fps": 30.0,
+        "precision": "precise (re-encode)"
+      }
+    },
+    {
+      "id": 3,
+      "type": "PreviewAny",
+      "pos": [
+        1280,
+        0
+      ],
+      "size": [
+        420,
+        160
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "source",
+          "name": "source",
+          "type": "*",
+          "link": 3
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      }
+    },
+    {
+      "id": 4,
+      "type": "MarkdownNote",
+      "pos": [
+        -760,
+        0
+      ],
+      "size": [
+        700,
+        520
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## MediaForge Timeline — cut an existing video\n\n1. In **⏱️ Edit Timeline** pick your video under `video`. It has to be in ComfyUI's `input/` folder; the upload button in the editor puts it there. `mode` is already `cut`.\n2. Mark what to keep: play or click the ruler, then use the mark-in / mark-out buttons; add more ranges with the add button. The default plan keeps 0–2 s, 4–6 s and 7–9 s, so shorten it for a clip under 9 seconds.\n3. Queue. ✂️ Trim by Ranges (`mode = keep`) cuts those ranges out of the same file and joins them in order. The path of the result shows in the preview node.\n\nNo model is involved. The output keeps the source's own frame rate; the ranges are passed in seconds, so a range starts and ends at the same moment whatever the source rate is. The preview node is there because Trim by Ranges is not an output node: without one ComfyUI has nothing to run.\n\n---\n1. 在 **⏱️ Edit Timeline** 的「來源影片」選你的影片。影片要放在 ComfyUI 的 `input/`；編輯器上的「上傳來源影片」會幫你放進去。`mode` 已經是 `cut`。\n2. 標出要保留的區間：播放或點尺規找到位置，按「設為起點」「設為終點」；要更多區間按「新增一段」。預設保留 0–2 秒、4–6 秒、7–9 秒，影片不到 9 秒請先縮短。\n3. 執行。✂️ Trim by Ranges（`mode = keep`）從同一個檔案剪出這些區間、依序接起來；成品的路徑顯示在預覽節點。\n\n不經過任何模型。輸出沿用來源影片自己的幀率；區間是用秒傳過去的，所以不管來源幀率是多少，起訖時間都一樣。預覽節點是必要的：Trim by Ranges 不是 output node，沒有它 ComfyUI 沒有東西可以執行。"
+      ],
+      "widgets_values_named": {
+        "text": "## MediaForge Timeline — cut an existing video\n\n1. In **⏱️ Edit Timeline** pick your video under `video`. It has to be in ComfyUI's `input/` folder; the upload button in the editor puts it there. `mode` is already `cut`.\n2. Mark what to keep: play or click the ruler, then use the mark-in / mark-out buttons; add more ranges with the add button. The default plan keeps 0–2 s, 4–6 s and 7–9 s, so shorten it for a clip under 9 seconds.\n3. Queue. ✂️ Trim by Ranges (`mode = keep`) cuts those ranges out of the same file and joins them in order. The path of the result shows in the preview node.\n\nNo model is involved. The output keeps the source's own frame rate; the ranges are passed in seconds, so a range starts and ends at the same moment whatever the source rate is. The preview node is there because Trim by Ranges is not an output node: without one ComfyUI has nothing to run.\n\n---\n1. 在 **⏱️ Edit Timeline** 的「來源影片」選你的影片。影片要放在 ComfyUI 的 `input/`；編輯器上的「上傳來源影片」會幫你放進去。`mode` 已經是 `cut`。\n2. 標出要保留的區間：播放或點尺規找到位置，按「設為起點」「設為終點」；要更多區間按「新增一段」。預設保留 0–2 秒、4–6 秒、7–9 秒，影片不到 9 秒請先縮短。\n3. 執行。✂️ Trim by Ranges（`mode = keep`）從同一個檔案剪出這些區間、依序接起來；成品的路徑顯示在預覽節點。\n\n不經過任何模型。輸出沿用來源影片自己的幀率；區間是用秒傳過去的，所以不管來源幀率是多少，起訖時間都一樣。預覽節點是必要的：Trim by Ranges 不是 output node，沒有它 ComfyUI 沒有東西可以執行。"
+      },
+      "color": "#432",
+      "bgcolor": "#653"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      1,
+      2,
+      0,
+      "SILENCE_RANGES"
+    ],
+    [
+      2,
+      1,
+      5,
+      2,
+      3,
+      "STRING"
+    ],
+    [
+      3,
+      2,
+      0,
+      3,
+      0,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

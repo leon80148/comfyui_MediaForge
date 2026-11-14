@@ -1,4 +1,4 @@
-"""Timeline 素材解碼：來源影片區段、素材切片、圖片（LoadSegmentFrames / LoadSegmentMedia / EncodeH3Segment 共用）。
+"""Timeline 素材解碼：來源影片區段、素材切片、圖片（Encode H3 Segment 與 Video Batch 共用）。
 
 FFmpeg 一律走 timeline_source 的安全輸入旗標。時間軸幀 f ↔ 素材時間 f·den/num 秒（相對第一個
 video 幀）；先 accurate seek 再以 fps=num/den 重取樣——同 fps 的來源逐幀精確，不同 fps 則是決定
@@ -124,24 +124,6 @@ def scale_filter(resize, width, height):
     return None
 
 
-def resize_image(image, mode, width, height):
-    """IMAGE 版的 scale_filter（fit / fill / stretch）：單張圖走 FFmpeg 會多一次編解碼，這裡直接用 torch 雙三次縮放。"""
-    x = image.movedim(-1, 1)
-    h, w = x.shape[-2:]
-    if mode == "stretch":
-        return F.interpolate(x, size=(height, width), mode="bicubic", align_corners=False).clamp(0, 1).movedim(1, -1)
-    scale = min(width / w, height / h) if mode == "fit" else max(width / w, height / h)
-    nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
-    x = F.interpolate(x, size=(nh, nw), mode="bicubic", align_corners=False).clamp(0, 1)
-    if mode == "fill":
-        top, left = (nh - height) // 2, (nw - width) // 2
-        return x[..., top:top + height, left:left + width].movedim(1, -1)
-    out = x.new_zeros(x.shape[0], x.shape[1], height, width)
-    top, left = (height - nh) // 2, (width - nw) // 2
-    out[..., top:top + nh, left:left + nw] = x
-    return out.movedim(1, -1)
-
-
 def run_capture(cmd, label, what):
     proc = subprocess.run(resolve_ffmpeg_cmd(cmd), capture_output=True)
     if proc.returncode != 0:
@@ -233,13 +215,13 @@ def pad_audio(wave, count, label):
     return F.pad(wave, (0, missing))
 
 
-# ---- 素材切片（manifest item → IMAGE / AUDIO；EncodeH3Segment 與 LoadSegmentMedia 共用）----
+# ---- 素材切片（manifest item → IMAGE / AUDIO；Encode H3 Segment 用）----
 
 IMAGE_MAX_SHORT_EDGE = 2048  # core H3 `max` 模式的上限；更大的圖先在這裡縮，避免整張高解析度進 RAM
 
 
 def _check_decode(nbytes, label, what, hint):
-    # 與 Load Segment Frames 同一個上限（raw bytes）；在配置任何記憶體之前拒絕
+    # 上限以 raw bytes 計；在配置任何記憶體之前拒絕
     if nbytes > MAX_DECODE_BYTES:
         raise ValueError(f"[{label}] {what}解碼需 {nbytes / 2 ** 30:.2f} GiB，超過上限 {MAX_DECODE_BYTES / 2 ** 30:.0f} GiB。{hint}")
 
@@ -277,9 +259,9 @@ def load_video_slice(item, start, count, fps, label, segment, scale=None, size=N
     num, den = fps
     seek = material_origin(snap, "source_start_us") + Fraction(start * den, num)
     size = tuple(size) if size else tuple(snap["display_size"])
-    # raw rgb24 計上限（同 Load Segment Frames）；float32 tensor 再多 4 倍
+    # 以 raw rgb24 計上限；float32 tensor 再多 4 倍
     _check_decode(count * size[0] * size[1] * 3, label, f"素材影片 {count} 幀 × {size[0]}x{size[1]} 的 rgb24 ",
-                  "請降低 ref_video_short_edge 或 resize 尺寸，或縮短參考範圍。")
+                  "請降低 ref_video_short_edge，或縮短參考範圍。")
     frames = decode_video(path, seek, count, fps, size, scale, label, snap["video_ordinal"])
     if frames.shape[0] < count:
         raise TimelineError(label, "E_SOURCE_SHORTFALL", segment=segment)

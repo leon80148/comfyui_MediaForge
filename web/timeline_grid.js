@@ -16,12 +16,12 @@ export const FPS_PRESETS = {
     "24000/1001": [24000, 1001], "30000/1001": [30000, 1001],
     "48": [48, 1], "50": [50, 1], "60000/1001": [60000, 1001], "60": [60, 1],
 };
-export const GRIDS = ["h3_5+17n", "causal_4n+1", "causal_8n+1", "free"];
+export const GRIDS = ["h3_5+17n", "free"];
 export const MODES = ["generate", "cut"];
 export const MAX_SEGMENTS = 256;
 export const H3_GRID = "h3_5+17n";
 
-const GRID_STEPS = { "h3_5+17n": [5, 17], "causal_4n+1": [1, 4], "causal_8n+1": [1, 8] };
+const GRID_STEPS = { "h3_5+17n": [5, 17] };
 
 export function sampleIndex(frame, sampleRate, fps) {
     const [num, den] = fps;
@@ -44,8 +44,7 @@ export function overlapOk(grid, frames) {
 export function latentTokens(grid, frames) {
     if (grid === "free") return null;
     const [base, step] = GRID_STEPS[grid];
-    const n = Math.floor((frames - base) / step);
-    return grid === H3_GRID ? 2 + 5 * n : 1 + n;
+    return 2 + 5 * Math.floor((frames - base) / step);
 }
 
 export function h3AudioTokens(frames) {
@@ -69,8 +68,7 @@ export function h3AudioCarry(prevLength, overlap) {
 
 export function carrySpec(grid, prevLength, overlap) {
     if (overlap === 0 || grid === "free") return null;
-    const spec = { video_tokens: latentTokens(grid, overlap) };
-    return grid === H3_GRID ? { ...spec, ...h3AudioCarry(prevLength, overlap) } : spec;
+    return { video_tokens: latentTokens(grid, overlap), ...h3AudioCarry(prevLength, overlap) };
 }
 
 export function phaseMs(spec) {

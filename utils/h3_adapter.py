@@ -160,7 +160,7 @@ def encode_segment(segment, clip, vae, width, height, ref_image_size, audio_vae=
     """一段 H3 conditioning + 空 AV latent（含鎖音）；素材只在這裡載入、用完即放。"""
     require_segment(segment, ("encode",), LABEL)
     if segment["effective_grid"] != H3_GRID:
-        raise ValueError(f"[{LABEL}] 只支援 H3（grid = {H3_GRID}）；其他模型請用 Load Segment Media 自己接 conditioning。")
+        raise ValueError(f"[{LABEL}] 只支援 MiniMax H3（grid = {H3_GRID}）。請把 Edit Timeline 設為 generate 模式。")
     materials = segment["materials"]
     if audio_vae is None and needs_audio_vae(materials):
         raise ValueError(f"[{LABEL}] 第 {segment['index'] + 1} 段有音訊類素材（參考音訊 / 配對音軌 / 鎖音），請連接 audio_vae。")

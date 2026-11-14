@@ -1,12 +1,12 @@
 """MF_ExtendLatent — 把前一段 latent 的尾端寫進本段開頭，並用 noise_mask 指定保留程度。
 
-只做 tensor 運算（utils/latent_carry.py）：不載入模型、不取樣，sampler 由使用者自己接。
-續接來源二擇一：loop 用 ➕ Append Segment 的 state，線性鏈用前一段取樣後的 previous_latent。
+只做 tensor 運算（utils/latent_carry.py）：不載入模型、不取樣。續接來源是前一段取樣後的 previous_latent。
+
+內部節點：由 MF_SampleSegments 展開（graph expansion）時建立，不出現在節點選單。
 """
 import json
 
-from ..utils import segment_spill
-from ..utils.latent_carry import EXTEND_LABEL, extend_latent
+from ..utils.latent_carry import extend_latent
 
 
 class MF_ExtendLatent:
@@ -23,8 +23,7 @@ class MF_ExtendLatent:
                 "carry_audio": ("BOOLEAN", {"default": False, "tooltip": "僅 H3 音訊續接；關閉時不改音訊 latent／遮罩。"}),
             },
             "optional": {
-                "state": ("MF_SEGMENT_STATE", {"tooltip": "前一段 ➕ Append Segment 的 state（loop 用）；與 previous_latent 擇一。"}),
-                "previous_latent": ("LATENT", {"tooltip": "前一段取樣後的 latent（線性鏈用）；與 state 擇一。"}),
+                "previous_latent": ("LATENT", {"tooltip": "前一段取樣後的 latent；本段與前一段有重疊時必接。"}),
                 "video_taper_tokens": ("INT", {
                     "default": 2, "min": 0, "max": 1000000, "step": 1,
                     "tooltip": "taper 時 video 續接區尾端放寬的 token 數，不得超過續接 token 數。",
@@ -33,7 +32,6 @@ class MF_ExtendLatent:
                     "default": 2, "min": 0, "max": 1000000, "step": 1,
                     "tooltip": "taper 時 audio 續接區尾端放寬的 token 數，不得超過續接 token 數。",
                 }),
-                "experimental_causal": ("BOOLEAN", {"default": False, "tooltip": "啟用 Wan／LTX 等因果 grid 續接；接縫可能不連續。"}),
                 "on_conflict": (["error", "carry_wins"], {
                     "default": "error",
                     "tooltip": "error 停止；carry_wins 覆寫續接區的 samples 與 mask。",
@@ -45,13 +43,13 @@ class MF_ExtendLatent:
     RETURN_NAMES = ("latent", "report")
     FUNCTION = "extend"
     CATEGORY = "MediaForge/AI"
+    DEPRECATED = True  # 不是要淘汰：core 只有這個旗標能讓節點不進搜尋與節點庫（另見 web/internal_nodes.js）
 
-    def extend(self, target_latent, segment, mask, carry_audio, state=None, previous_latent=None,
-               video_taper_tokens=2, audio_taper_tokens=2, experimental_causal=False, on_conflict="error"):
-        if state is not None:
-            segment_spill.check_state(state, EXTEND_LABEL)  # an old saved state gets the re-run message, not E_PROVENANCE
-        latent, report = extend_latent(target_latent, segment, mask, carry_audio, state, previous_latent,
-                                       video_taper_tokens, audio_taper_tokens, experimental_causal, on_conflict)
+    def extend(self, target_latent, segment, mask, carry_audio, previous_latent=None,
+               video_taper_tokens=2, audio_taper_tokens=2, on_conflict="error"):
+        latent, report = extend_latent(
+            target_latent, segment, mask=mask, carry_audio=carry_audio, previous_latent=previous_latent,
+            video_taper_tokens=video_taper_tokens, audio_taper_tokens=audio_taper_tokens, on_conflict=on_conflict)
         return (latent, json.dumps(report, ensure_ascii=False))
 
 

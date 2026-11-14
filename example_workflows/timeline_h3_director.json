@@ -492,6 +492,12 @@
           "name": "total_frames",
           "type": "INT",
           "links": null
+        },
+        {
+          "localized_name": "video_path",
+          "name": "video_path",
+          "type": "STRING",
+          "links": null
         }
       ],
       "properties": {
