@@ -523,6 +523,14 @@ function pinRawTags(pieces, data, manifest, index) {
     return unmapped || left || !before.ok || !after.ok || before.prompt !== after.prompt ? null : pinned;
 }
 
+// A position inside a `<…>` tag, moved past its end: an insert never cuts a tag in two.
+function outsideTag(text, at) {
+    const open = text.lastIndexOf("<", at - 1);
+    if (open < 0 || text.lastIndexOf(">", at - 1) > open) return at;
+    const close = text.indexOf(">", at);
+    return close < 0 ? at : close + 1;
+}
+
 // [start, end) of `text` → `tag`, with a space on either side only where a word would otherwise touch it.
 export function spliceTag(text, start, end, tag) {
     const head = text.slice(0, start);
@@ -632,7 +640,10 @@ export function useRefTag(data, index, materialId, ctx, { at = null, audio = fal
     const inherited = !data.segments[index].prompt && !!data.prompt;
     const isNew = !referenced(view.manifest, m.id);
     const placed = at?.text ? at : null;
-    let pieces = placed && [placed.text.slice(0, placed.start), placed.text.slice(placed.end)];
+    // a bare caret (a button) inside a tag inserts after it
+    const [start, end] = !placed ? [] : placed.start === placed.end
+        ? [outsideTag(placed.text, placed.start), outsideTag(placed.text, placed.start)] : [placed.start, placed.end];
+    let pieces = placed && [placed.text.slice(0, start), placed.text.slice(end)];
     let next = data;
     // a new reference renumbers the tags: numbered ones are first pinned to what they mean now
     if (isNew && placed && pieces.join("").search(RAW_TAG) >= 0) {
@@ -651,7 +662,11 @@ export function useRefTag(data, index, materialId, ctx, { at = null, audio = fal
     let caret = null;
     let prompt = null;
     if (placed) {
-        ({ text: prompt, caret } = spliceTag(pieces.join(""), pieces[0].length, pieces[0].length, tag));
+        // a button for a tag the prompt already has only adds what it was missing: the reference (the @ list always
+        // replaces its `@query`, so its range is never bare)
+        const keep = isNew && start === end && pieces.join("").includes(tag);
+        ({ text: prompt, caret } = keep ? { text: pieces.join(""), caret: null }
+            : spliceTag(pieces.join(""), pieces[0].length, pieces[0].length, tag));
     } else {
         const template = templateOf(next, index);
         // pressing ＋ for a tag the prompt already has only adds what it was missing: the reference
@@ -700,7 +715,7 @@ export function sharedTagButtons(data, ctx) {
 
 // The tag goes into the shared prompt (at `at`, else appended) and every segment using it that lacks the
 // reference gets one, as one commit. Numbered tags cannot be pinned per segment in one shared text, so a new
-// reference next to them is refused.
+// reference that would make one of them name another material is refused.
 export function useSharedTag(data, materialId, ctx, { at = null, audio = false } = {}) {
     const m = material(data, materialId);
     if (!m) return fail("no_material");
@@ -711,8 +726,9 @@ export function useSharedTag(data, materialId, ctx, { at = null, audio = false }
     const item = b.items[m.id];
     if (item.state === "blocked") return fail(item.reason, { category: item.category, limit: item.limit, segment: item.segment });
     const text = at ? at.text : data.prompt;
-    const [start, end] = at ? [at.start, at.end] : [text.length, text.length];
-    if (item.missing.length && `${text.slice(0, start)}${text.slice(end)}`.search(RAW_TAG) >= 0) return fail("shared_raw_tags");
+    let [start, end] = at ? [at.start, at.end] : [text.length, text.length];
+    if (start === end) start = end = outsideTag(text, start);
+    const rest = `${text.slice(0, start)}${text.slice(end)}`;
     let next = data;
     for (const i of item.missing) {
         const added = createFromCard(next, m.id, "refs", emitIntervals(next.segments)[i][0], ctx);
@@ -720,14 +736,22 @@ export function useSharedTag(data, materialId, ctx, { at = null, audio = false }
         next = added.next;
     }
     const tag = `<@${m.name}${audio ? ":audio" : ""}>`;
-    const { text: prompt, caret } = spliceTag(text, start, end, tag);
+    // as in useRefTag: a button for a tag already written only adds the references
+    const keep = start === end && item.missing.length > 0 && rest.includes(tag);
+    const { text: prompt, caret } = keep ? { text: rest, caret: null } : spliceTag(text, start, end, tag);
     next = { ...next, prompt };
+    const raw = rest.match(RAW_TAG) ?? [];
     for (const i of b.inheritors) {
         const after = segmentInputs(next, i, ctx);
         if (!after) return fail("not_ready");
         if (!after.ok) return problemAt("manifest", after.error, i);
         const resolved = resolvePrompt(tag, after.manifest, next.materials, i, true);
         if (!resolved.ok) return problemAt("prompt", resolved.error, i);
+        if (!raw.length) continue;
+        // a numbered tag that named a material here must still name the same one
+        const was = rawTagAliases(data, segmentInputs(data, i, ctx).manifest);
+        const now = rawTagAliases(next, after.manifest);
+        if (raw.some((t) => was.has(t) && was.get(t) !== now.get(t))) return fail("shared_raw_tags");
     }
     const r = done(data, next, ctx, [m.id, ...item.missing.map(String)]);
     return r.ok ? { ...r, caret } : r;

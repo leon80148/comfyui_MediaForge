@@ -2,12 +2,16 @@
 // typing on filters them, and picking one hands the item and the `@query` range to the caller, which writes the
 // tag. No timeline knowledge lives here.
 
-// `@` or `＠` before the caret with no whitespace in between, unless it follows `<` (a hand-written `<@name>`).
+// `@` or `＠` before the caret with no whitespace in between, unless it sits inside a `<…` still open: a hand-written
+// `<@name>`, or any tag the inserted one would cut in two.
 export function mentionQuery(text, caret) {
     for (let i = caret - 1; i >= 0; i--) {
         const ch = text[i];
         if (/\s/.test(ch)) return null;
-        if (ch === "@" || ch === "＠") return text[i - 1] === "<" ? null : { start: i, end: caret, query: text.slice(i + 1, caret) };
+        if (ch === "@" || ch === "＠") {
+            const before = text.slice(0, i);
+            return before.lastIndexOf("<") > before.lastIndexOf(">") ? null : { start: i, end: caret, query: text.slice(i + 1, caret) };
+        }
     }
     return null;
 }

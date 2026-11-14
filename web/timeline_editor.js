@@ -416,6 +416,7 @@ class TimelineEditor {
         this.setJsonVisible(this.broken);
         if (!this.broken) this.syncMedia();
         this.render(true);
+        this.restoreFocus();
     }
 
     commit(next, notice = "") {
@@ -1230,19 +1231,47 @@ class TimelineEditor {
                 text: item.state === "blocked" ? m.name : `${item.state === "add" ? "＋" : "✓"} ${m.name}`,
                 title: item.state === "blocked" ? `${S.segment(item.segment + 1)}：${this.refusalText(item)}`
                     : item.state === "add" ? S.sharedChipAdd(m.name, item.missing.map((i) => i + 1)) : S.sharedChipInsert(m.name),
-                onclick: () => this.apply(useSharedTag(this.data, m.id, this.editContext(), { at: this.caretFor({ kind: "shared" }) })),
+                onclick: () => this.useTagButton({ kind: "shared" }, (at) => useSharedTag(this.data, m.id, this.editContext(), { at })),
             });
             chip.disabled = item.state === "blocked";
             return chip;
         }))];
     }
 
+    caretKey(scope) {
+        return scope.kind === "shared" ? "shared" : `segment:${scope.index}`;
+    }
+
     // Where the caret was when the box last lost focus, while the box still holds that text; else null (append).
+    // A selection counts as its end: a box without focus shows none, so a button must not replace one.
     caretFor(scope) {
-        const shared = scope.kind === "shared";
-        const c = this.view.caret[shared ? "shared" : `segment:${scope.index}`];
-        const stored = shared ? this.data.prompt : this.data.segments[scope.index]?.prompt;
-        return c && c.text === stored ? c : null;
+        const c = this.view.caret[this.caretKey(scope)];
+        const stored = scope.kind === "shared" ? this.data.prompt : this.data.segments[scope.index]?.prompt;
+        return c && c.text === stored ? { text: c.text, start: c.end, end: c.end } : null;
+    }
+
+    // A tag button at the box's remembered caret; the caret then moves past the new tag, so a second button follows it.
+    useTagButton(scope, run) {
+        const r = run(this.caretFor(scope));
+        if (!this.apply(r) || r.caret == null) return;
+        const text = scope.kind === "shared" ? this.data.prompt : this.data.segments[scope.index].prompt;
+        this.view.caret[this.caretKey(scope)] = { text, start: r.caret, end: r.caret };
+    }
+
+    // Undoing an @ pick rebuilds this editor from scratch (graph.configure): the box the user was typing in gets the
+    // caret back, or the next keystrokes would land on the canvas shortcuts. The new root may mount frames later.
+    restoreFocus(tries = 30) {
+        const want = this.view.refocus;
+        if (!want || this.destroyed) return;
+        const box = [...this.form.querySelectorAll("textarea")].find((t) => t.getAttribute("data-fk") === want.fk);
+        if (!box?.isConnected) {
+            if (tries > 0) requestAnimationFrame(() => this.restoreFocus(tries - 1));
+            else this.view.refocus = null;
+            return;
+        }
+        this.view.refocus = null;
+        box.focus({ preventScroll: true });
+        box.setSelectionRange(want.caret, want.caret);
     }
 
     // ---- prompt boxes: their height, the @ material list and Ctrl+Z after a pick ----
@@ -1269,17 +1298,17 @@ class TimelineEditor {
                 hint: S.mention.hint,
             }));
         }
-        area.addEventListener("input", () => this.lastPick === area && (this.lastPick = null));
+        area.addEventListener("input", () => this.lastPick?.area === area && (this.lastPick = null));
         // the tag buttons insert here: they take focus, so the caret is read on the way out
         area.addEventListener("blur", () => {
-            this.view.caret[scope.kind === "shared" ? "shared" : `segment:${scope.index}`] =
-                { text: area.value, start: area.selectionStart, end: area.selectionEnd };
+            this.view.caret[this.caretKey(scope)] = { text: area.value, start: area.selectionStart, end: area.selectionEnd };
         });
         // The browser's own undo would take the tag out of the text but leave the reference the pick added.
         area.addEventListener("keydown", (e) => {
-            if (this.lastPick !== area || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== "z") return;
+            if (this.lastPick?.area !== area || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== "z") return;
             e.preventDefault();
             e.stopPropagation();
+            this.view.refocus = { fk: area.getAttribute("data-fk"), caret: this.lastPick.caret };
             this.lastPick = null;
             changeTracker()?.undo?.();
         });
@@ -1346,7 +1375,7 @@ class TimelineEditor {
         if (!this.apply(r)) return;
         area.value = stored();
         area.setSelectionRange(r.caret, r.caret);
-        this.lastPick = area;
+        this.lastPick = { area, caret: range.end };   // after an undo the text is back to "…@query", caret at its end
     }
 
     segmentForm(st) {
@@ -1396,7 +1425,7 @@ class TimelineEditor {
                 class: item.state === "add" ? "add" : "", "data-fk": `tag:${m.id}`,
                 text: item.state === "blocked" ? m.name : `${item.state === "add" ? "＋" : "✓"} ${m.name}`,
                 title: item.state === "insert" ? S.chipInsert(m.name) : item.state === "add" ? S.chipAdd(m.name) : this.refusalText(item),
-                onclick: () => this.apply(useRefTag(this.data, i, m.id, this.editContext(), { at: this.caretFor({ kind: "segment", index: i }) })),
+                onclick: () => this.useTagButton({ kind: "segment", index: i }, (at) => useRefTag(this.data, i, m.id, this.editContext(), { at })),
             });
             chip.disabled = item.state === "blocked";
             return chip;
@@ -1686,7 +1715,7 @@ class TimelineEditor {
         if (st.h3) {
             const item = tagButtons(this.data, i, this.ctx).items?.[id];
             const use = button(item?.state === "insert" ? S.insertTag(m.name, i + 1) : S.useInSegment(i + 1),
-                () => this.apply(useRefTag(this.data, i, id, this.editContext(), { at: this.caretFor({ kind: "segment", index: i }) })),
+                () => this.useTagButton({ kind: "segment", index: i }, (at) => useRefTag(this.data, i, id, this.editContext(), { at })),
                 { title: item?.state === "blocked" ? this.refusalText(item) : S.useInSegmentTitle, "data-fk": "use" });
             use.disabled = !item || item.state === "blocked";
             uses.push(use);
