@@ -62,7 +62,7 @@ Strip dead air from a lecture recording or podcast.
 | `MF_LoadVideoFrames` | `video_path = "lecture.mp4"` |
 | `MF_DetectSilence` | `noise_db = -30`, `min_duration_sec = 1.5` |
 | `MF_TrimByRanges` | `mode = "remove"` |
-| `PreviewAny` | Wire Trim by Ranges? `final_video_path` into `source`; shows the result path after Queue |
+| `PreviewAny` | Wire Trim by Ranges' `final_video_path` into `source`; shows the result path after Queue |
 
 ### 2. Compose: watermark + intro text + BGM + subtitle in **one** re-encode (5 nodes)
 
@@ -316,6 +316,8 @@ Rejected (the run stops with an error): batch > 1, latents whose layout doesn't 
 "Supported" does not mean conditioning conflicts are checked, character consistency is guaranteed, or seams are invisible.
 
 LTX-2 and Wan 2.2 are not supported; their experimental carry was removed in 0.13. See [Upgrading from 0.12](#upgrading-from-012).
+
+0.13.0 integration verification (2026-11-14): core 0.44.2, frontend 1.57.6, classic / Nodes 2.0. With the same seed, old main and 0.13 H3 runs (three text segments; references + anchors + audio locks) had a maximum video/audio latent difference of 0 per segment. Text output: 260 frames, 32 kHz / 346,667 samples; locked master audio was sample-exact. Cut output on 24 / 30 / 29.97 fps sources matched the baseline decoded video and audio exactly.
 
 ### Memory and disk
 

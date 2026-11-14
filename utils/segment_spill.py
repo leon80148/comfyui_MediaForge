@@ -203,7 +203,7 @@ def flush_audio(committed_end, pending, wave, wave_start, mix, commit_end, curve
 
 def check_state(state, label):
     if not isinstance(state, dict) or state.get("type") != "MF_SEGMENT_STATE":
-        raise ValueError(f"[{label}] state 必須來自 {APPEND_LABEL}，請連接前一段的 state。")
+        raise ValueError(f"[{label}] state 格式無效，請重新執行整個流程。")
     if state.get("version") != 2:
         raise ValueError(f"[{label}] state 是舊版格式，請重新執行整個時間軸流程。")
 

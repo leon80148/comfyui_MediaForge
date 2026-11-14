@@ -317,6 +317,8 @@ Sample Segments 以常數把每段規格傳進該段的節點組，ComfyUI 的�
 
 不支援 LTX-2 與 Wan 2.2；它們的實驗性續接已在 0.13 移除。見[從 0.12 升級](#從-012-升級)。
 
+0.13.0 整合驗收（2026-11-14）：core 0.44.2、frontend 1.57.6，classic / Nodes 2.0。相同 seed 的舊 main／新版 H3 比對（純文字三段、參考素材＋錨定＋鎖音）各段 video／audio latent 最大差 0；純文字輸出 260 幀、32 kHz 346,667 samples，鎖音母帶逐 sample 相同。cut 另以 24／30／29.97 fps 來源對照原基準，解碼後影像及音訊完全一致。
+
 ### 記憶體與磁碟
 
 - Append 逐段解碼、去掉重疊、做 crossfade，把無損 FFV1 視訊與 float32 WAV 分段檔（1344×768 約每幀 0.5 MB）暫存到 plugin 的 `.mf_tmp/seg_*` 目錄。解碼前預估 RAM（`E_RAM`）、落盤前檢查剩餘磁碟（`E_DISK`）—— 都是估算，不是保證。

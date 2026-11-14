@@ -128,7 +128,7 @@ class MF_SampleSegments:
             raise ValueError(f"[{LABEL}] segment_plan 必須來自（新版）Edit Timeline，請重新執行 Edit Timeline。")
         if (segment_plan["mode"] != "generate" or segment_plan["effective_grid"] != H3_GRID
                 or tuple(segment_plan["fps"]) != H3_FPS):
-            raise ValueError(f"[{LABEL}] 只支援 MiniMax H3：請把 Edit Timeline 設為 generate 模式、fps = 24。")
+            raise ValueError(f"[{LABEL}] 只支援 MiniMax H3：請把 Edit Timeline 設為 generate 模式、fps = 24。若要剪現有影片，請改接 Trim by Ranges。")
         if audio_vae is None and any(needs_audio_vae(spec["materials"]) for spec in segment_plan["specs"]):
             raise ValueError(f"[{LABEL}] 時間軸上有音訊類素材（參考音訊 / 配對音軌 / 鎖定原音），請連接 audio_vae。")
         # socket 一律連回原上游：把物件塞成常數會讓 core 的快取 key 變成 Unhashable、永遠重算
