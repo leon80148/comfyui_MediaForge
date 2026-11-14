@@ -535,12 +535,12 @@ export function tagCounts(manifest) {
 
 // `<@name>` / `<@name:audio>` → this segment's tag; hand-written `<Picture N>`-style tags are range-checked.
 export function resolvePrompt(template, manifest, materials, index, h3) {
-    const fail = (reason) => ({ ok: false, error: { code: "E_PROMPT_REF", segment: index + 1,
+    const fail = (reason, extra = {}) => ({ ok: false, error: { code: "E_PROMPT_REF", segment: index + 1, ...extra,
         ...detail(reason, { kind: "segment", id: index }, "prompt") } });
     if (!h3) return template.search(ALIAS_RE) >= 0 || template.search(TAG_RE) >= 0 ? fail("not_h3") : { ok: true, prompt: template };
     const counts = tagCounts(manifest);
-    for (const [, kind, n] of template.matchAll(TAG_RE)) {
-        if (n.length > 9 || !(Number(n) >= 1 && Number(n) <= counts[kind])) return fail("tag_range");
+    for (const [tag, kind, n] of template.matchAll(TAG_RE)) {
+        if (n.length > 9 || !(Number(n) >= 1 && Number(n) <= counts[kind])) return fail("tag_range", { tag, kind, count: counts[kind] });
     }
     const byName = new Map(materials.map((m) => [m.name, m]));
     let prompt = "";

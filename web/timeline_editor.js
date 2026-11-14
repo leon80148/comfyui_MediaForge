@@ -23,13 +23,14 @@ import { MAX_MATERIALS, refOk, strictParse } from "./timeline_materials.js";
 import {
     addMaterials, aliasRawTags, checkEdit, conformSegments, createFromCard, deleteBar, deleteCut, deleteMaterial, editBar,
     emitIntervals, inputImpact, insertCut, markCut, moveRefInOrder, patchBar, pickSnap, probeIssue, refChanges, refillSegments,
-    removeAllMaterials, renameMaterial, segmentInputs, setShotBoundary, snapTargets, splitBar, tagButtons, timelineProblems,
-    useRefTag,
+    removeAllMaterials, renameMaterial, segmentInputs, setShotBoundary, sharedTagButtons, snapTargets, splitBar, tagButtons,
+    timelineProblems, useRefTag, useSharedTag,
 } from "./timeline_edit.js";
+import { attachMention } from "./timeline_mention.js";
 import { S } from "./timeline_strings.js";
 
 const NODE_TYPE = "MF_EditTimeline";
-const freshView = () => ({ active: 0, zoom: null, playhead: 0, sel: null, open: {} });
+const freshView = () => ({ active: 0, zoom: null, playhead: 0, sel: null, open: {}, caret: {} });
 const OWNERS = new WeakMap();      // editor root → its editor
 const HANDOVER = new Map();        // node id → { graphId, view } of an editor destroyed during the current task
 const UPLOAD_SUBFOLDER = "mediaforge_timeline";
@@ -40,6 +41,30 @@ const DEFAULT_OVERLAP = { "h3_5+17n": 22, free: 0 };
 const SEGMENT_COLORS = ["#3d7bd9", "#d98a3d", "#3dae73", "#a95ad1", "#d14f6b", "#4cb0c2"];
 const KIND_COLORS = { image: "#5c8f3a", video: "#3a6f8f", audio: "#8f6a3a" };
 const KIND_ICON = { image: "🖼", video: "🎞", audio: "🔊" };
+const PROMPT_HEIGHTS_KEY = "mediaforge.timelineEditor.promptHeights";
+const DEFAULT_PROMPT_HEIGHT = { shared: 120, segment: 84 };   // px: about 6 and 4 lines
+
+function promptHeights() {
+    try {
+        const stored = JSON.parse(localStorage.getItem(PROMPT_HEIGHTS_KEY) ?? "{}");
+        return stored && typeof stored === "object" ? stored : {};
+    } catch {
+        return {};   // storage switched off, or a value this code did not write
+    }
+}
+
+function promptHeight(kind) {
+    const h = promptHeights()[kind];
+    return Number.isFinite(h) && h > 0 ? h : DEFAULT_PROMPT_HEIGHT[kind];
+}
+
+function savePromptHeight(kind, px) {
+    try {
+        localStorage.setItem(PROMPT_HEIGHTS_KEY, JSON.stringify({ ...promptHeights(), [kind]: px }));
+    } catch {
+        // storage switched off: the size lasts until the box is rebuilt
+    }
+}
 const ACCEPTS = { image: ["refs", "visual"], video: ["refs", "visual"], audio: ["refs", "audio"] };  // createFromCard's table
 const LANE_TOP = 100;
 const LANE_ROW = 22;
@@ -262,6 +287,18 @@ function installStyle() {
 .mf-tl-chips button { padding: 0 6px; font-size: 11px; }
 .mf-tl-chips button.add { border-style: dashed; }
 .mf-tl-chips input.seed { width: 270px; }
+.mf-tl-mention { position: fixed; z-index: 10000; min-width: 260px; max-width: 440px; max-height: 260px; overflow-y: auto;
+  font: 12px sans-serif; color: var(--fg-color, #ddd); background: var(--comfy-menu-bg, #2b2d31);
+  border: 1px solid var(--border-color, #4a4e57); border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+.mf-tl-mention .row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; cursor: pointer; }
+.mf-tl-mention .row.on { background: #3b5b8c; }
+.mf-tl-mention .row.off { opacity: .45; cursor: default; }
+.mf-tl-mention .row img, .mf-tl-mention .row .icon { width: 24px; height: 24px; flex: none; border-radius: 3px; object-fit: cover; text-align: center; line-height: 24px; }
+.mf-tl-mention .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mf-tl-mention .status { white-space: nowrap; opacity: .8; }
+.mf-tl-mention .status.ok { color: #8fd18f; opacity: 1; }
+.mf-tl-mention .status.add { color: #e0b25a; opacity: 1; }
+.mf-tl-mention .foot { padding: 3px 8px; font-size: 11px; opacity: .7; border-top: 1px solid var(--border-color, #3a3d44); }
 .mf-tl-stepper { display: flex; align-items: center; gap: 6px; }
 .mf-tl-stepper button { padding: 0 8px; }
 .mf-tl-panel { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 4px; border: 1px dashed var(--border-color, #555); border-radius: 4px; }
@@ -309,6 +346,8 @@ class TimelineEditor {
         this.fixKey = "";
         this.gutterKey = "";
         this.destroyed = false;
+        this.boxHandles = [];            // the current form's prompt boxes: their @ lists and size observers
+        this.lastPick = null;            // the prompt box whose last change was an @ pick (Ctrl+Z undoes the pick)
         this.view = freshView();
         this.build();
         OWNERS.set(this.root, this);
@@ -354,6 +393,8 @@ class TimelineEditor {
         // dropped / rebuilt.
         this.endGesture();
         this.endPress();
+        this.releaseBoxes();
+        this.lastPick = null;
         this.fieldCommit = false;
         clearTimeout(this.fieldTimer);
         this.loadGen++;
@@ -374,6 +415,7 @@ class TimelineEditor {
         this.setJsonVisible(this.broken);
         if (!this.broken) this.syncMedia();
         this.render(true);
+        this.restoreFocus();
     }
 
     commit(next, notice = "") {
@@ -478,7 +520,10 @@ class TimelineEditor {
     problemText(p) {
         const e = p.error;
         const where = p.segment != null ? `${S.segment(p.segment + 1)}：` : "";
-        const why = () => S.problemReasons[e.reason] ?? S.unknownProblem;
+        const why = () => {
+            const text = S.problemReasons[e.reason];
+            return typeof text === "function" ? text(e) : text ?? S.unknownProblem;
+        };
         if (p.stage === "schema") return S.badField(this.placeText(e.location));
         if (p.stage === "grid") return S.invalid(this.placeText(e.location), S.reasons[e.reason] ?? e.reason);
         if (e.code === "E_ANCHOR_OVERLAP") {
@@ -1122,6 +1167,7 @@ class TimelineEditor {
     // ---------- inspector ----------
 
     renderForm(st) {
+        this.releaseBoxes();
         this.placeButton = null;
         this.keepSections(this.form);
         const sel = this.view.sel;
@@ -1166,8 +1212,170 @@ class TimelineEditor {
         // decided once: writing the first words must not close the section under the user
         this.view.open.shared ??= this.isFresh();
         return this.details("shared", `${S.globalPrompt}：${text || S.sharedEmpty}`, [
-            el("textarea", { class: "full", "data-fk": "shared", onchange: (e) => this.propose({ ...this.data, prompt: e.target.value }) }, [text]),
+            this.promptBox(el("textarea", { class: "full", "data-fk": "shared",
+                onchange: (e) => e.target.value !== this.data.prompt && this.propose({ ...this.data, prompt: e.target.value }) }, [text]),
+            { kind: "shared" }),
+            ...this.sharedTagRow(),
         ]);
+    }
+
+    // The segment row's counterpart for mouse users: the same states and command as the shared prompt's @ list.
+    sharedTagRow() {
+        const b = sharedTagButtons(this.data, this.ctx);
+        if (b.hidden || !this.data.materials.length || b.blocked === "manifest") return [];
+        if (b.blocked) return [el("div", { class: "hint", text: S.chipsBlocked })];
+        return [el("div", { class: "mf-tl-chips" }, this.data.materials.map((m) => {
+            const item = b.items[m.id];
+            const chip = el("button", {
+                class: item.state === "add" ? "add" : "", "data-fk": `stag:${m.id}`,
+                text: item.state === "blocked" ? m.name : `${item.state === "add" ? "＋" : "✓"} ${m.name}`,
+                title: item.state === "blocked" ? `${S.segment(item.segment + 1)}：${this.refusalText(item)}`
+                    : item.state === "add" ? S.sharedChipAdd(m.name, item.missing.map((i) => i + 1)) : S.sharedChipInsert(m.name),
+                onclick: () => this.useTagButton({ kind: "shared" }, (at) => useSharedTag(this.data, m.id, this.editContext(), { at })),
+            });
+            chip.disabled = item.state === "blocked";
+            return chip;
+        }))];
+    }
+
+    caretKey(scope) {
+        return scope.kind === "shared" ? "shared" : `segment:${scope.index}`;
+    }
+
+    // Where the caret was when the box last lost focus, while the box still holds that text; else null (append).
+    // A selection counts as its end: a box without focus shows none, so a button must not replace one.
+    caretFor(scope) {
+        const c = this.view.caret[this.caretKey(scope)];
+        const stored = scope.kind === "shared" ? this.data.prompt : this.data.segments[scope.index]?.prompt;
+        return c && c.text === stored ? { text: c.text, start: c.end, end: c.end } : null;
+    }
+
+    // A tag button at the box's remembered caret; the caret then moves past the new tag, so a second button follows it.
+    useTagButton(scope, run) {
+        const r = run(this.caretFor(scope));
+        if (!this.apply(r) || r.caret == null) return;
+        const text = scope.kind === "shared" ? this.data.prompt : this.data.segments[scope.index].prompt;
+        this.view.caret[this.caretKey(scope)] = { text, start: r.caret, end: r.caret };
+    }
+
+    // Undoing an @ pick rebuilds this editor from scratch (graph.configure): the box the user was typing in gets the
+    // caret back, or the next keystrokes would land on the canvas shortcuts. The new root may mount frames later.
+    restoreFocus(tries = 30) {
+        const want = this.view.refocus;
+        if (!want || this.destroyed) return;
+        const box = [...this.form.querySelectorAll("textarea")].find((t) => t.getAttribute("data-fk") === want.fk);
+        if (!box?.isConnected) {
+            if (tries > 0) requestAnimationFrame(() => this.restoreFocus(tries - 1));
+            else this.view.refocus = null;
+            return;
+        }
+        this.view.refocus = null;
+        box.focus({ preventScroll: true });
+        box.setSelectionRange(want.caret, want.caret);
+    }
+
+    // ---- prompt boxes: their height, the @ material list and Ctrl+Z after a pick ----
+
+    // scope: {kind: "shared"} | {kind: "segment", index}
+    promptBox(area, scope) {
+        // the box is rebuilt with the form: the height the user dragged it to is kept in the browser, not the workflow
+        const kind = scope.kind === "shared" ? "shared" : "segment";
+        let applied = promptHeight(kind);
+        area.style.height = `${applied}px`;
+        const sizes = new ResizeObserver((entries) => {
+            const h = Math.round(entries[0]?.borderBoxSize?.[0]?.blockSize ?? area.offsetHeight);
+            // 0: the section holding the box is closed
+            if (!area.isConnected || !(h > 0) || Math.abs(h - applied) < 1) return;
+            applied = h;
+            savePromptHeight(kind, h);
+        });
+        sizes.observe(area);
+        this.boxHandles.push({ close: () => sizes.disconnect() });
+        if (this.settings().h3) {
+            this.boxHandles.push(attachMention(area, document.body, {
+                items: () => this.mentionItems(scope),
+                pick: (item, range) => this.pickTag(scope, item, range, area),
+                hint: S.mention.hint,
+            }));
+        }
+        area.addEventListener("input", () => this.lastPick?.area === area && (this.lastPick = null));
+        // the tag buttons insert here: they take focus, so the caret is read on the way out
+        area.addEventListener("blur", () => {
+            this.view.caret[this.caretKey(scope)] = { text: area.value, start: area.selectionStart, end: area.selectionEnd };
+        });
+        // The browser's own undo would take the tag out of the text but leave the reference the pick added.
+        area.addEventListener("keydown", (e) => {
+            if (this.lastPick?.area !== area || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== "z") return;
+            e.preventDefault();
+            e.stopPropagation();
+            this.view.refocus = { fk: area.getAttribute("data-fk"), caret: this.lastPick.caret };
+            this.lastPick = null;
+            changeTracker()?.undo?.();
+        });
+        return area;
+    }
+
+    releaseBoxes() {
+        for (const h of this.boxHandles) h.close();
+        this.boxHandles = [];
+    }
+
+    mentionItems(scope) {
+        const shared = scope.kind === "shared";
+        const ctx = this.editContext();
+        const b = shared ? sharedTagButtons(this.data, ctx) : tagButtons(this.data, scope.index, ctx);
+        if (b.hidden) return [];
+        const rows = [];
+        for (const m of this.data.materials) {
+            const item = b.items?.[m.id];
+            const base = { id: m.id, name: m.name, icon: KIND_ICON[m.kind],
+                thumb: m.kind === "image" ? viewURL({ ...splitSource(m.ref), type: "input" }) : null };
+            if (!item) {
+                rows.push({ ...base, key: m.id, label: m.name, audio: false, status: S.chipsBlocked, disabled: true });
+                continue;
+            }
+            rows.push({ ...base, key: m.id, label: m.name, audio: false, ...this.mentionStatus(item, b, shared, false) });
+            if (item.audioTag || item.audio) {
+                rows.push({ ...base, key: `${m.id}:audio`, label: `${m.name}:audio`, icon: KIND_ICON.audio, thumb: null, audio: true,
+                    ...this.mentionStatus(item, b, shared, true) });
+            }
+        }
+        return rows;
+    }
+
+    mentionStatus(item, b, shared, audio) {
+        if (item.state === "blocked") {
+            const why = this.refusalText(item);
+            const status = shared ? `${S.segment(item.segment + 1)}：${why}` : why;
+            return { status, title: status, disabled: true };
+        }
+        if (item.state === "add") {
+            return { tone: "add", disabled: false,
+                status: shared ? S.mention.sharedAdd(item.missing.map((i) => i + 1)) : audio ? S.mention.soundAdd : S.mention.segAdd };
+        }
+        if (!shared) return { tone: "ok", disabled: false, status: S.mention.segIn(audio ? item.audioTag : item.tag) };
+        return b.inheritors.length ? { tone: "ok", disabled: false, status: S.mention.sharedAll(b.inheritors.length) }
+            : { disabled: false, status: S.mention.sharedNone };
+    }
+
+    // Text typed since the last save is committed first, as its own undo step (the pick is the next one), so an
+    // undo right after the pick keeps what was typed.
+    pickTag(scope, item, range, area) {
+        if (this.broken || this.destroyed || !area.isConnected) return;
+        const shared = scope.kind === "shared";
+        const stored = () => (shared ? this.data.prompt : this.data.segments[scope.index]?.prompt);
+        if (stored() === undefined) return;
+        if (area.value !== stored()) {
+            const saved = this.propose(shared ? { ...this.data, prompt: area.value } : this.withSegment(scope.index, { prompt: area.value }));
+            if (!saved) return;
+        }
+        const opts = { at: { text: area.value, start: range.start, end: range.end }, audio: item.audio };
+        const ctx = this.editContext();
+        const r = shared ? useSharedTag(this.data, item.id, ctx, opts) : useRefTag(this.data, scope.index, item.id, ctx, opts);
+        if (!this.apply(r)) return;
+        area.value = stored();
+        area.setSelectionRange(r.caret, r.caret);
+        this.lastPick = { area, caret: range.end };   // after an undo the text is back to "…@query", caret at its end
     }
 
     segmentForm(st) {
@@ -1184,8 +1392,9 @@ class TimelineEditor {
             el("div", { class: "full" }, [el("b", { text: S.segment(i + 1) }),
                 ` · ${S.range(sec(s.start), sec(s.end))}${overlap ? ` · ${S.overlapPrev(sec(overlap), i)}` : ""}`]),
             el("span", { text: S.prompt }),
-            el("textarea", { class: "main", "data-fk": "prompt", placeholder: S.inheritGlobal,
-                onchange: (e) => this.propose(this.withSegment(i, { prompt: e.target.value })) }, [s.prompt]),
+            this.promptBox(el("textarea", { class: "main", "data-fk": "prompt", placeholder: S.inheritGlobal,
+                onchange: (e) => e.target.value !== this.data.segments[i]?.prompt && this.propose(this.withSegment(i, { prompt: e.target.value })) },
+            [s.prompt]), { kind: "segment", index: i }),
             ...this.promptSource(i),
             ...this.tagRow(i),
             el("span", { text: S.lengthLabel }), this.lengthStepper(st, i),
@@ -1216,7 +1425,7 @@ class TimelineEditor {
                 class: item.state === "add" ? "add" : "", "data-fk": `tag:${m.id}`,
                 text: item.state === "blocked" ? m.name : `${item.state === "add" ? "＋" : "✓"} ${m.name}`,
                 title: item.state === "insert" ? S.chipInsert(m.name) : item.state === "add" ? S.chipAdd(m.name) : this.refusalText(item),
-                onclick: () => this.apply(useRefTag(this.data, i, m.id, this.editContext())),
+                onclick: () => this.useTagButton({ kind: "segment", index: i }, (at) => useRefTag(this.data, i, m.id, this.editContext(), { at })),
             });
             chip.disabled = item.state === "blocked";
             return chip;
@@ -1500,7 +1709,7 @@ class TimelineEditor {
         const place = (lane) => () => this.apply(createFromCard(this.data, id, lane, this.view.playhead, this.editContext()));
         const item = tagButtons(this.data, i, this.ctx).items?.[id];
         const use = button(item?.state === "insert" ? S.insertTag(m.name, i + 1) : S.useInSegment(i + 1),
-            () => this.apply(useRefTag(this.data, i, id, this.editContext())),
+            () => this.useTagButton({ kind: "segment", index: i }, (at) => useRefTag(this.data, i, id, this.editContext(), { at })),
             { title: item?.state === "blocked" ? this.refusalText(item) : S.useInSegmentTitle, "data-fk": "use" });
         use.disabled = !item || item.state === "blocked";
         const uses = [use];
@@ -1969,7 +2178,7 @@ class TimelineEditor {
             this.notice = note;
             return this.render();
         }
-        const r = addMaterials(this.data, done.map((u) => ({ kind: u.kind, ref: u.ref, filename: u.file.name })), this.editContext());
+        const r = addMaterials(this.data, done.map((u) => ({ kind: u.kind, ref: u.ref })), this.editContext());
         if (r.ok) this.uploads = this.uploads.filter((u) => !done.includes(u));
         else for (const u of done) Object.assign(u, { status: "failed", error: this.refusalText(r) });
         this.apply(r, note);
@@ -2375,6 +2584,7 @@ class TimelineEditor {
         this.resizeObserver?.disconnect();
         this.endGesture();
         this.endPress();
+        this.releaseBoxes();
         clearTimeout(this.fieldTimer);
         for (const video of [this.video, this.materialVideo]) {
             video.pause();

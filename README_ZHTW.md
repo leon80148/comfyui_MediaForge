@@ -47,12 +47,12 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 四個逐漸複雜的最小 workflow。每個都以節點鏈描述 — 在 ComfyUI 裡照圖接線即可。
 
-### 1. 自動裁靜默（3 個節點，最簡單）
+### 1. 自動裁靜默（4 個節點，最簡單）
 
 從演講錄影或 podcast 抽掉死氣沉沉的空白片段。
 
 ```
-[LoadVideoFrames]──video_path──▶[DetectSilence]──SILENCE_RANGES──▶[TrimByRanges]──▶ output.mp4
+[LoadVideoFrames]──video_path──▶[DetectSilence]──SILENCE_RANGES──▶[TrimByRanges]──▶[PreviewAny]
                                                                        ▲
                                                                        │ mode=remove
 ```
@@ -62,6 +62,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 | `MF_LoadVideoFrames` | `video_path = "lecture.mp4"` |
 | `MF_DetectSilence` | `noise_db = -30`, `min_duration_sec = 1.5` |
 | `MF_TrimByRanges` | `mode = "remove"` |
+| `PreviewAny` | 將 Trim by Ranges 的 `final_video_path` 接到 `source`；執行後顯示成品路徑 |
 
 ### 2. Compose 聯合:浮水印 + 開場文字 + BGM + 字幕,**只走一次** re-encode(5 個節點)
 
@@ -204,7 +205,7 @@ Start 的 `audio` 輸出只有接線才解碼，`keep_source_audio` 關閉時也
 
 **生成。** `🎛️ Sample Segments` 接你的 model、CLIP、VAE、audio VAE、sampler 與 sigmas，執行時逐段展開成一組節點：`🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider`（接了 `negative` 則用 `CFGGuider`）+ `SamplerCustomAdvanced` → `➕ Append Segment`。它只負責把 ComfyUI core 節點與 MediaForge 節點接起來 —— 沒有自己的取樣程式碼，也不載入或 patch 模型。其中三顆 MediaForge 節點是[內部節點](#內部節點)：你不需要自己放，節點選單裡也不會出現。展開內部出錯時，錯誤顯示在 Sample Segments 節點上，訊息開頭的標籤是內層節點名稱（例如 `[Encode H3 Segment]`）。模型載入、text encoder、sampler 與 scheduler 仍用你自己的 core 節點。
 
-**剪片。** `cut` 模式的 Edit Timeline 需要來源 `video`，由你標出要保留的區間。把它的 `ranges` 與 `video_path` 輸出接到 `✂️ Trim by Ranges`、`mode` 選 `keep`：區間會從同一個檔案剪出來、依序接起來。區間是用秒傳過去的，成品沿用來源影片自己的幀率 —— 以三個 48 幀（24 fps 時間軸）的區間實測：24 fps 來源得到的正好是這些區間的 144 個來源幀；30 fps 來源得到 180 幀，同樣是 6.000 秒。Trim by Ranges 不是 output node，後面要再接一顆 output node（範例用 core `PreviewAny` 顯示成品路徑），否則 ComfyUI 沒有東西可以執行。cut 模式不接受素材，也沒有 prompt。
+**剪片。** `cut` 模式的 Edit Timeline 需要來源 `video`，由你標出要保留的區間。把它的 `ranges` 與 `video_path` 輸出接到 `✂️ Trim by Ranges`、`mode` 選 `keep`：區間會從同一個檔案剪出來、依序接起來。區間是用秒傳過去的，成品沿用來源影片自己的幀率 —— 以三個 48 幀（24 fps 時間軸）的區間實測：24 fps 來源得到的正好是這些區間的 144 個來源幀；30 fps 來源得到 180 幀，同樣是 6.000 秒。Trim by Ranges 不是 output node，後面要再接一顆 output node（範例用 core `PreviewAny` 顯示成品路徑），否則 ComfyUI 沒有東西可以執行。cut 模式不接受素材，也沒有 prompt。色彩標記沿用來源；0.12 的 frames 路徑經過 RGB 往返後標成 BT.709，因此兩條路徑的色彩標記可能不同。
 
 ### 範例 workflow
 
@@ -243,7 +244,7 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看�
 
 素材（`generate` 模式）：
 
-- **素材庫** —— 按「加入素材」（可多選），或從桌面把圖片 / 影片 / 音訊檔拖進編輯器。檔案每次兩個上傳到 `input/mediaforge_timeline/`；一批上傳完成後合併成一個 undo 步驟；失敗的檔案留成卡片，可「重試 / 刪除」。卡片顯示縮圖或圖示、名稱、讀取後的長度與狀態（上傳中 / 讀取中 / 已讀取 / 讀取失敗）。選取卡片會在預覽區預覽該素材。名稱就是 prompt 別名，由檔名產生；在 inspector 改名時 prompt 會一起改寫。刪除素材會移除它的參考與指定，不會刪掉已上傳的檔案。
+- **素材庫** —— 按「加入素材」（可多選），或從桌面把圖片 / 影片 / 音訊檔拖進編輯器。檔案每次兩個上傳到 `input/mediaforge_timeline/`；一批上傳完成後合併成一個 undo 步驟；失敗的檔案留成卡片，可「重試 / 刪除」。卡片顯示縮圖或圖示、名稱、讀取後的長度與狀態（上傳中 / 讀取中 / 已讀取 / 讀取失敗）。選取卡片會在預覽區預覽該素材。名稱就是 prompt 別名。新上傳的素材依種類命名為 `img1`、`vid1`、`aud1`，號碼接在目前最大號之後（刪除素材留下的空號不會再補）；在 inspector 改名時 prompt 會一起改寫。刪除素材會移除它的參考與指定，不會刪掉已上傳的檔案。
 - **軌道** —— 把卡片拖到分段下方三條軌道之一：拖曳時可放的軌道亮起、不可放的變暗，落點是否合法仍在游標位置判斷並說明原因。也可以選取卡片後用 inspector 的按鈕放置，按鈕上的時間就是實際落點，會跟著播放頭更新。所有卡片都要等讀取完成；表外的組合會被拒絕。
 
   | 卡片 | 參考 | 指定畫面 | 保留原音 |
@@ -253,8 +254,9 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看�
   | 音訊 | 參考，範圍 = 該段扣除開頭重疊後的部分 | — | 從落點開始保留原音（`lock`），長度到素材結尾或時間軸結尾 |
 
 - **長條** —— 拖曳移動、拖曳端點修剪，`S`（或「分割」）在播放頭分割，`Delete` / `Backspace` 刪除，`Alt + ←/→` 微調 1 幀（`Shift` ×10），`Escape` 取消拖曳。長條與分段可用 `Tab` 取得焦點。長條在 8 px 內依序吸附段界、播放頭、其他長條的端點；會讓時間軸不合法的編輯（例如「接續前一段」把引導片段推過段界）會被拒絕並說明原因、不寫入。參考會在最接近播放頭的段界分割（不會切在段內）；關鍵畫面與 H3 引導片段不能分割（兩個 17k + 5 長度加起來不會是另一個合法長度），所以不顯示分割按鈕。數值在 inspector 編輯：參考的範圍、`follow` / `fixed`、內容起點 / 長度、音軌與順序（排序上移 / 下移 —— 順序可能影響標籤編號）；指定的位置、內容起點 / 長度與音軌。保留原音的 inspector 另外說明實際範圍、是否被截短，以及成品換回原聲的條件。
-- **標籤按鈕** —— `✓ 名稱`：已是本段參考，點一下插入 `<@名稱>`。`＋ 名稱`：點一下同時建立本段參考並插入標籤，一個 undo 步驟；prompt 已有該標籤時只補參考。無法使用時停用，並在提示文字說明原因（同素材多條參考、該類已達上限、素材未讀取完成）。只想加參考不插標籤時，把卡片拖到軌道。
-- **Prompt** —— 共用 prompt 給沒寫 prompt 的段使用；段落有自己的 prompt 就取代它、不會合併。表單持續顯示目前是哪一種，並可 `清空，改用共用 prompt`。需要插入標籤而本段空白時，會先把共用文字複製到本段並說明；只補共用 prompt 已有標籤的參考時，繼續使用共用 prompt。影片參考的配對音軌寫 `<@名稱:audio>`。每段把別名解析成自己的 `<Picture N>` / `<Video N>` / `<Audio N>` 標籤。直接手寫的編號標籤仍可用，但參考順序改變時意義會跟著變；對應明確時可按「轉成 <@名稱>」改寫成別名，新增參考前也會先做這個轉換，轉不了就拒絕並說明。
+- **`@` 素材清單**（只限 H3 grid）—— 在段落 prompt 或共用 prompt 打 `@`（輸入法打出的全形 `＠` 也可以），游標處會跳出素材清單，繼續打字依名稱篩選。每一列寫出選了會發生什麼：`✓ 本段 <Picture 1>`（已是本段參考，以及它解析成的標籤）、`＋`（會一併加成本段參考）；在共用 prompt 則是 `✓ N 段都有` / `＋ 會補上第 2、4 段的參考`（所有沿用共用 prompt 的段落都會補上缺的參考）。有音軌的影片另有一列 `名稱:audio`。↑↓ 選擇、Enter / Tab 插入、Esc 關閉清單，也可以用滑鼠點；輸入法組字時不會反應。標籤會取代游標處的 `@` 文字，游標留在框裡。上次存檔後打的字會先存成一個 undo 步驟，標籤與它補上的參考是下一個；選完立刻按 Ctrl+Z 會撤銷這次選取（不會撤銷打的字）。不能用的列顯示成灰色並寫出原因。
+- **標籤按鈕**（只限 H3 grid）—— `✓ 名稱`：已是本段參考，點一下插入 `<@名稱>`。`＋ 名稱`：點一下同時建立本段參考並插入標籤，一個 undo 步驟。標籤插在這個 prompt 框上次失去焦點時的游標位置；框沒用過就接在最後，prompt 已有該標籤時只補參考。共用 prompt 下方也有一排，狀態與行為和它的 `@` 清單相同。無法使用時停用，並在提示文字說明原因（同素材多條參考、該類已達上限、素材未讀取完成）。只想加參考不插標籤時，把卡片拖到軌道。
+- **Prompt** —— 共用 prompt 給沒寫 prompt 的段使用；段落有自己的 prompt 就取代它、不會合併。表單持續顯示目前是哪一種，並可 `清空，改用共用 prompt`。用按鈕插入標籤而本段空白時，會先把共用文字複製到本段並說明；在空白段落框打 `@` 則開始自己的 prompt，不複製共用文字。只補共用 prompt 已有標籤的參考時，繼續使用共用 prompt。影片參考的配對音軌寫 `<@名稱:audio>`。每段把別名解析成自己的 `<Picture N>` / `<Video N>` / `<Audio N>` 標籤（只限 H3 grid）。直接手寫的編號標籤仍可用，但參考順序改變時意義會跟著變；對應明確時可按「轉成 <@名稱>」改寫成別名，新增參考前也會先做這個轉換，轉不了就拒絕並說明。
 - **這段送給模型的內容** —— 收合時一行摘要（例如 `1 張圖、1 支影片、保留原音 3.96 秒`）。展開後每段在所有素材讀取完成時顯示：標籤對照表、每支參考影片實際使用的秒數與幀數（以及未使用多少）、關鍵畫面與引導片段的時間、保留原音的範圍、解析後的 prompt，以及 H3 技術細節（token 範圍以 `[起點, 終點)` 表示、覆蓋圖、接續邊界偏差）。錯誤與「保留原音和接續前段的聲音重疊」的警告不會隨收合隱藏。
 - **Seed** —— 每段可選的 seed，附「換一個」；空白 = 使用 Sample Segments 的 `noise_seed`。只有 Sample Segments 會套用。
 - **鏡頭切換 / 接續** —— 「從這段開始新鏡頭」把該段與前段的重疊設為 0、銜接改為直接切換，生成時不接續前段；本段與後續各段及屬於它們的參考與指定一起平移，跨過舊段界的項目會被標示。「接續前一段」恢復預設重疊（22 幀；段太短時取放得下的最大值）。各是一個 undo 步驟。
@@ -267,7 +269,7 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看�
 
 一般：
 
-- `timeline_data` JSON 是唯一會被存檔與送出執行的狀態；編輯器的檢視狀態（縮放、選取、播放頭、區塊開合）只存在 editor 裡，不寫進 workflow，所以選取或移動播放頭不算一個 undo 步驟，也不會進入 prompt。重新載入同一個 graph（undo / redo，或 graph id 相同的 workflow，例如同一個檔案再開一次）時會沿用檢視狀態；其他 graph 從預設檢視開始。素材讀取結果只存在編輯器裡。
+- `timeline_data` JSON 是唯一會被存檔與送出執行的狀態；編輯器的檢視狀態（縮放、選取、播放頭、區塊開合）只存在 editor 裡，不寫進 workflow，所以選取或移動播放頭不算一個 undo 步驟，也不會進入 prompt。重新載入同一個 graph（undo / redo，或 graph id 相同的 workflow，例如同一個檔案再開一次）時會沿用檢視狀態；其他 graph 從預設檢視開始。素材讀取結果只存在編輯器裡。prompt 框可以從右下角拉高；高度（共用 prompt 一個、段落 prompt 一個）存在瀏覽器的儲存空間，重畫與重新整理頁面後都保留，所有 workflow 共用。
 - 打字後可以直接點按鈕或換欄位：文字先存，點擊照常生效；鍵盤操作後焦點留在同一個控制項。字母快捷鍵不會攔截 `Ctrl` / `Cmd` 組合鍵。
 - 編輯器載入失敗時會改顯示原始 JSON widget，仍可直接編輯。
 - 介面文字為繁體中文；技術名稱與儲存值保留英文，顯示標籤可中英並列。
@@ -1547,6 +1549,7 @@ comfyui_MediaForge/
 │   ├── loop_video.py           # MF_LoopVideo
 │   ├── probe_media.py          # MF_ProbeMedia
 │   ├── sample_segments.py      # MF_SampleSegments  — Timeline：H3 單節點取樣器（以 graph expansion 組合 core 節點）
+│   ├── save_video.py           # MF_SaveVideo — serial H.264 VIDEO export
 │   ├── save_video_frames.py    # MF_SaveVideoFrames
 │   ├── select_video.py         # MF_SelectVideo  — input/ 影片 dropdown picker
 │   ├── translate_subtitle.py   # MF_TranslateSubtitle
@@ -1566,6 +1569,7 @@ comfyui_MediaForge/
 │   ├── output_path.py       # resolve_output_path + output_path_to_ui_entry (API metadata helper)
 │   ├── plugin_tmp.py        # .mf_tmp/ 暫存檔 + 清理過期的檔案與 session 目錄
 │   ├── segment_spill.py     # Timeline：不可變 state、FFV1 / WAV 分段暫存、crossfade、鎖音母帶、最終編碼
+│   ├── serial_h264.py       # single-threaded VIDEO decode, libx264 encode and metadata
 │   ├── video_batch.py       # Video Batch：接線規則、分批數學、來源檢查、重複執行同一批 node ID 的工作
 │   ├── timeline_materials.py# Timeline：materials / refs / anchors、幾何、逐段 manifest、H3 標籤、別名
 │   ├── timeline_media.py    # Timeline：素材快照、圖片 / 影片 / 音訊切片解碼
@@ -1588,6 +1592,7 @@ comfyui_MediaForge/
 │   ├── timeline_editor.js   # Edit Timeline 視覺化編輯器（DOM widget）
 │   ├── timeline_grid.js     # grid / 驗證規則，與 utils/timeline_plan.py 對拍
 │   ├── timeline_materials.js# 素材規則，與 utils/timeline_materials.py 對拍
+│   ├── timeline_mention.js  # prompt material picker, caret placement and IME handling
 │   └── timeline_strings.js  # 編輯器介面文字（繁體中文）
 └── tests/                   # 開發者本地 pytest suite — gitignored，不隨公開 repo 發佈（見「測試」章節）
     ├── test_compose_ir.py        # IR spike case（Phase 4 prerequisite）
@@ -1676,13 +1681,13 @@ Timeline 節點的訊息格式為 `[<節點名稱>] <KEY>：<訊息>`，以下�
 | `E_PROMPT_REF` | Edit Timeline | 第 {segment} 段 prompt 的素材引用無效：{reason}。 | `<@名稱>`：沒有這個素材；素材不在本段的參考中（或只用於錨定）；本段有兩個它的參考 —— 改寫標籤；`:audio` 用在沒有配對音軌的參考；標籤編號超出本段數量 |
 | `E_H3_NODES` | Encode H3 Segment | 找不到可用的 core MiniMax H3 節點（{nodes}）。請更新 ComfyUI。 | core 的 `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` 不存在或介面改變（或 audio VAE 回傳的形狀不符）—— 更新 ComfyUI；測試環境為 core 0.42.5 |
 | `E_VIEW` | 內部節點 | segment 格式不符：{reason}。 | 舊版 segment —— 重新執行 Edit Timeline。否則是手動接了內部節點 —— 改用 Sample Segments，它會給每顆節點它接受的 view |
-| `E_TOKENS` | Extend Latent | latent 時間長度不符：預期 {expected}，收到 {actual}。請確認 target_latent 來自同一段的 Encode H3 Segment。 | 經 Sample Segments 不會發生，除非 core 的 H3 latent 佈局改了 —— 請附上 ComfyUI 版本回報 |
+| `E_TOKENS` | Extend Latent | latent 時間長度不符：預期 {expected}，收到 {actual}。請重新執行整個流程；若仍發生，請附上 ComfyUI 版本回報。 | 經 Sample Segments 不會發生，除非 core 的 H3 latent 佈局改了 —— 請附上 ComfyUI 版本回報 |
 | `E_AUDIO_CARRY` | Extend Latent | 此 latent 不支援音訊續接。請關閉 carry_audio。 | 在 Sample Segments 關閉 `carry_audio`（這個 latent 沒有 H3 的音訊 stream） |
-| `E_CARRY_SOURCE` | Extend Latent | 本段需要續接資料。請把前一段取樣後的 latent 接到 previous_latent。 | 經 Sample Segments 不會發生：有重疊的段它都會接好 |
+| `E_CARRY_SOURCE` | Extend Latent | 本段缺少續接資料。請重新執行整個流程；若仍發生，請附上 ComfyUI 版本回報。 | 經 Sample Segments 不會發生：有重疊的段它都會接好 |
 | `E_MASK_CONFLICT` | Extend Latent | 續接區與既有遮罩衝突。請把 on_conflict 設為 carry_wins，或把錨定移出與前一段重疊的範圍。 | 如訊息：在 Sample Segments 設 `on_conflict = carry_wins`，或移動關鍵幀 / 錨定片段 |
 | `W_LOCK_CARRY` | Extend Latent | 第 {segment} 段的鎖定原音落在續接區，略過本段音訊續接（video 續接照常）。 | 只是警告。該接縫需要音訊續接時，把鎖音移到重疊區之後 |
 | `E_PROVENANCE` | Extend Latent / Append Segment | 續接標記與本段不符（{field}）。請重新執行整個流程。 | 重新 queue；仍然發生的話，是自訂 sampler 改寫了 latent 的 `mf_carry` |
-| `W_PROVENANCE` | Extend Latent / Append Segment | 缺少續接標記（latent 的 mf_carry）；將繼續執行，但無法確認續接是否正確。請確認 sampler 會保留 latent 的附加欄位。 | sampler 把 `mf_carry` 從 latent dict 丟掉了 —— 改用會保留輸入 latent 各欄位的 sampler（core 的 sampler 會） |
+| `W_PROVENANCE` | Extend Latent / Append Segment | 缺少續接標記（latent 的 mf_carry）；將繼續執行，但無法確認續接是否正確。請重新執行整個流程；若仍發生，請附上 ComfyUI 版本回報。 | Sample Segments 會保留這個標記；重新執行後仍發生時，請附上 ComfyUI 版本回報 |
 | `E_SEQUENCE` | Append Segment / Assemble Segments | 預期第 {expected} 段，收到第 {actual} 段。請重新執行整個流程。 | 重新 queue。Assemble 要接 Sample Segments 回傳的 state |
 | `E_PLAN` | Append Segment | 分段與 state 屬於不同計畫。請重新執行整個流程。 | 改過時間軸或來源後重新 queue |
 | `E_CARRY_DRIFT` | Append Segment | 續接區在取樣後被改變（最大差 {drift}）。續接區必須原樣保留：請檢查接到 Sample Segments 的 sampler 與 sigmas。 | 使用會遵守 `noise_mask` 的 sampler |

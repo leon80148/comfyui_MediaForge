@@ -47,12 +47,12 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 
 Four minimal workflows in increasing complexity. Each is described as a node chain — drop them into ComfyUI and wire as shown.
 
-### 1. Auto-cut silence (3 nodes — simplest)
+### 1. Auto-cut silence (4 nodes — simplest)
 
 Strip dead air from a lecture recording or podcast.
 
 ```
-[LoadVideoFrames]──video_path──▶[DetectSilence]──SILENCE_RANGES──▶[TrimByRanges]──▶ output.mp4
+[LoadVideoFrames]──video_path──▶[DetectSilence]──SILENCE_RANGES──▶[TrimByRanges]──▶[PreviewAny]
                                                                        ▲
                                                                        │ mode=remove
 ```
@@ -62,6 +62,7 @@ Strip dead air from a lecture recording or podcast.
 | `MF_LoadVideoFrames` | `video_path = "lecture.mp4"` |
 | `MF_DetectSilence` | `noise_db = -30`, `min_duration_sec = 1.5` |
 | `MF_TrimByRanges` | `mode = "remove"` |
+| `PreviewAny` | Wire Trim by Ranges? `final_video_path` into `source`; shows the result path after Queue |
 
 ### 2. Compose: watermark + intro text + BGM + subtitle in **one** re-encode (5 nodes)
 
@@ -200,11 +201,11 @@ One way to generate, one way to cut:
 | Task | Nodes | Needs |
 |---|---|---|
 | Generate a long video | `⏱️ Edit Timeline` (`mode = generate`, with or without materials) → `🎛️ Sample Segments` → `🧵 Assemble Segments` | MiniMax H3 models (the only supported family), 24 fps |
-| Cut an existing video | `⏱️ Edit Timeline` (`mode = cut`) → `✂️ Trim by Ranges` (`mode = keep`) | a video under `input/`; no model |
+| Cut an existing video | `⏱️ Edit Timeline` (`mode = cut`) → `✂️ Trim by Ranges` (`mode = keep`) → `PreviewAny` | a video under `input/`; no model |
 
 **Generate.** `🎛️ Sample Segments` takes your model, CLIP, VAE, audio VAE, sampler and sigmas and, when it runs, expands into one group per segment: `🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider` (`CFGGuider` when `negative` is connected) + `SamplerCustomAdvanced` → `➕ Append Segment`. It only wires ComfyUI core node classes and MediaForge nodes — no sampling code of its own, no model loading or patching. Those three MediaForge nodes are [internal](#internal-nodes): you never place them, and they are kept out of the node menus. An error inside the group is shown on the Sample Segments node; the message label names the inner node (e.g. `[Encode H3 Segment]`). Model loaders, text encoders, samplers and schedulers stay your own core nodes.
 
-**Cut.** In `cut` mode Edit Timeline needs a source `video`, and you mark the ranges to keep. Wire its `ranges` and `video_path` outputs into `✂️ Trim by Ranges` with `mode = keep`: the ranges are cut out of that same file and joined in order. They are passed in seconds, and the result keeps the source's own frame rate — measured with three ranges of 48 timeline frames at 24 fps: a 24 fps source gives exactly the 144 source frames of those ranges; a 30 fps source gives 180 frames over the same 6.000 s. Trim by Ranges is not an output node, so put an output node after it (the example uses core `PreviewAny`, which shows the result path) or ComfyUI has nothing to run. Cut mode takes no materials and has no prompts.
+**Cut.** In `cut` mode Edit Timeline needs a source `video`, and you mark the ranges to keep. Wire its `ranges` and `video_path` outputs into `✂️ Trim by Ranges` with `mode = keep`: the ranges are cut out of that same file and joined in order. They are passed in seconds, and the result keeps the source's own frame rate — measured with three ranges of 48 timeline frames at 24 fps: a 24 fps source gives exactly the 144 source frames of those ranges; a 30 fps source gives 180 frames over the same 6.000 s. Trim by Ranges is not an output node, so put an output node after it (the example uses core `PreviewAny`, which shows the result path) or ComfyUI has nothing to run. Cut mode takes no materials and has no prompts. Colour tags follow the source; the 0.12 frames path tagged its RGB round trip as BT.709, so the two paths can differ in colour metadata.
 
 ### Example workflows
 
@@ -243,7 +244,7 @@ Source video: preview of the selected source; codecs the browser can't play get 
 
 Materials (`generate` mode):
 
-- **Library** — 加入素材 (add materials, multi-select) or drop image / video / audio files from your desktop onto the editor. They upload into `input/mediaforge_timeline/` two at a time; a batch lands as one undo step; a failed file stays as a card with 重試 / 刪除 (retry / remove). A card shows a thumbnail or icon, the name, the length once probed, and the status (上傳中 / 讀取中 / 已讀取 / 讀取失敗 — uploading / probing / read / failed). Selecting a card previews that material in the preview slot. The name is the prompt alias, generated from the file name; renaming it in the inspector rewrites the prompts. Deleting a material removes its references and placements but not the uploaded file.
+- **Library** — 加入素材 (add materials, multi-select) or drop image / video / audio files from your desktop onto the editor. They upload into `input/mediaforge_timeline/` two at a time; a batch lands as one undo step; a failed file stays as a card with 重試 / 刪除 (retry / remove). A card shows a thumbnail or icon, the name, the length once probed, and the status (上傳中 / 讀取中 / 已讀取 / 讀取失敗 — uploading / probing / read / failed). Selecting a card previews that material in the preview slot. The name is the prompt alias. New uploads are named by kind — `img1`, `vid1`, `aud1` — numbered one past the highest in use (a gap left by a deleted material is not refilled); renaming it in the inspector rewrites the prompts. Deleting a material removes its references and placements but not the uploaded file.
 - **Lanes** — drag a card onto one of three lanes under the segments: while dragging, usable lanes light up and the others dim, and whether the exact spot is legal is still judged under the pointer, with the reason shown. Or select the card and use the inspector's buttons: the time on a button is where it really lands, and it follows the playhead. Every card needs to finish probing first; other combinations are refused.
 
   | Card | 參考 (references) | 指定畫面 (set frames) | 保留原音 (keep original audio) |
@@ -253,8 +254,9 @@ Materials (`generate` mode):
   | audio | reference over that segment, minus its opening overlap | — | lock from the drop frame, up to the material's length or the timeline end |
 
 - **Bars** — drag to move, drag an end to trim, `S` (or 分割) splits at the playhead, `Delete` / `Backspace` removes, `Alt + ←/→` nudges by 1 frame (`Shift` ×10), `Escape` cancels a drag. Bars and segments take keyboard focus (`Tab`). Bars snap within 8 px to segment boundaries, then the playhead, then other bars' edges; an edit that would make the timeline invalid (for example 接續前一段 pushing a guide across a segment boundary) is refused with the reason and not applied. References split at the segment boundary nearest the playhead, never inside a segment; keyframes and H3 guides cannot be split (two 17k + 5 lengths never add up to another legal length), so they show no split button. Numbers are edited in the inspector: a reference's range, `follow` / `fixed`, content start / length, soundtrack and order (排序上移 / 下移 — the order can change the tag numbers); a placement's position, content start / length and soundtrack. A lock's inspector also states its real range, whether it was cut short, and when the final file gets the original sound back.
-- **Tag buttons** — `✓ name`: already a reference of this segment, a click inserts `<@name>`. `＋ name`: a click makes it this segment's reference and inserts the tag, as one undo step; if the prompt already has that tag it only adds the reference. A button that cannot work is disabled and its tooltip says why (several references to the same material, that category is full, the material is not probed yet). To add a reference without a tag, drag the card onto the lane.
-- **Prompts** — the shared prompt (共用 prompt) is used by segments without their own; a segment's own prompt replaces it, they are not merged. The form keeps showing which one applies and offers 清空，改用共用 prompt (clear, use shared). When a tag has to be written and the segment's prompt is empty, the shared text is copied into it first, and it says so; when ＋ only adds the reference for a tag the shared prompt already has, the segment keeps using the shared prompt. Write `<@name:audio>` for a video reference's soundtrack. Each segment resolves its aliases to its own `<Picture N>` / `<Video N>` / `<Audio N>` tags. Hand-written numbered tags still work, but their meaning changes when references are reordered; 轉成 <@名稱> rewrites them as aliases when the mapping is unambiguous, and adding a reference does the same first, refusing with a reason if it cannot.
+- **`@` material list** — type `@` (or the full-width `＠` an IME gives) in the segment prompt or the shared prompt: a list of the materials opens at the caret, and typing on filters it by name. Each row says what picking it does here — `✓ 本段 <Picture 1>` (already this segment's reference, and the tag it resolves to), `＋` (it becomes this segment's reference too), or, in the shared prompt, `✓ N 段都有` / `＋ 會補上第 2、4 段的參考` (every segment that uses the shared prompt gets the reference it lacks). A video with a soundtrack also has a `name:audio` row. ↑↓ choose, Enter / Tab insert, Esc closes the list, a click inserts; nothing reacts while an IME is composing. The tag replaces the `@` text at the caret and the caret stays in the box. Text typed since the last save is saved first as its own undo step; the tag and the references it adds are the next one, and Ctrl+Z right after a pick undoes the pick (not the typing). Rows that cannot work are greyed out with the reason.
+- **Tag buttons** — `✓ name`: already a reference of this segment, a click inserts `<@name>`. `＋ name`: a click makes it this segment's reference and inserts the tag, as one undo step. The tag goes where the caret was when the prompt box last lost focus; if the box was never used, it is appended, and if the prompt already has that tag it only adds the reference. The shared prompt has its own row, with the same states and behaviour as its `@` list. A button that cannot work is disabled and its tooltip says why (several references to the same material, that category is full, the material is not probed yet). To add a reference without a tag, drag the card onto the lane.
+- **Prompts** — the shared prompt (共用 prompt) is used by segments without their own; a segment's own prompt replaces it, they are not merged. The form keeps showing which one applies and offers 清空，改用共用 prompt (clear, use shared). When a button writes a tag into an empty segment prompt, the shared text is copied into it first, with a notice; typing `@` in an empty segment box starts its own prompt without copying the shared text. when ＋ only adds the reference for a tag the shared prompt already has, the segment keeps using the shared prompt. Write `<@name:audio>` for a video reference's soundtrack. Each segment resolves its aliases to its own `<Picture N>` / `<Video N>` / `<Audio N>` tags. Hand-written numbered tags still work, but their meaning changes when references are reordered; 轉成 <@名稱> rewrites them as aliases when the mapping is unambiguous, and adding a reference does the same first, refusing with a reason if it cannot.
 - **這段送給模型的內容 (what this segment sends to the model)** — collapsed to one line, such as `1 張圖、1 支影片、保留原音 3.96 秒`. Expanded, once every material is probed: the tag table, the seconds and frames each reference video really uses (and how many are unused), keyframe and guide times, kept-audio ranges, the resolved prompt, and H3 technical details (token ranges as `[start, end)`, the token map, the carry boundary offset). Errors and the warning that a lock overlaps the audio carried from the previous segment stay visible when the section is collapsed.
 - **Seed** — optional per-segment seed with 換一個 (new one); empty uses Sample Segments' `noise_seed`. Only Sample Segments applies it.
 - **Shot cut / continue** — 從這段開始新鏡頭 (new shot) sets a segment's incoming overlap to 0 with a straight cut, so it no longer continues from the previous segment; it, later segments, and the references and placements that belong to them shift together, and items crossing the old boundary are flagged. 接續前一段 (continue) restores the default overlap (22 frames, or the largest that fits a shorter segment). Each is one undo step.
@@ -267,7 +269,7 @@ Status line:
 
 General:
 
-- `timeline_data` JSON is the only state that is saved and queued; the editor's view state (zoom, selection, playhead, open sections) lives only in the editor and is not written into the workflow, so selecting or moving the playhead is not an undo step and never reaches the prompt. When the same graph is reloaded (undo / redo, or a workflow with the same graph id, such as the same file opened again) the view carries over; any other graph starts from the default view. Probe results live only in the editor.
+- `timeline_data` JSON is the only state that is saved and queued; the editor's view state (zoom, selection, playhead, open sections) lives only in the editor and is not written into the workflow, so selecting or moving the playhead is not an undo step and never reaches the prompt. When the same graph is reloaded (undo / redo, or a workflow with the same graph id, such as the same file opened again) the view carries over; any other graph starts from the default view. Probe results live only in the editor. Prompt boxes can be dragged taller from their corner; the height (one for the shared prompt, one for segment prompts) is kept in the browser's storage, so it survives rebuilds and page reloads and applies to every workflow.
 - After typing you can go straight to a button or another field: the text is saved and the click still lands; after a keyboard action focus stays on the same control. Letter shortcuts leave `Ctrl` / `Cmd` combinations alone.
 - If the editor fails to load, the raw JSON widget is shown and stays editable.
 - UI text is Traditional Chinese; technical names and stored values stay English, and display labels may show both.
@@ -1547,6 +1549,7 @@ comfyui_MediaForge/
 │   ├── loop_video.py           # MF_LoopVideo
 │   ├── probe_media.py          # MF_ProbeMedia
 │   ├── sample_segments.py      # MF_SampleSegments  — Timeline: H3 single-node sampler (graph expansion of core nodes)
+│   ├── save_video.py           # MF_SaveVideo — serial H.264 VIDEO export
 │   ├── save_video_frames.py    # MF_SaveVideoFrames
 │   ├── select_video.py         # MF_SelectVideo  — dropdown picker for input/ videos
 │   ├── translate_subtitle.py   # MF_TranslateSubtitle
@@ -1566,6 +1569,7 @@ comfyui_MediaForge/
 │   ├── output_path.py       # resolve_output_path + output_path_to_ui_entry (API metadata helper)
 │   ├── plugin_tmp.py        # .mf_tmp/ temp files + sweep of stale files and session dirs
 │   ├── segment_spill.py     # Timeline: immutable state, FFV1 / WAV spill parts, crossfade, lock-audio master, final encode
+│   ├── serial_h264.py       # single-threaded VIDEO decode, libx264 encode and metadata
 │   ├── video_batch.py       # Video Batch: graph rules, batch math, source checks, the job that re-runs the same node IDs
 │   ├── timeline_materials.py# Timeline: materials / refs / anchors, geometry, per-segment manifest, H3 tags, aliases
 │   ├── timeline_media.py    # Timeline: material snapshots, image / video / audio slice decoding
@@ -1588,6 +1592,7 @@ comfyui_MediaForge/
 │   ├── timeline_editor.js   # Edit Timeline visual editor (DOM widget)
 │   ├── timeline_grid.js     # grid / validation rules mirrored from utils/timeline_plan.py
 │   ├── timeline_materials.js# material rules mirrored from utils/timeline_materials.py
+│   ├── timeline_mention.js  # prompt material picker, caret placement and IME handling
 │   └── timeline_strings.js  # editor UI text (Traditional Chinese)
 └── tests/                   # dev-only pytest suite — gitignored, not in the published repo (see Testing)
     ├── test_compose_ir.py        # IR spike cases (Phase 4 prerequisite)
@@ -1676,13 +1681,13 @@ Timeline nodes report problems as `[<node>] <KEY>：<message>`. The message text
 | `E_PROMPT_REF` | Edit Timeline | Material reference in segment {segment}'s prompt is invalid: {reason}. | `<@name>`: no such material; the material isn't referenced in this segment (or only anchored); it has two references there — write the tag instead; `:audio` on a reference without soundtrack; a tag number above this segment's count |
 | `E_H3_NODES` | Encode H3 Segment | Can't find usable core MiniMax H3 nodes ({nodes}). Update ComfyUI. | Core's `MiniMaxH3ReferenceToVideo` / `MiniMaxH3AddGuide` are missing or changed (or the audio VAE returned an unexpected shape) — update ComfyUI; tested with core 0.42.5 |
 | `E_VIEW` | internal nodes | Segment format mismatch: {reason}. | An old segment — rerun Edit Timeline. Otherwise an internal node was wired by hand: use Sample Segments, which hands each one the view it accepts |
-| `E_TOKENS` | Extend Latent | Latent time length mismatch: expected {expected}, got {actual}. Make sure target_latent comes from the same segment's Encode H3 Segment. | Not reachable through Sample Segments unless core's H3 latent layout changed — report it with your ComfyUI version |
+| `E_TOKENS` | Extend Latent | Latent time length mismatch: expected {expected}, got {actual}. Re-run the whole flow; if it persists, report it with your ComfyUI version. | Not reachable through Sample Segments unless core's H3 latent layout changed — report it with your ComfyUI version |
 | `E_AUDIO_CARRY` | Extend Latent | This latent does not support audio carry. Turn off carry_audio. | Turn `carry_audio` off on Sample Segments (the latent has no H3 audio stream) |
-| `E_CARRY_SOURCE` | Extend Latent | This segment needs carry data. Wire the previous segment's sampled latent into previous_latent. | Not reachable through Sample Segments, which wires it for every overlapping segment |
+| `E_CARRY_SOURCE` | Extend Latent | This segment is missing carry data. Re-run the whole flow; if it persists, report it with your ComfyUI version. | Not reachable through Sample Segments, which wires it for every overlapping segment |
 | `E_MASK_CONFLICT` | Extend Latent | The carry region conflicts with an existing mask. Set on_conflict to carry_wins, or move the anchor out of the overlap with the previous segment. | As stated: `on_conflict = carry_wins` on Sample Segments, or move the keyframe / guide |
 | `W_LOCK_CARRY` | Extend Latent | Segment {segment}'s lock audio lies in the carried region; skipping this segment's audio carry (video carry continues). | Warning only. Move the lock past the overlap if that seam needs audio carry |
 | `E_PROVENANCE` | Extend Latent / Append Segment | Carry metadata does not match this segment ({field}). Rerun the whole workflow. | Queue again; if it persists, a custom sampler is rewriting the latent's `mf_carry` |
-| `W_PROVENANCE` | Extend Latent / Append Segment | Carry metadata (the latent's mf_carry) is absent; continuing, but the carry can't be confirmed. Make sure the sampler keeps the latent's extra fields. | The sampler dropped `mf_carry` from the latent dict — use one that keeps the input latent's keys (core samplers do) |
+| `W_PROVENANCE` | Extend Latent / Append Segment | Carry metadata (the latent's mf_carry) is absent; continuing, but the carry can't be confirmed. Re-run the whole flow; if it persists, report it with your ComfyUI version. | Sample Segments preserves this marker; if a full re-run still warns, report it with your ComfyUI version |
 | `E_SEQUENCE` | Append Segment / Assemble Segments | Expected segment {expected}, got segment {actual}. Rerun the whole workflow. | Queue again. Assemble needs the state Sample Segments returns |
 | `E_PLAN` | Append Segment | Segment and state belong to different plans. Rerun the whole workflow. | Queue again after changing the timeline or the source |
 | `E_CARRY_DRIFT` | Append Segment | The carried region changed after sampling (max diff {drift}). It must stay as it is: check the sampler and sigmas wired into Sample Segments. | Use a sampler that honours `noise_mask` |

@@ -404,8 +404,8 @@ def tag_counts(manifest):
 
 def resolve_prompt(template, manifest, materials, index, h3):
     """`<@名稱>` / `<@名稱:audio>` → 本段標籤；直接寫的 `<Picture N>` 類標籤檢查編號範圍。"""
-    def fail(code, reason):
-        raise TimelineError(NODE_LABEL, "E_PROMPT_REF", segment=index + 1, reason=reason,
+    def fail(code, reason, **extra):
+        raise TimelineError(NODE_LABEL, "E_PROMPT_REF", segment=index + 1, reason=reason, **extra,
                             detail=_detail(code, {"kind": "segment", "id": index}, "prompt"))
 
     if not h3:
@@ -415,7 +415,8 @@ def resolve_prompt(template, manifest, materials, index, h3):
     counts = tag_counts(manifest)
     for kind, n in TAG_RE.findall(template):
         if len(n) > 9 or not 1 <= int(n) <= counts[kind]:
-            fail("tag_range", f"<{kind} {n}> 超出本段的 {counts[kind]} 個 {kind}")
+            fail("tag_range", f"<{kind} {n}> 超出本段的 {counts[kind]} 個 {kind}",
+                 tag=f"<{kind} {n}>", kind=kind, count=counts[kind])
     by_name = {m["name"]: m for m in materials}
 
     def alias(match):

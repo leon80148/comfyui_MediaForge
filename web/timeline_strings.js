@@ -111,6 +111,18 @@ export const S = {
     chipInsert: (name) => `插入 <@${name}> 到這段的 prompt`,
     chipAdd: (name) => `把 ${name} 加入這段的參考，並在 prompt 插入 <@${name}>`,
     chipsBlocked: "素材資訊還沒確認，暫時不能用這些按鈕",
+    sharedChipInsert: (name) => `插入 <@${name}> 到共用 prompt`,
+    sharedChipAdd: (name, segs) => `把 ${name} 加入第 ${segs.join("、")} 段的參考，並在共用 prompt 插入 <@${name}>`,
+    // the @ material list of the prompt boxes
+    mention: {
+        segIn: (tag) => `✓ 本段 ${tag}`,
+        segAdd: "＋ 會加入本段參考",
+        soundAdd: "＋ 影片的音軌",
+        sharedAll: (n) => `✓ ${n} 段都有`,
+        sharedNone: "目前沒有段落使用共用 prompt",
+        sharedAdd: (segs) => `＋ 會補上第 ${segs.join("、")} 段的參考`,
+        hint: "↑↓ 選擇 · Enter / Tab 插入 · Esc 關閉",
+    },
     lengthLabel: "長度",
     seam: "成品銜接方式",
     seamCut: "直接切換",
@@ -276,6 +288,7 @@ export const S = {
         too_many_materials: "素材已達上限（64 個）", no_raw_tags: "沒有 <Picture N> 這類編號標籤",
         ambiguous_tags: "無法在不改變指向素材的情況下，轉成 <@名稱>",
         raw_tags_block: "這段的 prompt 有 <Picture N> 這類編號，加入新參考可能改變它指的素材。請先改用 <@名稱>，或把素材拖到參考軌道",
+        shared_raw_tags: "共用 prompt 的 <Picture N> 這類編號，補上這個參考後在某些段會指到別的素材。請先改用 <@名稱>",
         tag_full: (r) => `這段的${S.tagKinds[r.category] ?? "參考"}已達上限（${r.limit} 個）`,
         // cut mode
         source_unknown: "來源影片資訊尚未確認，請稍候再試", before_source: "這個位置早於來源影片的開頭",
@@ -294,7 +307,7 @@ export const S = {
     problemReasons: {
         past_timeline: "超出時間軸總長", past_end: "超出素材長度", no_audio: "素材沒有音軌",
         crosses_emit: "引導片段要完整放在同一段內，避開這段開頭與前段重疊的部分", h3_length: "H3 的引導片段長度只能是 5、22、39…幀",
-        not_h3: "只有 MiniMax H3 段長規則能用 <@名稱> 或 <Picture N> 標籤", tag_range: "這類標籤的編號不在本段可用範圍內",
+        not_h3: "只有 MiniMax H3 段長規則能用 <@名稱> 或 <Picture N> 標籤", tag_range: (e) => `${e.tag} 超出範圍，本段${e.count ? `只有 ${e.count} 個` : "沒有"}${S.tagNames[e.kind]}`,
         unknown_name: "<@名稱> 找不到這個素材", ambiguous: "<@名稱> 在本段對應到多個參考",
         anchor_only: "這個素材目前只用於指定畫面或保留原音；要用 <@名稱>，請先加入這段的參考",
         not_in_segment: "這個素材還不是這段的參考", no_soundtrack: "這個影片參考未使用音軌，無法以 <@名稱:audio> 指名聲音",
@@ -304,6 +317,7 @@ export const S = {
     refShort: (name, frames) => `影片參考「${name}」在本段只有 ${frames} 幀（H3 至少 5 幀）`,
     refLimit: (kind, count, limit) => `${kind} ${count} 個，超過 H3 上限 ${limit}`,
     tagKinds: { pictures: "圖片參考", videos: "影片參考", audios: "音訊參考" },
+    tagNames: { Picture: "圖片參考", Video: "影片參考", Audio: "音訊" },  // <Audio N> also counts video soundtracks
     promptProblem: (why) => `prompt：${why}`,
     // reason codes returned by timeline_grid.js
     reasons: {

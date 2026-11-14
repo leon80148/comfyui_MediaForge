@@ -49,26 +49,15 @@ export function newId(prefix, items) {
     for (let n = 1; ; n++) if (!used.has(`${prefix}${n}`)) return `${prefix}${n}`;
 }
 
-const NAME_RANGES = [[0x30, 0x39], [0x41, 0x5a], [0x61, 0x7a], [0x5f, 0x5f], [0x2d, 0x2d],
-    [0x3040, 0x30ff], [0x3400, 0x4dbf], [0x4e00, 0x9fff], [0xac00, 0xd7af], [0xf900, 0xfaff]];
+const NAME_PREFIX = { image: "img", video: "vid", audio: "aud" };
 
-function nameChar(ch) {
-    const c = ch.codePointAt(0);
-    return NAME_RANGES.some(([lo, hi]) => c >= lo && c <= hi);
-}
-
-// File name → alias: NFC, illegal characters → "_", room kept for a "_N" suffix so the result
-// never exceeds 32 code points.
-export function aliasFromFilename(filename, existingNames) {
-    const stem = filename.replace(/^.*[\\/]/, "").replace(/\.[^.]*$/, "").normalize("NFC");
-    let base = [...stem].map((ch) => (nameChar(ch) ? ch : "_")).join("").replace(/_+/g, "_").replace(/^_|_$/g, "") || "material";
-    const taken = new Set(existingNames);
-    const fit = (b, suffix) => [...b].slice(0, 32 - [...suffix].length).join("") + suffix;
-    if (!taken.has(fit(base, ""))) return fit(base, "");
-    for (let n = 2; ; n++) {
-        const candidate = fit(base, `_${n}`);
-        if (!taken.has(candidate)) return candidate;
-    }
+// Upload → alias: kind prefix + one past the highest number in use. Never the lowest free number: a deleted
+// material's `<@img2>` can still sit in a prompt, and a new upload must not silently take it over.
+export function autoName(kind, existingNames) {
+    const prefix = NAME_PREFIX[kind];
+    const pattern = new RegExp(`^${prefix}([0-9]+)$`);
+    const top = Math.max(0, ...existingNames.map((n) => Number(pattern.exec(n)?.[1] ?? 0)));
+    return `${prefix}${top + 1}`;
 }
 
 function material(data, id) {
@@ -458,13 +447,13 @@ export function moveRefInOrder(data, id, step, ctx) {
 // ---- materials ----
 
 export function addMaterials(data, entries, ctx) {
-    // entries: [{kind, ref, filename}] in upload order → one commit for the whole batch
+    // entries: [{kind, ref}] in upload order → one commit for the whole batch
     if (data.materials.length + entries.length > MAX_MATERIALS) return fail("too_many_materials");
     const materials = data.materials.slice();
     const affected = [];
     for (const e of entries) {
         const id = newId("m", materials);
-        materials.push({ id, kind: e.kind, ref: e.ref, name: aliasFromFilename(e.filename, materials.map((m) => m.name)) });
+        materials.push({ id, kind: e.kind, ref: e.ref, name: autoName(e.kind, materials.map((m) => m.name)) });
         affected.push(id);
     }
     return done(data, { ...data, materials }, ctx, affected);
@@ -507,17 +496,47 @@ const RAW_TAG = /<(Picture|Video|Audio) ([0-9]+)>/g;
 export function aliasRawTags(data, index, ctx) {
     const v = ctx.h3 ? segmentInputs(data, index, ctx) : null;
     if (!v?.ok || !v.prompt.ok) return fail("ambiguous_tags");
+    const pinned = pinRawTags([v.template], data, v.manifest, index);
+    if (pinned?.[0] === v.template) return fail("no_raw_tags");
+    if (!pinned) return fail("ambiguous_tags");
+    const segments = data.segments.map((s, i) => (i === index ? { ...s, prompt: pinned[0] } : s));
+    return done(data, { ...data, segments }, ctx, [String(index)]);
+}
+
+function rawTagAliases(data, manifest) {
     const names = new Map(data.materials.map((m) => [m.id, m.name]));
     const alias = new Map();
-    for (const x of [...v.manifest.pictures, ...v.manifest.videos, ...v.manifest.audios]) alias.set(x.tag, `<@${names.get(x.material)}>`);
-    for (const x of v.manifest.videos) if (x.audio_tag) alias.set(x.audio_tag, `<@${names.get(x.material)}:audio>`);
+    for (const x of [...manifest.pictures, ...manifest.videos, ...manifest.audios]) alias.set(x.tag, `<@${names.get(x.material)}>`);
+    for (const x of manifest.videos) if (x.audio_tag) alias.set(x.audio_tag, `<@${names.get(x.material)}:audio>`);
+    return alias;
+}
+
+// Text pieces with every raw tag replaced by its alias, or null: a tag with no alias here, a raw tag left over
+// (one cut in two by the pieces' boundary), or a resolved prompt that would change.
+function pinRawTags(pieces, data, manifest, index) {
+    const alias = rawTagAliases(data, manifest);
     let unmapped = false;
-    const prompt = v.template.replace(RAW_TAG, (tag) => alias.get(tag) ?? ((unmapped = true), tag));
-    if (prompt === v.template) return fail("no_raw_tags");
-    const check = resolvePrompt(prompt, v.manifest, data.materials, index, true);
-    if (unmapped || !check.ok || check.prompt !== v.prompt.prompt) return fail("ambiguous_tags");
-    const segments = data.segments.map((s, i) => (i === index ? { ...s, prompt } : s));
-    return done(data, { ...data, segments }, ctx, [String(index)]);
+    const pinned = pieces.map((p) => p.replace(RAW_TAG, (tag) => alias.get(tag) ?? ((unmapped = true), tag)));
+    const before = resolvePrompt(pieces.join(""), manifest, data.materials, index, true);
+    const after = resolvePrompt(pinned.join(""), manifest, data.materials, index, true);
+    const left = pinned.join("").search(RAW_TAG) >= 0;
+    return unmapped || left || !before.ok || !after.ok || before.prompt !== after.prompt ? null : pinned;
+}
+
+// A position inside a `<…>` tag, moved past its end: an insert never cuts a tag in two.
+function outsideTag(text, at) {
+    const open = text.lastIndexOf("<", at - 1);
+    if (open < 0 || text.lastIndexOf(">", at - 1) > open) return at;
+    const close = text.indexOf(">", at);
+    return close < 0 ? at : close + 1;
+}
+
+// [start, end) of `text` → `tag`, with a space on either side only where a word would otherwise touch it.
+export function spliceTag(text, start, end, tag) {
+    const head = text.slice(0, start);
+    const tail = text.slice(end);
+    const placed = `${head}${head && !/\s$/.test(head) ? " " : ""}${tag}${tail && !/^\s/.test(tail) ? " " : ""}`;
+    return { text: placed + tail, caret: placed.length };
 }
 
 // ---- shot change / continue ----
@@ -590,13 +609,16 @@ export function tagButtons(data, index, ctx) {
     for (const m of data.materials) {
         if (referenced(view.manifest, m.id)) {
             const r = resolvePrompt(`<@${m.name}>`, view.manifest, data.materials, index, true);
-            items[m.id] = r.ok ? { state: "insert" } : { state: "blocked", reason: r.error.reason };
+            const sound = m.kind === "video" ? resolvePrompt(`<@${m.name}:audio>`, view.manifest, data.materials, index, true) : null;
+            items[m.id] = !r.ok ? { state: "blocked", reason: r.error.reason }
+                : { state: "insert", tag: r.prompt, ...(sound?.ok ? { audioTag: sound.prompt } : {}) };
         } else if (!snaps[m.id]) {
             items[m.id] = { state: "blocked", reason: "not_ready" };
         } else {
             const category = TAG_CATEGORY[m.kind];
             items[m.id] = view.manifest[category].length >= H3_LIMITS[category]
-                ? { state: "blocked", reason: "tag_full", category, limit: H3_LIMITS[category] } : { state: "add" };
+                ? { state: "blocked", reason: "tag_full", category, limit: H3_LIMITS[category] }
+                : { state: "add", ...(m.kind === "video" && snaps[m.id].has_audio ? { audio: true } : {}) };
         }
     }
     return { blocked: null, items };
@@ -605,42 +627,134 @@ export function tagButtons(data, index, ctx) {
 // One click: the material becomes this segment's reference and its tag lands in the prompt, as one commit.
 // The new tag itself must resolve; other unresolved tags may stay, so a shared prompt that needs two
 // references can be completed one at a time.
-export function useRefTag(data, index, materialId, ctx) {
+// `at` {text, start, end}: the prompt box's current text and the range the tag replaces (the `@query`, or the
+// caret). Its text becomes the segment's own prompt; an empty text means no position, as before.
+export function useRefTag(data, index, materialId, ctx, { at = null, audio = false } = {}) {
     const m = material(data, materialId);
     if (!m) return fail("no_material");
     if (!ctx.h3) return fail("not_h3");
     const view = segmentInputs(data, index, ctx);
     if (!view || !snapOf(data, ctx, m.id)) return fail("not_ready");
     if (!view.ok) return problemAt("manifest", view.error, index);
-    const tag = `<@${m.name}>`;
+    const tag = `<@${m.name}${audio ? ":audio" : ""}>`;
     const inherited = !data.segments[index].prompt && !!data.prompt;
     const isNew = !referenced(view.manifest, m.id);
+    const placed = at?.text ? at : null;
+    // a bare caret (a button) inside a tag inserts after it
+    const [start, end] = !placed ? [] : placed.start === placed.end
+        ? [outsideTag(placed.text, placed.start), outsideTag(placed.text, placed.start)] : [placed.start, placed.end];
+    let pieces = placed && [placed.text.slice(0, start), placed.text.slice(end)];
     let next = data;
+    // a new reference renumbers the tags: numbered ones are first pinned to what they mean now
+    if (isNew && placed && pieces.join("").search(RAW_TAG) >= 0) {
+        pieces = pinRawTags(pieces, data, view.manifest, index);
+        if (!pieces) return fail("raw_tags_block");
+    } else if (isNew && !placed && view.template.search(RAW_TAG) >= 0) {
+        const pinned = aliasRawTags(next, index, ctx);
+        if (!pinned.ok) return fail("raw_tags_block");
+        next = pinned.next;
+    }
     if (isNew) {
-        // a new reference renumbers the tags: numbered ones are first pinned to what they mean now
-        if (view.template.search(RAW_TAG) >= 0) {
-            const pinned = aliasRawTags(next, index, ctx);
-            if (!pinned.ok) return fail("raw_tags_block");
-            next = pinned.next;
-        }
         const added = createFromCard(next, m.id, "refs", emitIntervals(next.segments)[index][0], ctx);
         if (!added.ok) return added;
         next = added.next;
     }
-    const template = templateOf(next, index);
-    // pressing ＋ for a tag the prompt already has only adds what it was missing: the reference
-    const write = !(isNew && template.includes(tag));
-    if (write) {
-        const prompt = `${template}${template && !template.endsWith(" ") ? " " : ""}${tag}`;
-        next = { ...next, segments: next.segments.map((s, i) => (i === index ? { ...s, prompt } : s)) };
+    let caret = null;
+    let prompt = null;
+    if (placed) {
+        // a button for a tag the prompt already has only adds what it was missing: the reference (the @ list always
+        // replaces its `@query`, so its range is never bare)
+        const keep = isNew && start === end && pieces.join("").includes(tag);
+        ({ text: prompt, caret } = keep ? { text: pieces.join(""), caret: null }
+            : spliceTag(pieces.join(""), pieces[0].length, pieces[0].length, tag));
+    } else {
+        const template = templateOf(next, index);
+        // pressing ＋ for a tag the prompt already has only adds what it was missing: the reference
+        if (!(isNew && template.includes(tag))) prompt = `${template}${template && !template.endsWith(" ") ? " " : ""}${tag}`;
     }
+    if (prompt !== null) next = { ...next, segments: next.segments.map((s, i) => (i === index ? { ...s, prompt } : s)) };
     const after = segmentInputs(next, index, ctx);
     if (!after) return fail("not_ready");
     if (!after.ok) return problemAt("manifest", after.error, index);
     const resolved = resolvePrompt(tag, after.manifest, next.materials, index, true);
     if (!resolved.ok) return problemAt("prompt", resolved.error, index);
-    const nowOwn = !!next.segments[index].prompt;
-    return done(data, next, ctx, [m.id, String(index)], inherited && nowOwn ? ["copied_shared"] : []);
+    const copied = !placed && inherited && !!next.segments[index].prompt;
+    const r = done(data, next, ctx, [m.id, String(index)], copied ? ["copied_shared"] : []);
+    return r.ok ? { ...r, caret } : r;
+}
+
+// ---- material tags in the shared prompt (H3 only) ----
+
+// The shared prompt is every segment's prompt that has none of its own: tagButtons() of each such segment,
+// folded. "insert": all of them already reference the material (or none uses the shared prompt); "add": the
+// `missing` ones can each take it; "blocked": one of them cannot, named by `segment`.
+export function sharedTagButtons(data, ctx) {
+    if (!ctx.h3) return { hidden: true };
+    const inheritors = data.segments.flatMap((s, i) => (s.prompt ? [] : [i]));
+    const per = [];
+    for (const i of inheritors) {
+        const b = tagButtons(data, i, ctx);
+        if (b.blocked) return { ...b, segment: i };
+        per.push([i, b.items]);
+    }
+    const snaps = verifiedSnapshots(data, ctx.snapshots);
+    const items = {};
+    for (const m of data.materials) {
+        const stuck = per.find(([, it]) => it[m.id].state === "blocked");
+        if (stuck) {
+            items[m.id] = { ...stuck[1][m.id], segment: stuck[0], missing: [] };
+            continue;
+        }
+        const missing = per.filter(([, it]) => it[m.id].state === "add").map(([i]) => i);
+        const audio = m.kind === "video" && !!snaps[m.id]?.has_audio
+            && per.every(([, it]) => it[m.id].state === "add" || it[m.id].audioTag);
+        items[m.id] = { state: missing.length ? "add" : "insert", missing, ...(audio ? { audio: true } : {}) };
+    }
+    return { blocked: null, inheritors, items };
+}
+
+// The tag goes into the shared prompt (at `at`, else appended) and every segment using it that lacks the
+// reference gets one, as one commit. Numbered tags cannot be pinned per segment in one shared text, so a new
+// reference that would make one of them name another material is refused.
+export function useSharedTag(data, materialId, ctx, { at = null, audio = false } = {}) {
+    const m = material(data, materialId);
+    if (!m) return fail("no_material");
+    const b = sharedTagButtons(data, ctx);
+    if (b.hidden) return fail("not_h3");
+    if (b.blocked === "not_ready") return fail("not_ready");
+    if (b.blocked) return problemAt("manifest", b.error, b.segment);
+    const item = b.items[m.id];
+    if (item.state === "blocked") return fail(item.reason, { category: item.category, limit: item.limit, segment: item.segment });
+    const text = at ? at.text : data.prompt;
+    let [start, end] = at ? [at.start, at.end] : [text.length, text.length];
+    if (start === end) start = end = outsideTag(text, start);
+    const rest = `${text.slice(0, start)}${text.slice(end)}`;
+    let next = data;
+    for (const i of item.missing) {
+        const added = createFromCard(next, m.id, "refs", emitIntervals(next.segments)[i][0], ctx);
+        if (!added.ok) return { ...added, segment: i };
+        next = added.next;
+    }
+    const tag = `<@${m.name}${audio ? ":audio" : ""}>`;
+    // as in useRefTag: a button for a tag already written only adds the references
+    const keep = start === end && item.missing.length > 0 && rest.includes(tag);
+    const { text: prompt, caret } = keep ? { text: rest, caret: null } : spliceTag(text, start, end, tag);
+    next = { ...next, prompt };
+    const raw = rest.match(RAW_TAG) ?? [];
+    for (const i of b.inheritors) {
+        const after = segmentInputs(next, i, ctx);
+        if (!after) return fail("not_ready");
+        if (!after.ok) return problemAt("manifest", after.error, i);
+        const resolved = resolvePrompt(tag, after.manifest, next.materials, i, true);
+        if (!resolved.ok) return problemAt("prompt", resolved.error, i);
+        if (!raw.length) continue;
+        // a numbered tag that named a material here must still name the same one
+        const was = rawTagAliases(data, segmentInputs(data, i, ctx).manifest);
+        const now = rawTagAliases(next, after.manifest);
+        if (raw.some((t) => was.has(t) && was.get(t) !== now.get(t))) return fail("shared_raw_tags");
+    }
+    const r = done(data, next, ctx, [m.id, ...item.missing.map(String)]);
+    return r.ok ? { ...r, caret } : r;
 }
 
 // ---- what an edit did to each segment's references ----
