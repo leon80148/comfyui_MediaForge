@@ -6,14 +6,15 @@ class MF_PrepareH3Upscale:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {"latent": ("LATENT",), "template": ("LATENT",)},
-                "optional": {"previous_latent": ("LATENT",)}}
+                "optional": {"previous_latent": ("LATENT",),
+                             "preserve_audio": ("BOOLEAN", {"default": False})}}
 
     RETURN_TYPES = ("LATENT",)
     FUNCTION = "prepare"
     CATEGORY = "MediaForge/AI"
     DEPRECATED = True
 
-    def prepare(self, latent, template, previous_latent=None):
+    def prepare(self, latent, template, previous_latent=None, preserve_audio=False):
         import torch
         streams, nested = split_streams(latent["samples"])
         out = {k: v for k, v in latent.items() if k not in ("noise_mask", "mf_carry", "mf_lock")}
@@ -22,6 +23,13 @@ class MF_PrepareH3Upscale:
         video_mask = torch.ones((1, 1, streams[0].shape[2], 1, 1), dtype=torch.float32, device=streams[0].device)
         if nested:
             audio_mask = torch.ones_like(streams[1], dtype=torch.float32)
+            if preserve_audio:
+                original, original_nested = split_streams(template["samples"])
+                if not original_nested or original[1].shape != streams[1].shape:
+                    raise ValueError("[Prepare H3 Upscale] 原音 latent 形狀不符，無法保留 Remake 原音。")
+                # Remake holds the entire source soundtrack clean at both resolutions.
+                out["samples"] = type(latent["samples"])((streams[0], original[1].to(streams[1]).clone()))
+                audio_mask.zero_()
             for a, b in template.get("mf_lock", {}).get("tokens", []):
                 audio_mask[..., a:b] = 0
             out["noise_mask"] = type(latent["samples"])((video_mask, audio_mask))
