@@ -244,6 +244,8 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看�
 
 ### 解析度、Latent 放大與 SelfLift（0.14）
 
+0.14 功能驗證（2026-11-15）：ComfyUI 0.45.3、frontend 1.58.5，Classic 與 Nodes 2.0。真實 H3 的直接生成／latent 放大／二階段／SelfLift 都完成兩段重疊生成（256×128、24 fps、輸出 56 幀），包含原音鎖定；原生二階段與 SelfLift 也通過未鎖音的音訊續接。保留原音的解碼波形相關係數超過 0.99999。整合範例實際經過 ProRes、OmniSR X2 與交付尺寸調整，輸出 1920×1080，保留 56 幀與音軌。這是功能煙霧測試，不代表目標解析度的畫質或效能評測。
+
 展開 **Edit Timeline → 解析度與 Latent 放大**，勾選 **時間軸管理解析度**。設定會存入 `timeline_data.render`，並接管 Sample Segments 原本的 width／height 與參考影片短邊上限。沒有 `render` 的舊流程維持原有行為；取消勾選就恢復使用取樣器設定。`cut` 模式不使用這些設定。
 
 | 方式 | 執行流程 | 設定 |
@@ -265,7 +267,7 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看�
 
 - [原生 H3 二階段](example_workflows/timeline_h3_upscale.json)：672×384 → 1344×768，4 步（3＋1），請選擇相容 H3 放大模型。
 - [可選 SelfLift](example_workflows/timeline_h3_selflift.json)：相同目標尺寸、標準 Euler，需 TimelineDirector。
-- [H3＋一般影像模型後製放大](example_workflows/timeline_h3_upscale_and_post.json)：Assemble → Start Video Batch → ImageUpscaleWithModel → End Video Batch。選擇 OmniSR X2 等影像模型，最終尺寸依模型原生倍率決定。中繼使用 ProRes，較預設 H.264 減少壓縮損傷，但仍有損且占用更多磁碟；保留來源音軌。後製可以獨立重跑；逐幀影像模型可能閃爍，需檢查動作與剪接處。需要 1920×1080 等精確交付尺寸時，可在模型放大後接你慣用的 IMAGE resize 節點；交付尺寸與 H3 對齊後的生成尺寸分開。
+- [H3＋一般影像模型後製放大](example_workflows/timeline_h3_upscale_and_post.json)：Assemble → Start Video Batch → ImageUpscaleWithModel → ImageScale → End Video Batch。選擇 OmniSR X2 等影像模型，再用範例內附的 ImageScale 設定交付尺寸（預設 1920×1080、中心裁切）；略過 ImageScale 就保留模型原生輸出尺寸。中繼使用 ProRes，較預設 H.264 減少壓縮損傷，但仍有損且占用更多磁碟；保留來源音軌。後製可以獨立重跑；逐幀影像模型可能閃爍，需檢查動作與剪接處。交付尺寸與 H3 對齊後的生成尺寸分開設定。
 
 API 使用者可在 v2 `timeline_data` 加入可選的 `render`：
 

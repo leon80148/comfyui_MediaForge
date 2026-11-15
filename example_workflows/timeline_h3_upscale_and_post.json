@@ -1,8 +1,8 @@
 {
   "id": "9a403dfe-be3f-42b1-a92c-2f2dd67fa856",
   "revision": 0,
-  "last_node_id": 25,
-  "last_link_id": 201,
+  "last_node_id": 26,
+  "last_link_id": 202,
   "nodes": [
     {
       "id": 1,
@@ -865,7 +865,7 @@
       "outputs": [],
       "properties": {},
       "widgets_values": [
-        "## MediaForge H3 — two_stage\n\n1. Choose H3 UNet, compatible turbo LoRA, CLIP and both VAEs in the loaders.\n2. Open Edit Timeline > Resolution / Latent upscale. Select a compatible local H3 latent model. The SELECT_* filename is a placeholder, not a download.\n3. This example uses 672x384 -> 1344x768, 4 total steps, 1 high-resolution step (3 + 1). Timeline settings override Sample Segments width/height.\n4. Uploading a source in generate mode also creates a named video reference. Source purpose and original-audio controls are in the editor.\n5. SelfLift additionally requires Songssx/ComfyUI-MiniMaxH3-TimelineDirector and standard Euler; select an appropriate model/LoRA/schedule combination. General two_stage supports the connected standard sampler.\n\nH3 AV only, 24 fps. Native low/high latent tails are continued independently. Test a short clip at your target size first; no VRAM, speed or seam-quality guarantee.\n\n## Optional image-model post upscale\n\nThe assembled ProRes intermediate feeds Start Video Batch -> ImageUpscaleWithModel -> End Video Batch. Choose a local image upscaler (e.g. OmniSR X2); native model scale determines output size. End keeps source audio and processes 16 frames per batch. This is a separate post process and can be rerun without regenerating H3. ProRes uses more disk than H.264 and remains a lossy intermediate. Per-frame image upscalers may flicker; inspect motion and scene cuts."
+        "## MediaForge H3 — two_stage\n\n1. Choose H3 UNet, compatible turbo LoRA, CLIP and both VAEs in the loaders.\n2. Open Edit Timeline > Resolution / Latent upscale. Select a compatible local H3 latent model. The SELECT_* filename is a placeholder, not a download.\n3. This example uses 672x384 -> 1344x768, 4 total steps, 1 high-resolution step (3 + 1). Timeline settings override Sample Segments width/height.\n4. Uploading a source in generate mode also creates a named video reference. Source purpose and original-audio controls are in the editor.\n5. SelfLift additionally requires Songssx/ComfyUI-MiniMaxH3-TimelineDirector and standard Euler; select an appropriate model/LoRA/schedule combination. General two_stage supports the connected standard sampler.\n\nH3 AV only, 24 fps. Native low/high latent tails are continued independently. Test a short clip at your target size first; no VRAM, speed or seam-quality guarantee.\n\n## Optional image-model post upscale\n\nThe assembled ProRes intermediate feeds Start Video Batch -> ImageUpscaleWithModel -> ImageScale -> End Video Batch. Choose a local image upscaler (e.g. OmniSR X2), then set your delivery width/height on ImageScale (default 1920x1080; center crop preserves aspect ratio). Bypass ImageScale for the model's native output size. End keeps source audio and processes 16 frames per batch. This is a separate post process and can be rerun without regenerating H3. ProRes uses more disk than H.264 and remains a lossy intermediate. Per-frame image upscalers may flicker; inspect motion and scene cuts."
       ],
       "widgets_values_named": {
         "text": "## MediaForge Timeline — MiniMax H3 long clip (text only)\n\n1. Pick your H3 models in the loaders: fl2va UNet (+ optional turbo LoRA), the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE.\n2. Edit the segments in **⏱️ Edit Timeline** (drag the edges; lengths and overlaps stay on the H3 5+17n grid, 24 fps). Each segment has its own prompt.\n3. Queue. 🎛️ Sample Segments generates one segment at a time, carrying the previous tail (video + audio) into the next; 🧵 Assemble Segments writes one MP4.\n\nDefault plan: 3 × 107 frames, overlaps 22 / 39 → **260 frames**, 346,667 samples at 32 kHz. Batch 1 only. Seams are not guaranteed to be invisible. To use reference images / videos / audio, open `timeline_h3_director.json`.\n\n---\n1. 在載入器選好 H3 模型：fl2va UNet（可加 turbo LoRA）、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。\n2. 在 **⏱️ Edit Timeline** 編輯分段（拖邊界；段長與重疊落在 H3 的 5+17n 格點、24 fps）；每段有自己的 prompt。\n3. 執行。🎛️ Sample Segments 一次生成一段，把上一段尾端（影像 + 音訊）續接進下一段；🧵 Assemble Segments 輸出一個 MP4。\n\n預設計畫：3 × 107 幀、重疊 22 / 39 → **260 幀**、32 kHz 共 346,667 samples。只支援 batch 1；不保證接縫無痕。要用參考圖片／影片／音訊，請開 `timeline_h3_director.json`。"
@@ -1078,7 +1078,7 @@
       "id": 25,
       "type": "MF_EndVideoBatch",
       "pos": [
-        2700,
+        3070,
         360
       ],
       "size": [
@@ -1093,7 +1093,7 @@
           "localized_name": "frames",
           "name": "frames",
           "type": "IMAGE",
-          "link": 103
+          "link": 202
         },
         {
           "localized_name": "audio",
@@ -1223,6 +1223,79 @@
         "crf": 18,
         "preset": "medium"
       }
+    },
+    {
+      "id": 26,
+      "type": "ImageScale",
+      "pos": [
+        2700,
+        360
+      ],
+      "size": [
+        320,
+        190
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 103
+        },
+        {
+          "name": "upscale_method",
+          "type": "COMBO",
+          "widget": {
+            "name": "upscale_method"
+          },
+          "link": null
+        },
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": null
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": null
+        },
+        {
+          "name": "crop",
+          "type": "COMBO",
+          "widget": {
+            "name": "crop"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            202
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageScale"
+      },
+      "widgets_values": [
+        "lanczos",
+        1920,
+        1080,
+        "center"
+      ],
+      "title": "Delivery size — 1920 × 1080"
     }
   ],
   "links": [
@@ -1326,7 +1399,7 @@
       103,
       24,
       0,
-      25,
+      26,
       0,
       "IMAGE"
     ],
@@ -1337,6 +1410,14 @@
       22,
       0,
       "STRING"
+    ],
+    [
+      202,
+      26,
+      0,
+      25,
+      0,
+      "IMAGE"
     ]
   ],
   "groups": [],

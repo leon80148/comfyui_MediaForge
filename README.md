@@ -244,6 +244,8 @@ Source video: preview of the selected source; codecs the browser can't play get 
 
 ### Resolution, latent upscale and SelfLift (0.14)
 
+0.14 functional verification (2026-11-15): ComfyUI 0.45.3, frontend 1.58.5, classic and Nodes 2.0. Real H3 direct / latent / two-stage / SelfLift runs each completed two overlapping segments (56 output frames at 256×128 / 24 fps), including original-audio locks; native two-stage and SelfLift also passed unlocked audio-continuation runs. Original-audio decoded waveform correlation exceeded 0.99999. The combined template ran through ProRes, OmniSR X2 and delivery resize to 1920×1080, retaining 56 frames and audio. These are functional smoke tests, not target-resolution quality or performance benchmarks.
+
 Open **Edit Timeline → 解析度與 Latent 放大** and enable **時間軸管理解析度**. The persisted `render` settings then override Sample Segments' legacy width/height and reference-video short edge. Existing workflows without `render` keep their previous behavior. Disable the checkbox to return to the sampler's settings. Cut mode does not consume render settings.
 
 | Strategy | Execution | Settings |
@@ -265,7 +267,7 @@ New templates:
 
 - [Native two-stage H3](example_workflows/timeline_h3_upscale.json): 672×384 → 1344×768, 4 steps (3 + 1); select your compatible H3 model.
 - [Optional SelfLift](example_workflows/timeline_h3_selflift.json): same target, standard Euler; requires TimelineDirector.
-- [H3 plus image-model post upscale](example_workflows/timeline_h3_upscale_and_post.json): Assemble → Start Video Batch → ImageUpscaleWithModel → End Video Batch. Select an image model such as OmniSR X2; the model's native scale determines final size. The ProRes intermediate reduces compression damage compared with the default H.264, but remains lossy and uses more disk. Audio is retained. Post processing can be rerun independently; per-frame image models may flicker, so inspect motion and scene cuts. For an exact delivery size such as 1920×1080, resize after model upscale using your preferred IMAGE resize node. This final delivery size is separate from H3's aligned canvas.
+- [H3 plus image-model post upscale](example_workflows/timeline_h3_upscale_and_post.json): Assemble → Start Video Batch → ImageUpscaleWithModel → ImageScale → End Video Batch. Select an image model such as OmniSR X2, then set delivery dimensions on the included ImageScale node (default 1920×1080, center crop). Bypass ImageScale to keep the model's native output size. The ProRes intermediate reduces compression damage compared with the default H.264, but remains lossy and uses more disk. Audio is retained. Post processing can be rerun independently; per-frame image models may flicker, so inspect motion and scene cuts. The final delivery size is separate from H3's aligned canvas.
 
 API clients may include an optional `render` object in v2 `timeline_data`:
 
@@ -1789,7 +1791,7 @@ Video Batch nodes report problems as `[Start Video Batch] …` or `[End Video Ba
 A: VHS is excellent for IMAGE-batch workflows. MediaForge handles **file-level** operations (cross-codec concat, audio-aware trim, broadcast encoders) and **single-encode multi-overlay** Compose. Install both.
 
 **Q: Will you add diffusion / generation nodes?**
-A: No model loaders or model patches, and no sampling code of our own — by design; generation stays in ComfyUI core / dedicated plugins. MediaForge ships post-production AI (Whisper transcribe, LLM translate) and the Timeline tools: Extend Latent reshapes the `LATENT` you pass in, Append decodes it with the `VAE` you connect, and FFmpeg does the encoding. For MiniMax H3, Encode H3 Segment builds conditioning only through core's `MiniMaxH3*` nodes, and Sample Segments samples only by expanding into core node classes (`RandomNoise`, `BasicGuider` / `CFGGuider`, `SamplerCustomAdvanced`) fed by your own model, sampler and sigmas (see [Timeline & Long Video](#timeline--long-video)).
+A: No model loaders or model patches, and no sampling code of our own — by design; generation stays in ComfyUI core / dedicated plugins. MediaForge ships post-production AI (Whisper transcribe, LLM translate) and the Timeline tools: Extend Latent reshapes the `LATENT` you pass in, Append decodes it with the `VAE` you connect, and FFmpeg does the encoding. For MiniMax H3, Encode H3 Segment builds conditioning only through core's `MiniMaxH3*` nodes, and Sample Segments samples by expanding into core node classes or the optional installed SelfLift nodes (`RandomNoise`, `BasicGuider` / `CFGGuider`, `SamplerCustomAdvanced`) fed by your own model, sampler and sigmas (see [Timeline & Long Video](#timeline--long-video)).
 
 **Q: Why are AI nodes "experimental"?**
 A: The `AI_CONFIG` schema may evolve while Phase 5 is in shakedown. Once Whisper + Translate are validated end-to-end across all 4 provider recipes, the schema freezes.
