@@ -10,6 +10,7 @@ import {
     FloatToken, MAX_FRAME, intReason, jsonErrorDetail, objectReason, parseAnchors, parseMaterials, parseRefs,
     resolvePrompt, segmentManifest, validateGeometry,
 } from "./timeline_materials.js";
+import { DEFAULT_RENDER, renderOk } from "./timeline_render.js";
 
 export const FPS_PRESETS = {
     "16": [16, 1], "24": [24, 1], "25": [25, 1], "30": [30, 1],
@@ -97,6 +98,7 @@ export function canonicalize(data) {
         materials: materials.materials,
         refs: refs.refs,
         anchors: anchors.anchors,
+        ...(data.render !== undefined ? { render: { ...DEFAULT_RENDER, ...data.render } } : {}),
     };
 }
 
@@ -138,7 +140,7 @@ export function schemaErrorDetail(data) {
     const at = (location, reason) => ({ code: "E_TIMELINE_JSON", location, ...jsonErrorDetail(location, null, reason) });
     // Python picks the key set with `version == 2`, which 2.0 satisfies too
     const v2 = data?.version === 2 || (data?.version instanceof FloatToken && Number(data.version.text) === 2);
-    let why = objectReason(data, v2 ? ["version", "source", "prompt", "segments", "materials", "refs", "anchors"]
+    let why = objectReason(data, v2 ? ["version", "source", "prompt", "segments", "materials", "refs", "anchors", "render"]
         : ["version", "source", "segments"]);
     if (why) return at("timeline_data", why);
     why = intReason(data.version, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)
@@ -193,6 +195,7 @@ export function schemaErrorDetail(data) {
     const refs = parseRefs(listOf("refs"), materials.materials);
     if (!refs.ok) return refs.error;
     const anchors = parseAnchors(listOf("anchors"), materials.materials);
+    if (anchors.ok && data.render !== undefined && !renderOk(data.render)) return at("render", "bad_render");
     return anchors.ok ? null : anchors.error;
 }
 

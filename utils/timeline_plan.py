@@ -9,6 +9,7 @@ import json
 from fractions import Fraction
 
 from . import timeline_materials
+from .timeline_render import parse_render
 from .timeline_messages import TimelineError
 from .timeline_source import check_relative_name
 
@@ -159,7 +160,7 @@ def parse_timeline_data(text):
     if not isinstance(data, dict):
         _fail("必須是物件", "timeline_data", "not_object")
     v2 = data.get("version") == 2
-    _keys(data, ("version", "source", "prompt", "segments", "materials", "refs", "anchors") if v2
+    _keys(data, ("version", "source", "prompt", "segments", "materials", "refs", "anchors", "render") if v2
           else ("version", "source", "segments"), "timeline_data")
     if _int(data.get("version", _MISSING), "version") not in (1, 2):
         _fail("只支援 version 1 / 2", "version", "unsupported_version")
@@ -191,10 +192,17 @@ def parse_timeline_data(text):
         out.append({"start": start, "end": end, "prompt": seg_prompt, "seed": seed,
                     "seam_in": _parse_seam(seg.get("seam_in", {"kind": "cut"}), f"{loc}.seam_in")})
     materials = timeline_materials.parse_materials(data.get("materials", []), check_relative_name)
-    return {"version": 2, "source": {"origin_frame": origin}, "prompt": prompt, "segments": out,
+    refs = timeline_materials.parse_refs(data.get("refs", []), materials)
+    anchors = timeline_materials.parse_anchors(data.get("anchors", []), materials)
+    extra = {}
+    if "render" in data:
+        try:
+            extra["render"] = parse_render(data["render"])
+        except ValueError as e:
+            _fail(str(e), "render", "bad_render")
+    return {"version": 2, "source": {"origin_frame": origin}, "prompt": prompt, "segments": out, **extra,
             "materials": materials,
-            "refs": timeline_materials.parse_refs(data.get("refs", []), materials),
-            "anchors": timeline_materials.parse_anchors(data.get("anchors", []), materials)}
+            "refs": refs, "anchors": anchors}
 
 
 def _parse_seam(seam, location):
@@ -311,6 +319,8 @@ def compile_plan(data, mode, fps_key, grid, source=None, snapshots=None):
 
     semantic = {"version": 2, "mode": mode, "fps": list(fps), "effective_grid": effective_grid,
                 **{k: data[k] for k in ("source", "prompt", "segments", "materials", "refs", "anchors")}}
+    if "render" in data and mode == "generate":
+        semantic["render"] = data["render"]
     plan_id = _digest(canonical_json(semantic))
     material_fps = sorted([m["id"], snapshots[m["id"]]["fingerprint"]] for m in data["materials"])
     fingerprint = source["fingerprint"] if source else ""
@@ -329,6 +339,8 @@ def compile_plan(data, mode, fps_key, grid, source=None, snapshots=None):
         "total_frames": total, "diagnostics": diagnostics,
     }
     plan["specs"] = _build_specs(plan, data, snapshots, h3)
+    if "render" in semantic:
+        plan["render"] = semantic["render"]
     return plan
 
 
@@ -373,7 +385,8 @@ def _audio_locks(plan, seg):
             snap = by_id[a["material"]]
             out.append({"anchor": a["id"], "start": lo, "end": hi, "in": a["in"], "ref": snap["ref"],
                         "fingerprint": snap["fingerprint"],
-                        **{k: snap[k] for k in ("audio_sample_rate", "audio_channels", "audio_start_us", "format_start_us")}})
+                        **{k: snap[k] for k in ("audio_sample_rate", "audio_channels", "audio_start_us", "format_start_us")},
+                        **({"audio_start_us": snap["source_start_us"]} if snap["kind"] == "video" else {})})
     return out
 
 

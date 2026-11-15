@@ -12,6 +12,7 @@ from ..utils.h3_adapter import lock_context, material_decode_bytes, needs_audio_
 from ..utils.segment_spill import FFV1_BYTES_PER_PIXEL
 from ..utils.timeline_materials import H3_AUDIO_RATE, LOCK_POLICY
 from ..utils.timeline_plan import H3_FPS, H3_GRID, sample_index, segment_view
+from ..utils.timeline_render import parse_render, validate_runtime
 
 LABEL = "Sample Segments"
 MANIFEST_KINDS = ("pictures", "videos", "audios", "keyframes", "guides", "locks")
@@ -133,16 +134,35 @@ class MF_SampleSegments:
             raise ValueError(f"[{LABEL}] 時間軸上有音訊類素材（參考音訊 / 配對音軌 / 鎖定原音），請連接 audio_vae。")
         # socket 一律連回原上游：把物件塞成常數會讓 core 的快取 key 變成 Unhashable、永遠重算
         links = dynprompt.get_node(unique_id)["inputs"]
+        recipe = parse_render(segment_plan["render"]) if "render" in segment_plan else None
+        strategy = recipe["mode"] if recipe else "direct"
+        if recipe:
+            width, height = recipe["width"], recipe["height"]
+            ref_video_short_edge = recipe["ref_video_short_edge"]
+            validate_runtime(recipe, sigmas, sampler)
+        low_width, low_height = ((recipe["base_width"], recipe["base_height"])
+                                 if strategy in ("latent", "two_stage") else (width, height))
         graph = GraphBuilder()
-        prev_smp = prev_app = None
+        prev_smp = prev_app = prev_final = None
+        upmodel = None
+        if strategy in ("latent", "two_stage"):
+            upmodel = graph.node("LatentUpscaleModelLoader", "upscale_model", model_name=recipe["model"])
+        split = None
+        if strategy == "two_stage":
+            split = graph.node("SplitSigmas", "split_sigmas", sigmas=links["sigmas"], step=len(sigmas) - 1 - recipe["high_steps"])
         for spec in segment_plan["specs"]:
             i = spec["index"]
             audio = {"audio_vae": links["audio_vae"]} if audio_vae is not None else {}
             enc = graph.node("MF_EncodeH3Segment", f"enc_{i}", segment=segment_view(spec, "encode"),
-                             clip=links["clip"], vae=links["vae"], width=width, height=height,
+                             clip=links["clip"], vae=links["vae"], width=low_width, height=low_height,
                              ref_image_size=ref_image_size, ref_video_short_edge=ref_video_short_edge, **audio)
+            target = enc.out(1)
+            if strategy == "selflift":
+                previous = {"previous_latent": prev_final.out(0)} if spec["overlap_in"] else {}
+                prepared = graph.node("MF_PrepareH3Upscale", f"selflift_context_{i}", latent=target, template=target, **previous)
+                target = prepared.out(0)
             carry = {"previous_latent": prev_smp.out(0)} if spec["overlap_in"] else {}
-            ext = graph.node("MF_ExtendLatent", f"ext_{i}", target_latent=enc.out(1),
+            ext = graph.node("MF_ExtendLatent", f"ext_{i}", target_latent=target,
                              segment=segment_view(spec, "extend"), mask=mask, carry_audio=carry_audio,
                              video_taper_tokens=video_taper_tokens, audio_taper_tokens=audio_taper_tokens,
                              on_conflict=on_conflict, **carry)
@@ -153,14 +173,72 @@ class MF_SampleSegments:
                                     negative=links["negative"], cfg=cfg)
             else:
                 guider = graph.node("BasicGuider", f"gd_{i}", model=links["model"], conditioning=enc.out(0))
-            smp = graph.node("SamplerCustomAdvanced", f"smp_{i}", noise=noise.out(0), guider=guider.out(0),
-                             sampler=links["sampler"], sigmas=links["sigmas"], latent_image=ext.out(0))
+            if strategy == "selflift":
+                continuation = graph.node("MiniMaxH3FiniteLatentContinuation", f"selflift_cont_{i}",
+                                          positive=enc.out(0), target_latent=ext.out(0), iteration=i,
+                                          overlap_frames=spec["overlap_in"],
+                                          continue_audio_latent=carry_audio and not bool(spec["carry_conflicts"]),
+                                          model=links["model"], sigmas=links["sigmas"], **carry)
+                smp = graph.node("MiniMaxH3TimelineSelfLiftSampler", f"smp_{i}", model=continuation.out(3),
+                                 positive=continuation.out(0), negative=links["negative"] if negative is not None else continuation.out(0),
+                                 vae=links["vae"], latent_image=continuation.out(1), sampler=links["sampler"], sigmas=links["sigmas"],
+                                 seed=spec["seed"] if spec["seed"] is not None else noise_seed,
+                                 cfg=cfg if negative is not None else 1.0,
+                                 transition_step=len(sigmas) - 1 - recipe["high_steps"], lowres_scale=0.5,
+                                 rho=0.0, w_min=0.5, w_max=1.0, upscaler_model=recipe["model"])
+            else:
+                smp = graph.node("SamplerCustomAdvanced", f"smp_{i}", noise=noise.out(0), guider=guider.out(0),
+                                 sampler=links["sampler"], sigmas=split.out(0) if split else links["sigmas"], latent_image=ext.out(0))
+            final = smp
+            if strategy == "selflift":
+                # Drift-Control uses dynamic prefix masks. Re-establish MediaForge's
+                # explicit final-grid seam contract before spilling / passing the tail.
+                prepared = graph.node("MF_PrepareH3Upscale", f"selflift_final_{i}", latent=smp.out(0), template=enc.out(1))
+                final = graph.node("MF_ExtendLatent", f"selflift_seam_{i}", target_latent=prepared.out(0),
+                                   segment=segment_view(spec, "extend"), mask=mask, carry_audio=carry_audio,
+                                   video_taper_tokens=video_taper_tokens, audio_taper_tokens=audio_taper_tokens,
+                                   on_conflict=on_conflict, **carry)
+            if upmodel:
+                lifted = graph.node("MiniMaxH3LatentUpscaleWithModel", f"lift_{i}", model=upmodel.out(0),
+                                    samples=smp.out(1) if split else smp.out(0), width=width, height=height)
+                template = enc
+                if split:
+                    template = graph.node("MF_EncodeH3Segment", f"hi_enc_{i}", segment=segment_view(spec, "encode"),
+                                          clip=links["clip"], vae=links["vae"], width=width, height=height,
+                                          ref_image_size=ref_image_size, ref_video_short_edge=ref_video_short_edge, **audio)
+                prepared = graph.node("MF_PrepareH3Upscale", f"prepare_hi_{i}", latent=lifted.out(0), template=template.out(1))
+                high_carry = {"previous_latent": prev_final.out(0)} if spec["overlap_in"] else {}
+                high = graph.node("MF_ExtendLatent", f"hi_ext_{i}", target_latent=prepared.out(0),
+                                  segment=segment_view(spec, "extend"), mask=mask, carry_audio=carry_audio,
+                                  video_taper_tokens=video_taper_tokens, audio_taper_tokens=audio_taper_tokens,
+                                  on_conflict=on_conflict, **high_carry)
+                final = high
+                if split:
+                    if negative is not None:
+                        high_guider = graph.node("CFGGuider", f"hi_gd_{i}", model=links["model"], positive=template.out(0),
+                                                 negative=links["negative"], cfg=cfg)
+                    else:
+                        high_guider = graph.node("BasicGuider", f"hi_gd_{i}", model=links["model"], conditioning=template.out(0))
+                    final = graph.node("SamplerCustomAdvanced", f"hi_smp_{i}", noise=noise.out(0), guider=high_guider.out(0),
+                                       sampler=links["sampler"], sigmas=split.out(1), latent_image=high.out(0))
             state = {"state": prev_app.out(0)} if prev_app is not None else {}
             app = graph.node("MF_AppendSegment", f"app_{i}", segment=segment_view(spec, "assemble"),
-                             latent=smp.out(0), vae=links["vae"], **audio, **state)
-            prev_smp, prev_app = smp, app
+                             latent=final.out(0), vae=links["vae"], **audio, **state)
+            # For a partial low schedule, output 1 is its clean prediction; use it
+            # for native low-grid continuation rather than the residual-noise state.
+            if split:
+                prev_smp = graph.node("MF_PrepareH3Upscale", f"low_tail_{i}", latent=smp.out(1), template=enc.out(1))
+                # Extend's provenance marker belongs to this segment at both grids.
+                prev_smp = graph.node("MF_CopyH3Provenance", f"low_marker_{i}", latent=prev_smp.out(0), source=ext.out(0))
+            else:
+                prev_smp = final if strategy == "selflift" else smp
+            prev_final, prev_app = final, app
         report = _report(segment_plan, noise_seed, audio_vae, negative, cfg, carry_audio, mask,
                          {"video": video_taper_tokens, "audio": audio_taper_tokens}, width, height, ref_video_short_edge)
+        if recipe:
+            report["render"] = {**recipe, "total_steps": len(sigmas) - 1,
+                                "base_width": width // 2 if strategy == "selflift" else low_width,
+                                "base_height": height // 2 if strategy == "selflift" else low_height}
         return {"result": (prev_app.out(0), json.dumps(report, ensure_ascii=False)), "expand": graph.finalize()}
 
 

@@ -87,6 +87,8 @@ def describe_material(material, fps, input_dir=None):
         fail("outside_input", str(e))
     snap = {"id": material["id"], "kind": material["kind"], "name": material["name"], "ref": material["ref"],
             "fingerprint": opaque_fingerprint(path)}
+    if "short_edge" in material:
+        snap["short_edge"] = material["short_edge"]
     if material["kind"] == "image":
         try:
             snap.update(image_fields(path))

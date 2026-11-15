@@ -98,7 +98,7 @@ def material_decode_bytes(materials, fps, rate, width, height, ref_video_short_e
     for p in materials["pictures"]:
         add("pictures", "image", p, p["snapshot"]["width"] * p["snapshot"]["height"] * 3 * 4)
     for v in materials["videos"]:
-        size = _ref_video_size(v["snapshot"]["display_size"], ref_video_short_edge)[1] or v["snapshot"]["display_size"]
+        size = _ref_video_size(v["snapshot"]["display_size"], v["snapshot"].get("short_edge") or ref_video_short_edge)[1] or v["snapshot"]["display_size"]
         add("videos", "video", v, v["effective_frames"] * size[0] * size[1] * 3)
         if v["soundtrack"]:
             add("videos", "audio", v, audio_bytes(v["source_start"], v["effective_frames"]))
@@ -130,7 +130,7 @@ def write_locks(latent, locks, fps, audio_vae):
         snap = lock["snapshot"]
         k = k1 - k0
         a, left, right = lock_context(lock, fps, rate)
-        origin = material_origin(snap, "audio_start_us")
+        origin = material_origin(snap, "source_start_us" if snap["kind"] == "video" else "audio_start_us")
         start = Fraction(a - per_token * left, rate)
         wave = decode_audio(material_path(lock, LABEL), origin + start, origin, (k + left + right) * per_token, rate, 2,
                             snap["audio_channels"], LABEL)
@@ -173,7 +173,7 @@ def encode_segment(segment, clip, vae, width, height, ref_image_size, audio_vae=
     images = {f"ref_image_{k}": load_image(p, LABEL) for k, p in enumerate(materials["pictures"])}
     videos, soundtracks = {}, {}
     for k, v in enumerate(materials["videos"]):
-        scale, size = _ref_video_size(v["snapshot"]["display_size"], ref_video_short_edge)
+        scale, size = _ref_video_size(v["snapshot"]["display_size"], v["snapshot"].get("short_edge") or ref_video_short_edge)
         videos[f"ref_video_{k}"] = load_video_slice(v, v["source_start"], v["effective_frames"], fps, LABEL, number,
                                                      scale, size)
         if v["soundtrack"]:
