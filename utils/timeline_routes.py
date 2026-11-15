@@ -432,6 +432,19 @@ def register_timeline_routes():
         return
     routes = instance.routes
 
+    @routes.get("/mediaforge/timeline/render-models")
+    async def _render_models(request):
+        from aiohttp import web
+        from .timeline_render import h3_models
+        try:
+            check_origin(request.headers, request.scheme, request.host)
+        except RouteError as e:
+            return web.json_response(e.body(), status=e.status)
+        import nodes
+        models = await asyncio.to_thread(h3_models)
+        return web.json_response({"models": models, "selflift": "MiniMaxH3TimelineSelfLiftSampler" in nodes.NODE_CLASS_MAPPINGS},
+                                 headers={"Cache-Control": "no-store"})
+
     @routes.post("/mediaforge/timeline/probe")
     async def _probe_route(request):
         return await respond(request, handle_probe)

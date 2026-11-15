@@ -108,7 +108,7 @@ def parse_materials(raw, check_ref):
     for i, m in enumerate(raw):
         loc = f"materials[{i}]"
         entity = _entity("material", m, ids)
-        _keys(m, ("id", "kind", "ref", "name"), loc, entity)
+        _keys(m, ("id", "kind", "ref", "name", "short_edge"), loc, entity)
         mid = _id(m.get("id", _MISSING), ids, f"{loc}.id")
         if _present(m.get("kind", _MISSING), f"{loc}.kind", entity) not in KINDS:
             _fail(f"kind 必須是 {list(KINDS)}", f"{loc}.kind", "bad_enum", entity)
@@ -124,7 +124,13 @@ def parse_materials(raw, check_ref):
         if name in names:
             _fail("name 不可重複", f"{loc}.name", "duplicate_name", entity)
         names.add(name)
-        out.append({"id": mid, "kind": m["kind"], "ref": m["ref"].replace("\\", "/"), "name": name})
+        item = {"id": mid, "kind": m["kind"], "ref": m["ref"].replace("\\", "/"), "name": name}
+        if "short_edge" in m:
+            edge = _frame(m["short_edge"], f"{loc}.short_edge", entity=entity)
+            if m["kind"] != "video" or edge > 4096 or edge % 32:
+                _fail("short_edge 只用於影片，必須是 0–4096 間 32 的倍數", f"{loc}.short_edge", "bad_short_edge", entity)
+            item["short_edge"] = edge
+        out.append(item)
     return out
 
 
@@ -184,7 +190,7 @@ def parse_anchors(raw, materials):
             _fail("必須是物件", loc, "not_object")
         entity = _entity("anchor", a, ids)
         m = _material(by_id, a.get("material", _MISSING), f"{loc}.material", entity)
-        role = ANCHOR_ROLE[m["kind"]]
+        role = "lock" if m["kind"] == "video" and a.get("role") == "lock" else ANCHOR_ROLE[m["kind"]]
         if _present(a.get("role", _MISSING), f"{loc}.role", entity) != role:
             _fail(f"{m['kind']} 素材的錨定角色必須是 {role}", f"{loc}.role", "wrong_role", entity)
         allowed = {"keyframe": ("id", "material", "role", "at"),
@@ -251,6 +257,8 @@ def validate_geometry(refs, anchors, snapshots, segments, h3):
     emits = emit_intervals(segments)
     for a in anchors:
         snap = snapshots[a["material"]]
+        if a["role"] == "lock" and snap["kind"] == "video" and not snap["has_audio"]:
+            _anchor_error(a, "no_audio", "role", "來源影片沒有音軌，不能保留原音")
         if a["at"] >= total:
             _anchor_error(a, "past_timeline", "at", f"位置超出時間軸總長（{total} 幀），不會套用到任何段")
         if a["role"] != "keyframe" and a["in"] + a["length"] > snap["frames"]:

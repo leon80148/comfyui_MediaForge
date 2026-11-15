@@ -4,13 +4,13 @@
 
 > **Power-user FFmpeg toolkit for ComfyUI.** Tensor↔media bridge with broadcast-grade codec control. Depth > breadth.
 
-FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, tensor-native frame I/O, silence detection, multi-clip concat, multi-overlay Compose pipeline, provider-agnostic AI subtitle/translate, and a timeline for long videos generated in overlapping segments. Media nodes are thin FFmpeg wrappers. The Timeline nodes load and patch no models — they reshape the `LATENT` you pass in and decode it with the `VAE` you connect; for MiniMax H3 they build conditioning and sample only by running ComfyUI core node classes, and FFmpeg encodes. AI nodes use a `MF_AIConfig` connection so you can swap providers in one place.
+FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, tensor-native frame I/O, silence detection, multi-clip concat, multi-overlay Compose pipeline, provider-agnostic AI subtitle/translate, and a timeline for long videos generated in overlapping segments. Media nodes are thin FFmpeg wrappers. Timeline delegates H3 conditioning, sampling and learned latent upscaling to ComfyUI core nodes, with an optional installed TimelineDirector SelfLift integration. MediaForge implements no model loader or sampling engine; FFmpeg encodes. AI nodes use a `MF_AIConfig` connection so you can swap providers in one place.
 
 📖 **[繁體中文 / Traditional Chinese →](README_ZHTW.md)**
 
 ## Highlights
 
-- 🎞️ **30 nodes** across 6 categories — Subtitle / Video / Analysis / Audio (Phase 6 kickoff) / Compose (now with audio chain) / AI (+ Net / Image planned). Three more are registered but internal: Sample Segments builds them when it runs
+- 🎞️ **30 nodes** across 6 categories — Subtitle / Video / Analysis / Audio (Phase 6 kickoff) / Compose (now with audio chain) / AI (+ Net / Image planned). Five more are registered but internal: Sample Segments builds them when it runs
 - 🔗 **Dual-input bridge** — file-consumer nodes accept *either* a `video_path` string *or* an in-memory `IMAGE + AUDIO + tensor_fps` triplet, so MediaForge chains with VHS / AnimateDiff / any IMAGE-pipeline plugin without a SaveVideoFrames round-trip
 - 🚀 **Smart GPU codec default** — `h264_nvenc` is auto-selected when NVENC is available, libx264 fallback on CPU-only systems. No per-workflow switching needed
 - 📡 **API-ready output** — every file-producing node emits ComfyUI `ui.images` metadata so `/history/<prompt_id>` exposes the output filename; download via `/view?filename=X&subfolder=Y&type=output` (see [Using via API](#using-via-api))
@@ -203,7 +203,7 @@ One way to generate, one way to cut:
 | Generate a long video | `⏱️ Edit Timeline` (`mode = generate`, with or without materials) → `🎛️ Sample Segments` → `🧵 Assemble Segments` | MiniMax H3 models (the only supported family), 24 fps |
 | Cut an existing video | `⏱️ Edit Timeline` (`mode = cut`) → `✂️ Trim by Ranges` (`mode = keep`) → `PreviewAny` | a video under `input/`; no model |
 
-**Generate.** `🎛️ Sample Segments` takes your model, CLIP, VAE, audio VAE, sampler and sigmas and, when it runs, expands into one group per segment: `🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider` (`CFGGuider` when `negative` is connected) + `SamplerCustomAdvanced` → `➕ Append Segment`. It only wires ComfyUI core node classes and MediaForge nodes — no sampling code of its own, no model loading or patching. Those three MediaForge nodes are [internal](#internal-nodes): you never place them, and they are kept out of the node menus. An error inside the group is shown on the Sample Segments node; the message label names the inner node (e.g. `[Encode H3 Segment]`). Model loaders, text encoders, samplers and schedulers stay your own core nodes.
+**Generate.** `🎛️ Sample Segments` takes your model, CLIP, VAE, audio VAE, sampler and sigmas and, when it runs, expands into one group per segment: `🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider` (`CFGGuider` when `negative` is connected) + `SamplerCustomAdvanced` → `➕ Append Segment`. It wires core and MediaForge nodes, or the optional installed SelfLift nodes, without its own sampling engine. Native upscale delegates model loading to core. Five MediaForge helpers are [internal](#internal-nodes): you never place them, and they are kept out of the node menus. An error inside the group is shown on the Sample Segments node; the message label names the inner node (e.g. `[Encode H3 Segment]`). Your core nodes still provide the H3 model, text encoder, sampler and schedule.
 
 **Cut.** In `cut` mode Edit Timeline needs a source `video`, and you mark the ranges to keep. Wire its `ranges` and `video_path` outputs into `✂️ Trim by Ranges` with `mode = keep`: the ranges are cut out of that same file and joined in order. They are passed in seconds, and the result keeps the source's own frame rate — measured with three ranges of 48 timeline frames at 24 fps: a 24 fps source gives exactly the 144 source frames of those ranges; a 30 fps source gives 180 frames over the same 6.000 s. Trim by Ranges is not an output node, so put an output node after it (the example uses core `PreviewAny`, which shows the result path) or ComfyUI has nothing to run. Cut mode takes no materials and has no prompts. Colour tags follow the source; the 0.12 frames path tagged its RGB round trip as BT.709, so the two paths can differ in colour metadata.
 
@@ -241,6 +241,47 @@ Cutting (`cut`, 剪現有影片):
 - With materials left in the data the timeline cannot run; the status line offers 移除素材 (remove materials: files stay in `input/`, prompts are untouched) and 切回生成新影片 (back to generate).
 
 Source video: preview of the selected source; codecs the browser can't play get a small muted H.264 proxy. 上傳來源影片 (upload source) saves it into `input/mediaforge_timeline/`. With nothing to play the play button is disabled and says so. It plays the source or the selected material, not a generated result.
+
+### Resolution, latent upscale and SelfLift (0.14)
+
+0.14 functional verification (2026-11-15): ComfyUI 0.45.3, frontend 1.58.5, classic and Nodes 2.0. Real H3 direct / latent / two-stage / SelfLift runs each completed two overlapping segments (56 output frames at 256×128 / 24 fps), including original-audio locks; native two-stage and SelfLift also passed unlocked audio-continuation runs. Original-audio decoded waveform correlation exceeded 0.99999. The combined template ran through ProRes, OmniSR X2 and delivery resize to 1920×1080, retaining 56 frames and audio. These are functional smoke tests, not target-resolution quality or performance benchmarks.
+
+Open **Edit Timeline → 解析度與 Latent 放大** and enable **時間軸管理解析度**. The persisted `render` settings then override Sample Segments' legacy width/height and reference-video short edge. Existing workflows without `render` keep their previous behavior. Disable the checkbox to return to the sampler's settings. Cut mode does not consume render settings.
+
+| Strategy | Execution | Settings |
+|---|---|---|
+| Direct (`direct`) | Sample at target dimensions | Width / height |
+| Latent model upscale (`latent`) | Sample at the base size, upscale the clean video latent with a native H3 model, then decode | Base size, target size, H3 latent model |
+| Two-stage (`two_stage`) | Split the supplied sigma schedule, sample low, lift the clean prediction, re-noise and finish high | Above plus high-resolution steps |
+| SelfLift (`selflift`) | Delegate progressive sampling and Drift-Control to installed TimelineDirector nodes | H3 model, high-resolution steps; standard Euler only; fixed 50% base size |
+
+Dimensions must be 32-pixel multiples, 32–8192 per side. The SelfLift target must be a multiple of 64 so its 50% base also aligns to 32. The editor offers size presets, custom dimensions, a portrait/landscape swap and a 50% base-size button. Native base dimensions must be smaller than the target. High-resolution steps must be at least 1 and less than the actual connected schedule's total steps: 8 steps with 2 high means 6 low + 2 high; 4 with 1 high means 3 + 1. A turbo model/LoRA still needs its appropriate schedule. Two-stage sampling resets sampler history at the resolution boundary; it is a separate strategy from SelfLift, not an equivalent implementation or a speed guarantee.
+
+The model menu reads compatible checkpoint headers from ComfyUI's `latent_upscale_models` search paths, including configured extra model paths. It excludes LTX models; refresh after adding a model. Missing, corrupt or incompatible selections fail before reference encoding. Native upscale uses core `LatentUpscaleModelLoader` and `MiniMaxH3LatentUpscaleWithModel`; MediaForge implements no model loader. SelfLift additionally requires [Songssx/ComfyUI-MiniMaxH3-TimelineDirector](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector), including its SelfLift sampler and finite latent-continuation helper. No upstream code or weights are bundled. Missing dependencies or a non-Euler sampler produce an explicit error; they never silently change the strategy.
+
+Reference-video resolution is independent of generation size: set a global short-edge cap, or select a video material and override **參考短邊上限**. Zero inherits the global cap (global zero uses the existing automatic 768-pixel short-edge cap). This caps decoding; core H3 may further normalize its reference sizes. Low/high stages keep separate native latent continuations; resolution transitions rebuild masks and preserve original-audio locks. SelfLift's dynamic opening is restored to MediaForge's selected final-grid seam mask before assembly. Output frames and audio remain aligned at 24 fps. Changing target size can increase RAM, VRAM and spill-disk use; test a short clip first.
+
+Source upload in `generate` mode now also creates a named video material and a follow reference over the intersection of the source and current timeline. The same uploaded file is reused; `vid1` (or the next available name) can be mentioned as `<@vid1>`. Replacing a source reuses its material ID/name. Existing workflows and source dropdown selections are not automatically converted on load: use **來源影片用途 → 將來源加入參考素材**. That panel explicitly resets the source material's placements to Reference, Fixed Guide or Preview Only, with independent No Audio / Paired Audio Reference / Keep Original Audio options. Paired audio also requires a video reference. Guides are split over segment output regions and cropped down to valid H3 lengths, so uncovered remainder frames can be generated. Original-audio locks can directly use video materials, aligned to the video's time origin. A silent source cannot provide audio. A source ending before the timeline does not become an infinite reference; inspect the visible ranges and per-segment tags. Raw numbered prompt tags are pinned to material aliases before source placements change; ambiguous tags must be corrected first.
+
+New templates:
+
+- [Native two-stage H3](example_workflows/timeline_h3_upscale.json): 672×384 → 1344×768, 4 steps (3 + 1); select your compatible H3 model.
+- [Optional SelfLift](example_workflows/timeline_h3_selflift.json): same target, standard Euler; requires TimelineDirector.
+- [H3 plus image-model post upscale](example_workflows/timeline_h3_upscale_and_post.json): Assemble → Start Video Batch → ImageUpscaleWithModel → ImageScale → End Video Batch. Select an image model such as OmniSR X2, then set delivery dimensions on the included ImageScale node (default 1920×1080, center crop). Bypass ImageScale to keep the model's native output size. The ProRes intermediate reduces compression damage compared with the default H.264, but remains lossy and uses more disk. Audio is retained. Post processing can be rerun independently; per-frame image models may flicker, so inspect motion and scene cuts. The final delivery size is separate from H3's aligned canvas.
+
+API clients may include an optional `render` object in v2 `timeline_data`:
+
+```json
+"render": {
+  "mode": "two_stage", "width": 1344, "height": 768,
+  "base_width": 672, "base_height": 384,
+  "model": "minimax_h3_latent_upscaler_3d_fp16.safetensors",
+  "high_steps": 2, "ref_video_short_edge": 384
+}
+```
+
+Video materials optionally accept `short_edge` (0–4096, multiple of 32). Video anchors may use `role: "lock"` with `at`, `in`, `length` to retain original audio. `GET /mediaforge/timeline/render-models` returns compatible model names and SelfLift availability; it reads headers only and applies the same cross-origin checks as the editor routes. The Sample Segments report includes effective dimensions, strategy and schedule step count. Legacy workflows retain their original report shape and execution path.
+
 
 Materials (`generate` mode):
 
@@ -1419,13 +1460,15 @@ Generates a MiniMax H3 timeline one segment at a time, in one node. When it runs
 
 #### Internal nodes
 
-Three nodes exist only because Sample Segments builds them. They are registered (graph expansion needs that), flagged deprecated so that the node search and the node library skip them, and taken out of the right-click Add Node menu. "Deprecated" is just the flag ComfyUI offers for this; they are not going away. You meet their names in two places: as the label of an error raised inside Sample Segments, and in the API's `/object_info`.
+Five nodes exist only because Sample Segments builds them. They are registered (graph expansion needs that), flagged deprecated so that the node search and the node library skip them, and taken out of the right-click Add Node menu. "Deprecated" is just the flag ComfyUI offers for this; they are not going away. You meet their names in two places: as the label of an error raised inside Sample Segments, and in the API's `/object_info`.
 
 | Node | What it does for one segment | Messages it can raise |
 |---|---|---|
 | `🧩 Encode H3 Segment` (`MF_EncodeH3Segment`) | Builds the MiniMax H3 conditioning and the empty AV latent from the segment's prompt and materials: references through core `MiniMaxH3ReferenceToVideo`, keyframes and guides through core `MiniMaxH3AddGuide` in frame order, then the [audio locks](#lock-audio) written into the latent (`noise_mask` and the `mf_lock` metadata). Materials are decoded here only for that call | `E_H3_NODES`, `E_SOURCE_CHANGED`, `E_SOURCE_SHORTFALL`, `W_AUDIO_PAD` |
 | `🧬 Extend Latent` (`MF_ExtendLatent`) | Copies the previous segment's sampled latent tail into the start of this segment's latent and sets `noise_mask` so the sampler keeps (or partly re-generates) that region. Tensor work only: no model is loaded and nothing is sampled. Adds the `mf_carry` marker Append checks | `E_TOKENS`, `E_AUDIO_CARRY`, `E_CARRY_SOURCE`, `E_MASK_CONFLICT`, `E_PROVENANCE`, `W_PROVENANCE`, `W_LOCK_CARRY` |
 | `➕ Append Segment` (`MF_AppendSegment`) | Decodes the sampled latent with your VAE (and audio VAE), removes the overlap with the previous segment, applies the incoming crossfade and spills lossless parts to disk. Returns a new state; the input state is not modified | `E_SEQUENCE`, `E_PLAN`, `E_PROVENANCE`, `W_PROVENANCE`, `E_CARRY_DRIFT`, `E_LOCK_DRIFT`, `E_RAM`, `E_DISK`, `E_AUDIO_LAYOUT`, `W_AUDIO_PAD` |
+| `MF_PrepareH3Upscale` | Rebuilds resolution-transition masks and original-audio locks; forwards native SelfLift low context | — |
+| `MF_CopyH3Provenance` | Keeps the segment marker on the clean low-grid continuation | — |
 
 A crossfade with `audio_curve = auto` uses `linear` when the segment's audio was carried from the previous one, otherwise `equal_power`. Extend Latent does not inspect conditioning (prompts, keyframes, references); its report always says `conditioning_check: "unavailable"`.
 
@@ -1748,7 +1791,7 @@ Video Batch nodes report problems as `[Start Video Batch] …` or `[End Video Ba
 A: VHS is excellent for IMAGE-batch workflows. MediaForge handles **file-level** operations (cross-codec concat, audio-aware trim, broadcast encoders) and **single-encode multi-overlay** Compose. Install both.
 
 **Q: Will you add diffusion / generation nodes?**
-A: No model loaders or model patches, and no sampling code of our own — by design; generation stays in ComfyUI core / dedicated plugins. MediaForge ships post-production AI (Whisper transcribe, LLM translate) and the Timeline tools: Extend Latent reshapes the `LATENT` you pass in, Append decodes it with the `VAE` you connect, and FFmpeg does the encoding. For MiniMax H3, Encode H3 Segment builds conditioning only through core's `MiniMaxH3*` nodes, and Sample Segments samples only by expanding into core node classes (`RandomNoise`, `BasicGuider` / `CFGGuider`, `SamplerCustomAdvanced`) fed by your own model, sampler and sigmas (see [Timeline & Long Video](#timeline--long-video)).
+A: No model loaders or model patches, and no sampling code of our own — by design; generation stays in ComfyUI core / dedicated plugins. MediaForge ships post-production AI (Whisper transcribe, LLM translate) and the Timeline tools: Extend Latent reshapes the `LATENT` you pass in, Append decodes it with the `VAE` you connect, and FFmpeg does the encoding. For MiniMax H3, Encode H3 Segment builds conditioning only through core's `MiniMaxH3*` nodes, and Sample Segments samples by expanding into core node classes or the optional installed SelfLift nodes (`RandomNoise`, `BasicGuider` / `CFGGuider`, `SamplerCustomAdvanced`) fed by your own model, sampler and sigmas (see [Timeline & Long Video](#timeline--long-video)).
 
 **Q: Why are AI nodes "experimental"?**
 A: The `AI_CONFIG` schema may evolve while Phase 5 is in shakedown. Once Whisper + Translate are validated end-to-end across all 4 provider recipes, the schema freezes.

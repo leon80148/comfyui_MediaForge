@@ -4,13 +4,13 @@
 
 > **給進階使用者的 ComfyUI FFmpeg 工具集。** Tensor↔影音橋接，帶廣播級編碼控制。深度 > 廣度。
 
-FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 probe、tensor-native 影格 I/O、靜音偵測、多片段拼接、單次編碼多層 overlay 的 Compose pipeline、provider-agnostic 的 AI 字幕／翻譯，以及把長片拆成重疊分段生成的時間軸。**影音節點都是 FFmpeg 的薄包裝**；Timeline 節點不載入、也不 patch 模型——只改寫你傳入的 `LATENT`、用你接上的 `VAE` 解碼；MiniMax H3 的 conditioning 與取樣只透過執行 ComfyUI core 節點類別完成，最後交給 FFmpeg 編碼。AI 節點靠 `MF_AIConfig` 連線傳遞 provider 設定，一處切換即可整批換 backend。
+FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 probe、tensor-native 影格 I/O、靜音偵測、多片段拼接、單次編碼多層 overlay 的 Compose pipeline、provider-agnostic 的 AI 字幕／翻譯，以及把長片拆成重疊分段生成的時間軸。**影音節點都是 FFmpeg 的薄包裝**；Timeline 委由 ComfyUI core 節點做 H3 conditioning、取樣與學習型 latent 放大，也可整合已安裝的 TimelineDirector SelfLift；MediaForge 沒有自己的模型載入器或取樣引擎，最後交給 FFmpeg 編碼。AI 節點靠 `MF_AIConfig` 連線傳遞 provider 設定，一處切換即可整批換 backend。
 
 📖 **[English README →](README.md)**
 
 ## 亮點
 
-- 🎞️ **30 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）。另有 3 顆已註冊的內部節點，由 Sample Segments 執行時自己建立
+- 🎞️ **30 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）。另有 5 顆已註冊的內部節點，由 Sample Segments 執行時自己建立
 - 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + tensor_fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
 - 🚀 **智慧 GPU codec 預設** — 偵測到 NVENC 自動用 `h264_nvenc`，沒 GPU 的機器自動 fallback `libx264`。不必手動切、不會在沒卡的環境壞掉
 - 📡 **API-ready 輸出** — 每個產出檔案的節點都同時 emit ComfyUI `ui.images` metadata，`/history/<prompt_id>` 直接看到輸出檔名，`/view?filename=X&subfolder=Y&type=output` 可下載（見 [Using via API](#using-via-api)）
@@ -203,7 +203,7 @@ Start 的 `audio` 輸出只有接線才解碼，`keep_source_audio` 關閉時也
 | 生成長片 | `⏱️ Edit Timeline`（`mode = generate`，可帶素材也可不帶）→ `🎛️ Sample Segments` → `🧵 Assemble Segments` | MiniMax H3 模型（唯一支援的模型家族）、24 fps |
 | 剪現有影片 | `⏱️ Edit Timeline`（`mode = cut`）→ `✂️ Trim by Ranges`（`mode = keep`） | 一支放在 `input/` 的影片；不需要模型 |
 
-**生成。** `🎛️ Sample Segments` 接你的 model、CLIP、VAE、audio VAE、sampler 與 sigmas，執行時逐段展開成一組節點：`🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider`（接了 `negative` 則用 `CFGGuider`）+ `SamplerCustomAdvanced` → `➕ Append Segment`。它只負責把 ComfyUI core 節點與 MediaForge 節點接起來 —— 沒有自己的取樣程式碼，也不載入或 patch 模型。其中三顆 MediaForge 節點是[內部節點](#內部節點)：你不需要自己放，節點選單裡也不會出現。展開內部出錯時，錯誤顯示在 Sample Segments 節點上，訊息開頭的標籤是內層節點名稱（例如 `[Encode H3 Segment]`）。模型載入、text encoder、sampler 與 scheduler 仍用你自己的 core 節點。
+**生成。** `🎛️ Sample Segments` 接你的 model、CLIP、VAE、audio VAE、sampler 與 sigmas，執行時逐段展開成一組節點：`🧩 Encode H3 Segment` → `🧬 Extend Latent` → core `RandomNoise` + `BasicGuider`（接了 `negative` 則用 `CFGGuider`）+ `SamplerCustomAdvanced` → `➕ Append Segment`。它只負責把 ComfyUI core 節點與 MediaForge 節點接起來 —— 沒有自己的取樣程式碼；放大時使用 core 載入器，SelfLift 則呼叫外部節點。其中五顆 MediaForge 節點是[內部節點](#內部節點)：你不需要自己放，節點選單裡也不會出現。展開內部出錯時，錯誤顯示在 Sample Segments 節點上，訊息開頭的標籤是內層節點名稱（例如 `[Encode H3 Segment]`）。模型載入、text encoder、sampler 與 scheduler 仍用你自己的 core 節點。
 
 **剪片。** `cut` 模式的 Edit Timeline 需要來源 `video`，由你標出要保留的區間。把它的 `ranges` 與 `video_path` 輸出接到 `✂️ Trim by Ranges`、`mode` 選 `keep`：區間會從同一個檔案剪出來、依序接起來。區間是用秒傳過去的，成品沿用來源影片自己的幀率 —— 以三個 48 幀（24 fps 時間軸）的區間實測：24 fps 來源得到的正好是這些區間的 144 個來源幀；30 fps 來源得到 180 幀，同樣是 6.000 秒。Trim by Ranges 不是 output node，後面要再接一顆 output node（範例用 core `PreviewAny` 顯示成品路徑），否則 ComfyUI 沒有東西可以執行。cut 模式不接受素材，也沒有 prompt。色彩標記沿用來源；0.12 的 frames 路徑經過 RGB 往返後標成 BT.709，因此兩條路徑的色彩標記可能不同。
 
@@ -241,6 +241,47 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看�
 - 資料裡還有素材時無法執行，狀態列提供 `移除素材`（檔案仍在 `input/`，prompt 不動）與 `切回生成新影片`。
 
 來源影片：預覽選定的來源；瀏覽器無法播放的 codec 會改用小尺寸、無聲的 H.264 proxy。`上傳來源影片` 把來源存到 `input/mediaforge_timeline/`。沒有可播放內容時播放鍵停用並說明。播放的是來源影片或選中的素材，不是生成結果。
+
+### 解析度、Latent 放大與 SelfLift（0.14）
+
+0.14 功能驗證（2026-11-15）：ComfyUI 0.45.3、frontend 1.58.5，Classic 與 Nodes 2.0。真實 H3 的直接生成／latent 放大／二階段／SelfLift 都完成兩段重疊生成（256×128、24 fps、輸出 56 幀），包含原音鎖定；原生二階段與 SelfLift 也通過未鎖音的音訊續接。保留原音的解碼波形相關係數超過 0.99999。整合範例實際經過 ProRes、OmniSR X2 與交付尺寸調整，輸出 1920×1080，保留 56 幀與音軌。這是功能煙霧測試，不代表目標解析度的畫質或效能評測。
+
+展開 **Edit Timeline → 解析度與 Latent 放大**，勾選 **時間軸管理解析度**。設定會存入 `timeline_data.render`，並接管 Sample Segments 原本的 width／height 與參考影片短邊上限。沒有 `render` 的舊流程維持原有行為；取消勾選就恢復使用取樣器設定。`cut` 模式不使用這些設定。
+
+| 方式 | 執行流程 | 設定 |
+|---|---|---|
+| 直接生成（`direct`） | 以目標尺寸取樣 | 寬、高 |
+| Latent 模型放大（`latent`） | 基礎尺寸完成取樣 → 原生 H3 模型放大乾淨的 video latent → 解碼 | 基礎尺寸、目標尺寸、H3 放大模型 |
+| 二階段生成（`two_stage`） | 分割連入的 sigma schedule → 低解析度取樣 → 提升乾淨預測、重新加噪 → 高清續採 | 上述設定，加高清步數 |
+| SelfLift（`selflift`） | 委由已安裝的 TimelineDirector 節點做漸進取樣與 Drift-Control | H3 模型、高清步數；僅限標準 Euler；基礎尺寸固定 50% |
+
+寬高必須是 32 的倍數，每邊 32–8192。SelfLift 目標尺寸需為 64 的倍數，讓 50% 基礎尺寸也對齊 32。介面提供尺寸預設、自訂、交換橫直與基礎尺寸 50% 按鈕。一般 latent 流程的基礎尺寸必須小於目標。高清步數必須至少 1，且小於連入 schedule 的實際總步數：8 步配 2 高清步＝6 低＋2 高；4 步配 1＝3＋1。Turbo 模型／LoRA 仍須搭配合適的 schedule。一般二階段會在解析度轉換處重啟 sampler 的歷史狀態，與 SelfLift 是不同策略，不宣稱等價或固定加速倍數。
+
+模型選單會從 ComfyUI 的 `latent_upscale_models` 搜尋路徑（含額外模型路徑）讀取 checkpoint 檔頭，只列結構相容的 H3 模型，排除 LTX；新增模型後可重新讀取。選擇不存在、損毀或不相容的模型會在參考編碼前報錯。一般 latent 放大展開成 core `LatentUpscaleModelLoader` 與 `MiniMaxH3LatentUpscaleWithModel`，MediaForge 沒有自己的模型載入器。SelfLift 另需安裝 [Songssx/ComfyUI-MiniMaxH3-TimelineDirector](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector)，並包含 SelfLift sampler 與 finite latent-continuation helper。本套件不內附上游程式或權重；缺少相依或接了非 Euler 的 sampler 都會明確報錯，不會偷偷改用別的方式。
+
+參考影片尺寸與生成尺寸分開：可設定全域短邊上限，或選取單支影片素材設定 **參考短邊上限**。單支設定 0＝沿用全域；全域 0＝既有自動短邊上限 768。這控制素材解碼尺寸，core H3 仍可能進一步正規化參考尺寸。低／高清階段保留各自原生的 latent 續接，轉換時重建遮罩並保留原音鎖定。SelfLift 動態生成的開頭會在組裝前恢復為 MediaForge 選定的最終尺寸接縫遮罩。輸出仍維持 24 fps 的音畫時間對應。目標尺寸會影響 RAM、VRAM 與暫存磁碟用量，請先試跑短片。
+
+`generate` 模式新上傳來源影片時，現在會共用同一個檔案建立影片素材，並依來源與目前時間軸的交集建立 follow 參考。素材取得 `vid1`（或下一個可用名稱），可直接用 `<@vid1>`；替換來源時保留素材 ID／名稱。舊工作流與來源下拉選取不會在載入時自動轉換，可用 **來源影片用途 → 將來源加入參考素材**。這個面板會明確重設此素材的編排：參考影片／固定 Guide／僅預覽，聲音獨立選不用／配對音訊參考／保留原音。配對音訊參考也會加入影片參考。Guide 按每段輸出區間拆開、向下裁成合法 H3 長度，剩餘幀可由模型生成。保留原音可直接使用影片素材，並依影片的時間起點對齊；沒有音軌的來源無法提供聲音。來源比時間軸短時只參考實際涵蓋的範圍，不會無限延伸；請查看軌道範圍與各段標籤。變更來源編排前會把 prompt 的數字標籤固定成素材別名，無法明確對應時需先修正。
+
+新增範例：
+
+- [原生 H3 二階段](example_workflows/timeline_h3_upscale.json)：672×384 → 1344×768，4 步（3＋1），請選擇相容 H3 放大模型。
+- [可選 SelfLift](example_workflows/timeline_h3_selflift.json)：相同目標尺寸、標準 Euler，需 TimelineDirector。
+- [H3＋一般影像模型後製放大](example_workflows/timeline_h3_upscale_and_post.json)：Assemble → Start Video Batch → ImageUpscaleWithModel → ImageScale → End Video Batch。選擇 OmniSR X2 等影像模型，再用範例內附的 ImageScale 設定交付尺寸（預設 1920×1080、中心裁切）；略過 ImageScale 就保留模型原生輸出尺寸。中繼使用 ProRes，較預設 H.264 減少壓縮損傷，但仍有損且占用更多磁碟；保留來源音軌。後製可以獨立重跑；逐幀影像模型可能閃爍，需檢查動作與剪接處。交付尺寸與 H3 對齊後的生成尺寸分開設定。
+
+API 使用者可在 v2 `timeline_data` 加入可選的 `render`：
+
+```json
+"render": {
+  "mode": "two_stage", "width": 1344, "height": 768,
+  "base_width": 672, "base_height": 384,
+  "model": "minimax_h3_latent_upscaler_3d_fp16.safetensors",
+  "high_steps": 2, "ref_video_short_edge": 384
+}
+```
+
+影片素材可加 `short_edge`（0–4096、32 的倍數）；影片錨定也可用 `role: "lock"`，搭配 `at`／`in`／`length` 保留原音。`GET /mediaforge/timeline/render-models` 回傳相容模型名稱與 SelfLift 可用性，只讀檔頭，沿用編輯器 route 的跨站檢查。Sample Segments report 會記錄實際尺寸、策略與總步數；舊流程保留原本的 report 形狀與執行路徑。
+
 
 素材（`generate` 模式）：
 
@@ -1419,13 +1460,15 @@ SRT 文字 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`�
 
 #### 內部節點
 
-有三顆節點只因為 Sample Segments 要建立它們而存在。它們有註冊（graph expansion 需要）、被標成 deprecated 讓節點搜尋與節點庫略過，也從右鍵的 Add Node 選單拿掉。「deprecated」只是 ComfyUI 剛好提供的旗標，它們不會被淘汰。你會在兩個地方看到它們的名字：Sample Segments 內部報錯時的標籤，以及 API 的 `/object_info`。
+有五顆節點只因為 Sample Segments 要建立它們而存在。它們有註冊（graph expansion 需要）、被標成 deprecated 讓節點搜尋與節點庫略過，也從右鍵的 Add Node 選單拿掉。「deprecated」只是 ComfyUI 剛好提供的旗標，它們不會被淘汰。你會在兩個地方看到它們的名字：Sample Segments 內部報錯時的標籤，以及 API 的 `/object_info`。
 
 | 節點 | 對一段做的事 | 可能送出的訊息 |
 |---|---|---|
 | `🧩 Encode H3 Segment` (`MF_EncodeH3Segment`) | 依該段的 prompt 與素材建立 MiniMax H3 conditioning 與空的 AV latent：參考經 core `MiniMaxH3ReferenceToVideo`、關鍵幀與錨定片段依幀序經 core `MiniMaxH3AddGuide`，再把[鎖定原音](#保留原音)寫進 latent（`noise_mask` 與 `mf_lock` metadata）。素材只在這次呼叫內解碼 | `E_H3_NODES`、`E_SOURCE_CHANGED`、`E_SOURCE_SHORTFALL`、`W_AUDIO_PAD` |
 | `🧬 Extend Latent` (`MF_ExtendLatent`) | 把前一段取樣後的 latent 尾端複製到本段 latent 開頭，並設定 `noise_mask` 讓 sampler 保留（或部分重新生成）這個區域。只做 tensor 運算：不載入模型、不取樣。加上 Append 會檢查的 `mf_carry` 標記 | `E_TOKENS`、`E_AUDIO_CARRY`、`E_CARRY_SOURCE`、`E_MASK_CONFLICT`、`E_PROVENANCE`、`W_PROVENANCE`、`W_LOCK_CARRY` |
 | `➕ Append Segment` (`MF_AppendSegment`) | 用你的 VAE（與 audio VAE）解碼取樣後的 latent、去掉與前段的重疊、套用進場的 crossfade，把無損分段檔暫存到磁碟。回傳新的 state，不修改輸入的 state | `E_SEQUENCE`、`E_PLAN`、`E_PROVENANCE`、`W_PROVENANCE`、`E_CARRY_DRIFT`、`E_LOCK_DRIFT`、`E_RAM`、`E_DISK`、`E_AUDIO_LAYOUT`、`W_AUDIO_PAD` |
+| `MF_PrepareH3Upscale` | 解析度轉換時重建遮罩與原音鎖定，傳遞 SelfLift 原生低解析度上下文 | — |
+| `MF_CopyH3Provenance` | 在乾淨的低解析度續接內容上保留段落標記 | — |
 
 `audio_curve = auto` 的 crossfade：本段音訊是從前一段續接來的用 `linear`，否則用 `equal_power`。Extend Latent 不檢查 conditioning（prompt、關鍵幀、參考）；它的 report 永遠寫 `conditioning_check: "unavailable"`。
 

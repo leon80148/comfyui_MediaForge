@@ -304,6 +304,8 @@ export const S = {
         anchor_crosses: (item) => `${item} 跨過變動的段界，請確認位置與範圍`,
     },
     // problems reported by timeline_edit.timelineProblems()
+    renderInvalid: "生成設定無效：尺寸須為 32–8192 間 32 的倍數，基礎尺寸須小於目標；SelfLift 目標須為 64 的倍數；高清步數至少 1。",
+    shortEdgeInvalid: "參考短邊上限須為 0–4096 間 32 的倍數，且只適用於影片。",
     problemReasons: {
         past_timeline: "超出時間軸總長", past_end: "超出素材長度", no_audio: "素材沒有音軌",
         crosses_emit: "引導片段要完整放在同一段內，避開這段開頭與前段重疊的部分", h3_length: "H3 的引導片段長度只能是 5、22、39…幀",

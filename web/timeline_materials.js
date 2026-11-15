@@ -233,7 +233,7 @@ export function parseMaterials(raw) {
     for (const [i, m] of raw.entries()) {
         const loc = `materials[${i}]`;
         const entity = entityOf("material", m, ids);
-        let why = objectReason(m, ["id", "kind", "ref", "name"]);
+        let why = objectReason(m, ["id", "kind", "ref", "name", "short_edge"]);
         if (why) return fail(loc, why, entity);
         why = idReason(m.id, ids);
         if (why) return fail(`${loc}.id`, why);
@@ -245,7 +245,13 @@ export function parseMaterials(raw) {
         why = requiredReason(m.name, nameOk, "bad_name") ?? (names.has(m.name) ? "duplicate_name" : null);
         if (why) return fail(`${loc}.name`, why, entity);
         names.add(m.name);
-        out.push({ id: m.id, kind: m.kind, ref: m.ref.replaceAll("\\", "/"), name: m.name });
+        const item = { id: m.id, kind: m.kind, ref: m.ref.replaceAll("\\", "/"), name: m.name };
+        if (m.short_edge !== undefined) {
+            why = frameReason(m.short_edge) ?? (m.kind !== "video" || m.short_edge > 4096 || m.short_edge % 32 ? "bad_short_edge" : null);
+            if (why) return fail(`${loc}.short_edge`, why, entity);
+            item.short_edge = m.short_edge;
+        }
+        out.push(item);
     }
     return { ok: true, materials: out };
 }
@@ -315,7 +321,7 @@ export function parseAnchors(raw, materials) {
         let why = requiredReason(a.material, (v) => byId.has(v), "unknown_material");
         if (why) return fail(`${loc}.material`, why, entity);
         const m = byId.get(a.material);
-        const role = ANCHOR_ROLE[m.kind];
+        const role = m.kind === "video" && a.role === "lock" ? "lock" : ANCHOR_ROLE[m.kind];
         why = requiredReason(a.role, (v) => v === role, "wrong_role");
         if (why) return fail(`${loc}.role`, why, entity);
         const allowed = {
@@ -380,6 +386,7 @@ export function validateGeometry(refs, anchors, snapshots, segments, h3) {
     const emits = emitIntervals(segments);
     for (const a of anchors) {
         const snap = snapshots[a.material];
+        if (a.role === "lock" && snap.kind === "video" && !snap.has_audio) return anchorError(a, "no_audio", "role");
         if (a.at >= total) return anchorError(a, "past_timeline", "at");
         if (a.role !== "keyframe" && a.in + a.length > snap.frames) return anchorError(a, "past_end", "length");
         if (a.audio && !snap.has_audio) return anchorError(a, "no_audio", "audio");

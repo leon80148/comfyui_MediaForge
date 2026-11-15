@@ -20,6 +20,8 @@ import {
     h3AudioTokens, lengthOk, overlapAtMost, overlapOk, phaseMs, schemaError, stepLength, stepOverlap, validate,
 } from "./timeline_grid.js";
 import { MAX_MATERIALS, refOk, strictParse } from "./timeline_materials.js";
+import { DEFAULT_RENDER, RENDER_MODES } from "./timeline_render.js";
+import { useSource } from "./timeline_source.js";
 import {
     addMaterials, aliasRawTags, checkEdit, conformSegments, createFromCard, deleteBar, deleteCut, deleteMaterial, editBar,
     emitIntervals, inputImpact, insertCut, markCut, moveRefInOrder, patchBar, pickSnap, probeIssue, refChanges, refillSegments,
@@ -156,6 +158,7 @@ function serialize(data) {
         materials: data.materials,
         refs: data.refs,
         anchors: data.anchors,
+        ...(data.render ? { render: data.render } : {}),
         segments: data.segments.map((s) => ({
             start: s.start, end: s.end, prompt: s.prompt,
             ...(s.seam_in?.kind === "crossfade" ? { seam_in: s.seam_in } : {}),
@@ -338,6 +341,10 @@ class TimelineEditor {
         this.uploads = [];               // editor-wide queue: {file, kind, batch, status: queued|uploading|done|failed, ref, error}
         this.uploading = 0;
         this.sourceUpload = null;        // the latest 上傳影片 pick; only that one may land (see upload())
+        this.renderModels = null;
+        this.renderModelsLoading = false;
+        this.renderModelsError = "";
+        this.hasSelfLift = false;
         this.deferredBatches = [];       // batches that finished during a gesture; committed after it
         this.previewKey = null;          // material shown in the preview slot instead of the source
         this.press = null;               // the press in progress on an inspector / library control
@@ -524,7 +531,8 @@ class TimelineEditor {
             const text = S.problemReasons[e.reason];
             return typeof text === "function" ? text(e) : text ?? S.unknownProblem;
         };
-        if (p.stage === "schema") return S.badField(this.placeText(e.location));
+        if (p.stage === "schema") return e.reason === "bad_render" ? S.renderInvalid
+            : e.reason === "bad_short_edge" ? S.shortEdgeInvalid : S.badField(this.placeText(e.location));
         if (p.stage === "grid") return S.invalid(this.placeText(e.location), S.reasons[e.reason] ?? e.reason);
         if (e.code === "E_ANCHOR_OVERLAP") {
             return where + S.anchorOverlap(S.streams[e.stream] ?? e.stream, this.itemLabel(e.first), this.itemLabel(e.second));
@@ -685,7 +693,8 @@ class TimelineEditor {
         const [num, den] = this.settings().fps;
         const frames = info.duration_us == null ? null
             : Number((BigInt(info.duration_us) * BigInt(num)) / (BigInt(den) * 1000000n));
-        return { ...info, id: m.id, kind: entry.kind, name: m.name, ref: entry.ref, frames };
+        return { ...info, id: m.id, kind: entry.kind, name: m.name, ref: entry.ref, frames,
+            ...(m.short_edge !== undefined ? { short_edge: m.short_edge } : {}) };
     }
 
     // ---------- DOM ----------
@@ -1175,7 +1184,7 @@ class TimelineEditor {
         // prompts are only read when segments are generated: in cut the field would change nothing,
         // and the first-run hint is about writing one
         const rows = generate && this.isFresh() ? [el("div", { class: "full hint", text: S.firstRun })] : [];
-        if (generate) rows.push(this.sharedPrompt());
+        if (generate) rows.push(this.sharedPrompt(), this.renderSettings(), ...this.sourceSettings(st));
         if (generate && sel?.type === "ref" && this.data.refs.some((r) => r.id === sel.id)) rows.push(...this.refForm(st, sel.id));
         else if (generate && sel?.type === "anchor" && this.data.anchors.some((a) => a.id === sel.id)) rows.push(...this.anchorForm(st, sel.id));
         else if (generate && sel?.type === "material" && this.data.materials.some((m) => m.id === sel.id)) rows.push(...this.materialForm(st, sel.id));
@@ -1186,6 +1195,111 @@ class TimelineEditor {
     isFresh() {
         const d = this.data;
         return d.segments.length === 1 && !d.materials.length && !d.prompt && !d.segments[0].prompt;
+    }
+
+    loadRenderModels() {
+        if (this.renderModelsLoading) return;
+        this.renderModelsLoading = true;
+        Promise.resolve().then(() => api.fetchApi("/mediaforge/timeline/render-models", { method: "GET" }))
+            .then(async (response) => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const body = await response.json();
+                this.renderModels = body.models;
+                this.hasSelfLift = body.selflift;
+                this.renderModelsError = "";
+            }).catch((e) => { this.renderModels = []; this.renderModelsError = `無法讀取模型清單：${e.message}`; })
+            .finally(() => { this.renderModelsLoading = false; if (!this.destroyed) this.render(); });
+    }
+
+    selectSetting(values, value, change, key) {
+        const input = el("select", { "data-fk": key, onchange: (e) => change(e.target.value) },
+            Object.entries(values).map(([v, label]) => el("option", { value: v, text: label })));
+        input.value = String(value);
+        return input;
+    }
+
+    renderSettings() {
+        const r = this.data.render;
+        const rows = [el("div", { class: "full hint", text: r
+            ? "此處設定會套用到 Sample Segments；該節點原本的 width / height 不再使用。"
+            : "目前沿用 Sample Segments 的解析度；啟用後，設定會隨時間軸存檔。" })];
+        const toggle = el("input", { type: "checkbox", "data-fk": "render-enable", onchange: (e) => {
+            const next = { ...this.data };
+            if (e.target.checked) next.render = { ...DEFAULT_RENDER };
+            else delete next.render;
+            this.propose(next);
+        } });
+        toggle.checked = !!r;
+        rows.push(el("span", { text: "時間軸管理解析度" }), toggle);
+        if (r) {
+            if (this.renderModels === null && !this.renderModelsLoading) this.loadRenderModels();
+            const update = (patch) => this.propose({ ...this.data, render: { ...r, ...patch } });
+            const presets = { "1344x768": "1344 × 768", "1024x576": "1024 × 576（16:9）", "768x1344": "768 × 1344（直式）", "768x768": "768 × 768（正方形）", custom: "自訂尺寸" };
+            const size = `${r.width}x${r.height}`;
+            rows.push(el("span", { text: "尺寸預設" }), this.selectSetting(presets, presets[size] ? size : "custom", (v) => {
+                if (v === "custom") return;
+                const [width, height] = v.split("x").map(Number);
+                update({ width, height, base_width: Math.max(32, Math.round(width / 64) * 32), base_height: Math.max(32, Math.round(height / 64) * 32) });
+            }, "render-preset"));
+            rows.push(el("span", { text: "生成方式" }), this.selectSetting(RENDER_MODES, r.mode, (mode) => update({ mode }), "render-mode"));
+            const numeric = (key, label, min = 32, max = 8192, step = 32) => rows.push(el("span", { text: label }),
+                this.number(r[key], (v) => update({ [key]: v }), { min: String(min), max: String(max), step: String(step), "data-fk": `render-${key}` }));
+            numeric("width", "生成目標寬度"); numeric("height", "生成目標高度");
+            rows.push(el("span"), button("交換橫直", () => update({ width: r.height, height: r.width, base_width: r.base_height, base_height: r.base_width })));
+            if (["latent", "two_stage"].includes(r.mode)) {
+                numeric("base_width", "基礎寬度"); numeric("base_height", "基礎高度");
+                rows.push(el("span"), button("基礎尺寸設為 50%", () => update({ base_width: Math.max(32, Math.round(r.width / 64) * 32), base_height: Math.max(32, Math.round(r.height / 64) * 32) })));
+            }
+            if (r.mode !== "direct") {
+                const choices = { "": "請選擇 H3 latent 放大模型", ...Object.fromEntries((this.renderModels ?? []).map((m) => [m, m])) };
+                if (r.model && !choices[r.model]) choices[r.model] = `${r.model}（未找到或不相容）`;
+                rows.push(el("span", { text: "H3 放大模型" }), this.selectSetting(choices, r.model, (model) => update({ model }), "render-model"));
+                rows.push(el("div", { class: "full hint", text: "僅列出結構相容的 H3 模型；不包含 LTX。" }),
+                    button("重新讀取模型", () => this.loadRenderModels(), { class: "full" }));
+                if (!r.model || this.renderModels && !this.renderModels.includes(r.model)) rows.push(el("div", { class: "full bad", text: "請選擇存在且相容的 H3 放大模型後再執行。" }));
+            }
+            if (["two_stage", "selflift"].includes(r.mode)) numeric("high_steps", "高清取樣步數", 1, 10000, 1);
+            numeric("ref_video_short_edge", "參考影片短邊上限（0＝自動）", 0, 4096);
+            if (r.mode === "selflift") rows.push(el("div", { class: "full hint", text: `${this.hasSelfLift ? "已偵測到" : "尚未偵測到"} TimelineDirector SelfLift；只支援標準 Euler，低解析度固定為 50%。目標尺寸需為 64 的倍數。` }));
+            if (this.renderModelsError) rows.push(el("div", { class: "full bad", text: this.renderModelsError }));
+            const low = r.mode === "selflift" ? `${r.width / 2}×${r.height / 2}` : `${r.base_width}×${r.base_height}`;
+            rows.push(el("div", { class: "full hint", text: r.mode === "direct" ? `${r.width}×${r.height} 直接生成`
+                : `${low} → ${r.model || "尚未選模型"} → ${r.width}×${r.height}${r.mode === "latent" ? "（放大後解碼）" : `（最後 ${r.high_steps} 步高清取樣；總步數依連入的 schedule）`}` }));
+        }
+        return this.details("render", "解析度與 Latent 放大", rows);
+    }
+
+    sourceSettings(st) {
+        if (!st.hasSource) return [];
+        const ref = this.w.video.value;
+        const m = this.data.materials.find((x) => x.kind === "video" && x.ref === ref);
+        const refs = this.data.refs.filter((x) => x.material === m?.id);
+        const anchors = this.data.anchors.filter((x) => x.material === m?.id);
+        const role = anchors.some((x) => x.role === "guide") ? "guide" : refs.length ? "reference" : "preview";
+        const audio = anchors.some((x) => x.role === "lock") ? "original" : refs.some((x) => x.audio) ? "reference" : "none";
+        const apply = (use, sound) => {
+            try {
+                const next = useSource(this.pinSourceTags(), ref, st.sourceFrames, use, sound, !!this.source?.has_audio);
+                this.propose(next, "已更新來源用途；套用範圍已依來源長度與目前時間軸裁切。Guide 各段向下對齊合法幀數。");
+            } catch (e) { this.notice = e.message; this.render(); }
+        };
+        return [this.details("source-use", "來源影片用途", [
+            el("div", { class: "full hint", text: m ? `素材 ${m.name} · <@${m.name}>${role === "guide" ? "；Guide 本身沒有 Video 標籤" : ""}` : "此舊流程的來源尚未加入素材；選擇用途即可共用同一個檔案。" }),
+            el("span", { text: "畫面用途（重設此素材的編排）" }), this.selectSetting({ reference: "參考影片", guide: "固定 Guide", preview: "僅預覽" }, role, (v) => apply(v, audio), "source-role"),
+            el("span", { text: "來源聲音" }), this.selectSetting({ none: "不用", reference: "音訊參考（同時加入影片參考）", original: "保留原音" }, audio, (v) => apply(role, v), "source-audio"),
+            ...(!m ? [button("將來源加入參考素材", () => apply("reference", "none"), { class: "full" })] : []),
+        ])];
+    }
+
+    pinSourceTags() {
+        let next = this.data;
+        for (let i = 0; i < next.segments.length; i++) {
+            if (!RAW_TAG.test(next.segments[i].prompt || next.prompt)) continue;
+            const converted = aliasRawTags(next, i, this.editContext());
+            if (!converted.ok) throw new Error("請先確認素材標籤，或改用 <@名稱>，再變更來源用途。");
+            next = converted.next;
+        }
+        return next;
     }
 
     number(value, onchange, attrs = {}) {
@@ -1731,6 +1845,10 @@ class TimelineEditor {
                 this.propose({ ...this.data, materials: this.data.materials.map((x) => (x.id === id ? { ...x, ref: e.target.value } : x)) });
             } }),
             el("span", { text: S.upTo }), el("div", { class: "mf-tl-chips" }, uses),
+            ...(m.kind === "video" ? [el("span", { text: "參考短邊上限（0＝沿用全域）" }),
+                this.number(m.short_edge ?? 0, (short_edge) => this.propose({ ...this.data,
+                    materials: this.data.materials.map((x) => x.id === id ? { ...x, short_edge } : x) }),
+                { min: "0", max: "4096", step: "32", "data-fk": "material-short-edge" })] : []),
             el("span"), el("div", { class: "mf-tl-chips" }, [button(S.removeMaterial, () => {
                 const r = deleteMaterial(this.data, id, this.editContext());
                 if (r.ok) this.select(null);
@@ -2098,11 +2216,36 @@ class TimelineEditor {
             }
             return;
         }
+        let next = null;
+        let sourceNote = "";
+        if (!this.broken && this.settings().mode === "generate") {
+            try {
+                const response = await this.request("/mediaforge/timeline/probe", { version: 1, source: { type: "input", ...splitSource(value) } });
+                if (!current()) return;
+                const info = response.body;
+                if (!response.ok || probeIssue(info, "video")) throw new Error(info?.error?.message || "無法讀取來源影片");
+                const [num, den] = this.settings().fps;
+                const frames = Math.floor(info.duration_us * num / (den * 1000000));
+                const old = this.data.materials.find((m) => m.kind === "video" && m.ref === this.w.video.value);
+                const pinned = this.pinSourceTags();
+                const data = old ? { ...pinned, materials: pinned.materials.map((m) => m.id === old.id ? { ...m, ref: value } : m) } : pinned;
+                next = useSource(data, value, frames);
+                sourceNote = "來源已加入參考素材；可在「來源影片用途」調整，或用 @ 引用。";
+            } catch (e) { sourceNote = `來源已上傳；加入參考素材失敗：${e.message}`; }
+        }
+        if (!current()) return;
         const values = this.w.video.options?.values;
         if (Array.isArray(values) && !values.includes(value)) values.push(value);
         lease.tracker?.beforeChange?.();
         try {
             this.w.video.value = value;
+            if (next) {
+                this.data = next;
+                this.editGen++;
+                this.w.timeline_data.value = serialize(next);
+                this.syncMedia();
+            }
+            this.notice = sourceNote;
             this.w.video.callback?.(value);
         } finally {
             lease.tracker?.afterChange?.();
