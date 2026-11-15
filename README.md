@@ -248,6 +248,14 @@ Source video: preview of the selected source; codecs the browser can't play get 
 
 Open **Edit Timeline → 解析度與 Latent 放大** and enable **時間軸管理解析度**. The persisted `render` settings then override Sample Segments' legacy width/height and reference-video short edge. Existing workflows without `render` keep their previous behavior. Disable the checkbox to return to the sampler's settings. Cut mode does not consume render settings.
 
+0.14.1 introduces an **aspect ratio + target megapixels** picker:
+
+1. Choose 16:9, 9:16, 1:1, 4:3, 3:4 or 21:9. **交換橫直** swaps both target and base dimensions.
+2. Choose approximately 0.25 / 0.5 / 0.75 / 1 / 1.5 / 2 / 3 / 4 / 8 MP, or enter custom MP. One MP means one million pixels. This is the generation target after latent upscaling. Model alignment makes the aspect ratio and MP approximate; the preview shows the actual dimensions and MP.
+3. Choose the generation strategy. Latent / two-stage modes offer 1.5×, 2× or 4× with automatic base dimensions. For example, approximately 0.5 MP at 16:9 with 2× shows **480×288 (0.138 MP) → 960×544 (0.522 MP)**. Factors apply to width and height; a 2× base uses about a quarter of the target pixel count.
+
+**進階：精確尺寸與取樣** retains exact target/base dimensions, high-resolution steps and the reference-video short-edge cap. Choosing custom aspect or custom base dimensions opens this section. Target edits update the base in the same transaction, preserving the selected factor or custom base proportions where possible. Loading a legacy workflow retains its exact dimensions. Aspect/MP controls introduce no new API fields: saved integer dimensions remain authoritative.
+
 | Strategy | Execution | Settings |
 |---|---|---|
 | Direct (`direct`) | Sample at target dimensions | Width / height |
@@ -255,7 +263,7 @@ Open **Edit Timeline → 解析度與 Latent 放大** and enable **時間軸管�
 | Two-stage (`two_stage`) | Split the supplied sigma schedule, sample low, lift the clean prediction, re-noise and finish high | Above plus high-resolution steps |
 | SelfLift (`selflift`) | Delegate progressive sampling and Drift-Control to installed TimelineDirector nodes | H3 model, high-resolution steps; standard Euler only; fixed 50% base size |
 
-Dimensions must be 32-pixel multiples, 32–8192 per side. The SelfLift target must be a multiple of 64 so its 50% base also aligns to 32. The editor offers size presets, custom dimensions, a portrait/landscape swap and a 50% base-size button. Native base dimensions must be smaller than the target. High-resolution steps must be at least 1 and less than the actual connected schedule's total steps: 8 steps with 2 high means 6 low + 2 high; 4 with 1 high means 3 + 1. A turbo model/LoRA still needs its appropriate schedule. Two-stage sampling resets sampler history at the resolution boundary; it is a separate strategy from SelfLift, not an equivalent implementation or a speed guarantee.
+Dimensions must be 32-pixel multiples, 32–8192 per side. The SelfLift target must be a multiple of 64 so its 50% base also aligns to 32; switching to SelfLift aligns the target automatically. Native base dimensions must be smaller than the target. High-resolution steps must be at least 1 and less than the actual connected schedule's total steps: 8 steps with 2 high means 6 low + 2 high; 4 with 1 high means 3 + 1. A turbo model/LoRA still needs its appropriate schedule. Two-stage sampling resets sampler history at the resolution boundary; it is a separate strategy from SelfLift, not an equivalent implementation or a speed guarantee.
 
 The model menu reads compatible checkpoint headers from ComfyUI's `latent_upscale_models` search paths, including configured extra model paths. It excludes LTX models; refresh after adding a model. Missing, corrupt or incompatible selections fail before reference encoding. Native upscale uses core `LatentUpscaleModelLoader` and `MiniMaxH3LatentUpscaleWithModel`; MediaForge implements no model loader. SelfLift additionally requires [Songssx/ComfyUI-MiniMaxH3-TimelineDirector](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector), including its SelfLift sampler and finite latent-continuation helper. No upstream code or weights are bundled. Missing dependencies or a non-Euler sampler produce an explicit error; they never silently change the strategy.
 
