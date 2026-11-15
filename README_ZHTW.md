@@ -248,6 +248,14 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看�
 
 展開 **Edit Timeline → 解析度與 Latent 放大**，勾選 **時間軸管理解析度**。設定會存入 `timeline_data.render`，並接管 Sample Segments 原本的 width／height 與參考影片短邊上限。沒有 `render` 的舊流程維持原有行為；取消勾選就恢復使用取樣器設定。`cut` 模式不使用這些設定。
 
+0.14.1 改用 **畫面比例＋目標 MP** 選擇尺寸：
+
+1. 選擇 16:9、9:16、1:1、4:3、3:4 或 21:9；**交換橫直** 會同時交換目標與基礎寬高。
+2. 選擇約 0.25／0.5／0.75／1／1.5／2／3／4／8 MP，或選 **自訂 MP** 輸入畫素量。1 MP＝100 萬畫素。這裡選的是放大後的生成目標；模型對齊會讓實際比例與 MP 略有差異，以面板列出的寬高與實際 MP 為準。
+3. 選生成方式。Latent／二階段可再選 1.5×、2× 或 4× 放大，基礎尺寸會自動換算；例如約 0.5 MP、16:9、2×，顯示 **480×288（0.138 MP）→ 960×544（0.522 MP）**。倍率依寬高計算；2× 的基礎畫素量約為目標的四分之一。
+
+**進階：精確尺寸與取樣** 保留目標／基礎寬高、高清步數與參考影片短邊上限；選擇自訂比例或自訂基礎尺寸會展開此區。修改目標尺寸會同步調整基礎尺寸，已選倍率或自訂基礎比例會盡可能保留。載入舊工作流只顯示原始尺寸，不會自動套用新預設；MP／比例選單不新增 API 欄位，存檔仍以整數寬高為準。
+
 | 方式 | 執行流程 | 設定 |
 |---|---|---|
 | 直接生成（`direct`） | 以目標尺寸取樣 | 寬、高 |
@@ -255,7 +263,7 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看�
 | 二階段生成（`two_stage`） | 分割連入的 sigma schedule → 低解析度取樣 → 提升乾淨預測、重新加噪 → 高清續採 | 上述設定，加高清步數 |
 | SelfLift（`selflift`） | 委由已安裝的 TimelineDirector 節點做漸進取樣與 Drift-Control | H3 模型、高清步數；僅限標準 Euler；基礎尺寸固定 50% |
 
-寬高必須是 32 的倍數，每邊 32–8192。SelfLift 目標尺寸需為 64 的倍數，讓 50% 基礎尺寸也對齊 32。介面提供尺寸預設、自訂、交換橫直與基礎尺寸 50% 按鈕。一般 latent 流程的基礎尺寸必須小於目標。高清步數必須至少 1，且小於連入 schedule 的實際總步數：8 步配 2 高清步＝6 低＋2 高；4 步配 1＝3＋1。Turbo 模型／LoRA 仍須搭配合適的 schedule。一般二階段會在解析度轉換處重啟 sampler 的歷史狀態，與 SelfLift 是不同策略，不宣稱等價或固定加速倍數。
+寬高必須是 32 的倍數，每邊 32–8192。SelfLift 目標尺寸需為 64 的倍數，讓 50% 基礎尺寸也對齊 32；切換到 SelfLift 會自動對齊目標尺寸。一般 latent 流程的基礎尺寸必須小於目標。高清步數必須至少 1，且小於連入 schedule 的實際總步數：8 步配 2 高清步＝6 低＋2 高；4 步配 1＝3＋1。Turbo 模型／LoRA 仍須搭配合適的 schedule。一般二階段會在解析度轉換處重啟 sampler 的歷史狀態，與 SelfLift 是不同策略，不宣稱等價或固定加速倍數。
 
 模型選單會從 ComfyUI 的 `latent_upscale_models` 搜尋路徑（含額外模型路徑）讀取 checkpoint 檔頭，只列結構相容的 H3 模型，排除 LTX；新增模型後可重新讀取。選擇不存在、損毀或不相容的模型會在參考編碼前報錯。一般 latent 放大展開成 core `LatentUpscaleModelLoader` 與 `MiniMaxH3LatentUpscaleWithModel`，MediaForge 沒有自己的模型載入器。SelfLift 另需安裝 [Songssx/ComfyUI-MiniMaxH3-TimelineDirector](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector)，並包含 SelfLift sampler 與 finite latent-continuation helper。本套件不內附上游程式或權重；缺少相依或接了非 Euler 的 sampler 都會明確報錯，不會偷偷改用別的方式。
 

@@ -21,6 +21,8 @@ import {
 } from "./timeline_grid.js";
 import { MAX_MATERIALS, refOk, strictParse } from "./timeline_materials.js";
 import { DEFAULT_RENDER, RENDER_MODES } from "./timeline_render.js";
+import { ASPECT_RATIOS, MP_PRESETS, UPSCALE_FACTORS, aspectValue, currentAspect, currentFactor, currentMP,
+    formatMP, megapixels, renderModePatch, resizeRender, resolutionSize, scaledBase } from "./timeline_resolution.js";
 import { useSource } from "./timeline_source.js";
 import {
     addMaterials, aliasRawTags, checkEdit, conformSegments, createFromCard, deleteBar, deleteCut, deleteMaterial, editBar,
@@ -286,6 +288,11 @@ function installStyle() {
 .mf-tl-form details { border: 1px solid var(--border-color, #444); border-radius: 4px; padding: 3px 6px; min-width: 0; }
 .mf-tl-form summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mf-tl-form details > .body { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; margin-top: 4px; }
+.mf-tl-resolution-controls { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.mf-tl-resolution-controls select { flex: 1; min-width: 100px; }
+.mf-tl-resolution-controls input { flex: 1; min-width: 80px; width: 100px; }
+.mf-tl-resolution-preview { padding: 8px; border: 1px solid var(--border-color, #444); border-radius: 4px; overflow-wrap: anywhere; }
+.mf-tl-resolution-preview strong { display: block; font-size: 14px; margin-bottom: 3px; }
 .mf-tl-chips { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
 .mf-tl-chips button { padding: 0 6px; font-size: 11px; }
 .mf-tl-chips button.add { border-style: dashed; }
@@ -1211,8 +1218,8 @@ class TimelineEditor {
             .finally(() => { this.renderModelsLoading = false; if (!this.destroyed) this.render(); });
     }
 
-    selectSetting(values, value, change, key) {
-        const input = el("select", { "data-fk": key, onchange: (e) => change(e.target.value) },
+    selectSetting(values, value, change, key, label = key) {
+        const input = el("select", { "data-fk": key, "aria-label": label, onchange: (e) => change(e.target.value) },
             Object.entries(values).map(([v, label]) => el("option", { value: v, text: label })));
         input.value = String(value);
         return input;
@@ -1232,39 +1239,84 @@ class TimelineEditor {
         toggle.checked = !!r;
         rows.push(el("span", { text: "時間軸管理解析度" }), toggle);
         if (r) {
-            if (this.renderModels === null && !this.renderModelsLoading) this.loadRenderModels();
-            const update = (patch) => this.propose({ ...this.data, render: { ...r, ...patch } });
-            const presets = { "1344x768": "1344 × 768", "1024x576": "1024 × 576（16:9）", "768x1344": "768 × 1344（直式）", "768x768": "768 × 768（正方形）", custom: "自訂尺寸" };
-            const size = `${r.width}x${r.height}`;
-            rows.push(el("span", { text: "尺寸預設" }), this.selectSetting(presets, presets[size] ? size : "custom", (v) => {
-                if (v === "custom") return;
-                const [width, height] = v.split("x").map(Number);
-                update({ width, height, base_width: Math.max(32, Math.round(width / 64) * 32), base_height: Math.max(32, Math.round(height / 64) * 32) });
-            }, "render-preset"));
-            rows.push(el("span", { text: "生成方式" }), this.selectSetting(RENDER_MODES, r.mode, (mode) => update({ mode }), "render-mode"));
-            const numeric = (key, label, min = 32, max = 8192, step = 32) => rows.push(el("span", { text: label }),
-                this.number(r[key], (v) => update({ [key]: v }), { min: String(min), max: String(max), step: String(step), "data-fk": `render-${key}` }));
-            numeric("width", "生成目標寬度"); numeric("height", "生成目標高度");
-            rows.push(el("span"), button("交換橫直", () => update({ width: r.height, height: r.width, base_width: r.base_height, base_height: r.base_width })));
-            if (["latent", "two_stage"].includes(r.mode)) {
-                numeric("base_width", "基礎寬度"); numeric("base_height", "基礎高度");
-                rows.push(el("span"), button("基礎尺寸設為 50%", () => update({ base_width: Math.max(32, Math.round(r.width / 64) * 32), base_height: Math.max(32, Math.round(r.height / 64) * 32) })));
-            }
+            // The form may be held while a field commits. Read the current data on each action.
+            const update = (patch) => {
+                const current = this.data.render;
+                if (current) this.propose({ ...this.data, render: { ...current, ...(typeof patch === "function" ? patch(current) : patch) } });
+            };
+            const openAdvanced = () => {
+                const box = [...this.form.querySelectorAll("details")].find((e) => e.mfKey === "render-advanced");
+                if (box) box.open = true;
+                this.view.open["render-advanced"] = true;
+                this.render();
+            };
+            const aspect = currentAspect(r), mp = currentMP(r), grid = r.mode === "selflift" ? 64 : 32;
+            const chooseSize = (pixels = null, ratio = null) => update((current) => {
+                const key = currentAspect(current), preset = currentMP(current);
+                const size = resolutionSize(pixels ?? (preset === "custom" ? megapixels(current.width, current.height) : preset),
+                    ratio ?? (key === "custom" ? current.width / current.height : aspectValue(key)), current.mode === "selflift" ? 64 : 32);
+                return resizeRender(current, size.width, size.height);
+            });
+            rows.push(el("span", { text: "畫面比例" }), el("div", { class: "mf-tl-resolution-controls" }, [
+                this.selectSetting({ ...ASPECT_RATIOS, custom: "自訂比例（依目前寬高）" }, aspect, (v) => {
+                    if (v === "custom") { openAdvanced(); return; }
+                    chooseSize(null, aspectValue(v));
+                }, "render-aspect", "畫面比例"),
+                button("交換橫直", () => update((current) => ({ width: current.height, height: current.width, base_width: current.base_height, base_height: current.base_width })), { "data-fk": "render-swap" }),
+            ]));
+            const customMP = this.view.renderCustomMP || mp === "custom";
+            const mpControls = [this.selectSetting({ ...Object.fromEntries(MP_PRESETS.map((v) => [v.toFixed(2), `約 ${v} MP`])), custom: "自訂 MP…" },
+                customMP ? "custom" : Number(mp).toFixed(2), (v) => {
+                    this.view.renderCustomMP = v === "custom";
+                    if (v === "custom") { this.render(); return; }
+                    chooseSize(Number(v));
+                }, "render-mp", "目標畫素量（MP）")];
+            if (customMP) mpControls.push(this.number(Number(megapixels(r.width, r.height).toFixed(6)), (v) => {
+                if (!Number.isFinite(v) || v < 0.001024 || v > 67.108864) {
+                    this.notice = "MP 需介於 0.001024 與 67.108864 之間。"; this.render(); return;
+                }
+                chooseSize(v);
+            }, { min: "0.001024", max: "67.108864", step: "any", "data-fk": "render-custom-mp", "aria-label": "自訂目標 MP" }));
+            rows.push(el("span", { text: "目標畫素量" }), el("div", { class: "mf-tl-resolution-controls" }, mpControls));
+            rows.push(el("span", { text: "生成方式" }), this.selectSetting(RENDER_MODES, r.mode, (mode) => update((current) => renderModePatch(current, mode)), "render-mode", "生成方式"));
+            const staged = ["latent", "two_stage"].includes(r.mode);
+            if (staged) rows.push(el("span", { text: "放大倍率" }), this.selectSetting({ ...UPSCALE_FACTORS, custom: "自訂基礎尺寸…" }, currentFactor(r), (v) => {
+                if (v === "custom") { openAdvanced(); return; }
+                update((current) => scaledBase(current.width, current.height, Number(v)));
+            }, "render-factor", "放大倍率"));
+            const lowWidth = r.mode === "selflift" ? r.width / 2 : r.base_width;
+            const lowHeight = r.mode === "selflift" ? r.height / 2 : r.base_height;
+            rows.push(el("div", { class: "full mf-tl-resolution-preview", "data-fk": "render-preview", "aria-live": "polite" }, [
+                el("strong", { text: `目標 ${r.width} × ${r.height} · ${formatMP(r.width, r.height)}` }),
+                el("div", { text: r.mode === "direct" ? "直接以目標尺寸生成"
+                    : `先生成 ${lowWidth} × ${lowHeight}（${formatMP(lowWidth, lowHeight)}）→ 放大至目標尺寸` }),
+                el("div", { class: "hint", text: `1 MP＝100 萬畫素；比例與 MP 依 ${grid} 倍數對齊，以上為實際尺寸。` }),
+            ]));
             if (r.mode !== "direct") {
+                if (this.renderModels === null && !this.renderModelsLoading) this.loadRenderModels();
                 const choices = { "": "請選擇 H3 latent 放大模型", ...Object.fromEntries((this.renderModels ?? []).map((m) => [m, m])) };
                 if (r.model && !choices[r.model]) choices[r.model] = `${r.model}（未找到或不相容）`;
-                rows.push(el("span", { text: "H3 放大模型" }), this.selectSetting(choices, r.model, (model) => update({ model }), "render-model"));
-                rows.push(el("div", { class: "full hint", text: "僅列出結構相容的 H3 模型；不包含 LTX。" }),
-                    button("重新讀取模型", () => this.loadRenderModels(), { class: "full" }));
+                rows.push(el("span", { text: "H3 放大模型" }), el("div", { class: "mf-tl-resolution-controls" }, [
+                    this.selectSetting(choices, r.model, (model) => update({ model }), "render-model", "H3 放大模型"),
+                    button("重新讀取", () => this.loadRenderModels(), { title: "重新讀取 H3 放大模型清單" }),
+                ]));
+                rows.push(el("div", { class: "full hint", text: "僅列出結構相容的 H3 模型；不包含 LTX。" }));
                 if (!r.model || this.renderModels && !this.renderModels.includes(r.model)) rows.push(el("div", { class: "full bad", text: "請選擇存在且相容的 H3 放大模型後再執行。" }));
             }
-            if (["two_stage", "selflift"].includes(r.mode)) numeric("high_steps", "高清取樣步數", 1, 10000, 1);
-            numeric("ref_video_short_edge", "參考影片短邊上限（0＝自動）", 0, 4096);
             if (r.mode === "selflift") rows.push(el("div", { class: "full hint", text: `${this.hasSelfLift ? "已偵測到" : "尚未偵測到"} TimelineDirector SelfLift；只支援標準 Euler，低解析度固定為 50%。目標尺寸需為 64 的倍數。` }));
             if (this.renderModelsError) rows.push(el("div", { class: "full bad", text: this.renderModelsError }));
-            const low = r.mode === "selflift" ? `${r.width / 2}×${r.height / 2}` : `${r.base_width}×${r.base_height}`;
-            rows.push(el("div", { class: "full hint", text: r.mode === "direct" ? `${r.width}×${r.height} 直接生成`
-                : `${low} → ${r.model || "尚未選模型"} → ${r.width}×${r.height}${r.mode === "latent" ? "（放大後解碼）" : `（最後 ${r.high_steps} 步高清取樣；總步數依連入的 schedule）`}` }));
+            const advanced = [el("div", { class: "full hint", text: "可直接指定精確寬高；修改目標時會同步調整基礎尺寸。載入舊工作流會保留原值。" })];
+            const numeric = (key, label, min = 32, max = 8192, step = 32) => advanced.push(el("span", { text: label }),
+                this.number(r[key], (v) => update((current) => key === "width" ? resizeRender(current, v, current.height) : key === "height" ? resizeRender(current, current.width, v) : { [key]: v }),
+                    { min: String(min), max: String(max), step: String(step), "data-fk": `render-${key}`, "aria-label": label }));
+            numeric("width", "目標寬度", grid, 8192, grid); numeric("height", "目標高度", grid, 8192, grid);
+            if (staged) { numeric("base_width", "基礎寬度"); numeric("base_height", "基礎高度"); }
+            if (["two_stage", "selflift"].includes(r.mode)) {
+                numeric("high_steps", "高清取樣步數", 1, 10000, 1);
+                advanced.push(el("div", { class: "full hint", text: `最後 ${r.high_steps} 步高清取樣；需少於連入 schedule 的總步數。` }));
+            }
+            numeric("ref_video_short_edge", "參考影片短邊上限（0＝自動）", 0, 4096);
+            rows.push(this.details("render-advanced", "進階：精確尺寸與取樣", advanced));
         }
         return this.details("render", "解析度與 Latent 放大", rows);
     }
