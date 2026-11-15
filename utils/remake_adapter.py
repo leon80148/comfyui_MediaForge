@@ -34,7 +34,13 @@ def remake_nodes():
     return out
 
 
-def canvas(snapshot, short_edge):
+def canvas(snapshot, short_edge, width=0, height=0):
+    # Explicit timeline dimensions are prepared before calling the official node.
+    # Its run() retains a 32-aligned source already on the requested short edge.
+    if width or height:
+        if any(type(v) is not int or not 32 <= v <= 8192 or v % 32 for v in (width, height)):
+            raise ValueError(f"[{LABEL}] Timeline 寬高必須是 32–8192 間 32 的倍數。")
+        return width, height
     w, h = snapshot["display_size"]
     if min(w, h) == short_edge and w % 32 == 0 and h % 32 == 0:
         return w, h
@@ -80,12 +86,12 @@ def validate_segment(segment):
     return reference_pins(segment)
 
 
-def encode_remake(segment, clip, vae, audio_vae, short_edge, keep_source_audio):
+def encode_remake(segment, clip, vae, audio_vae, short_edge, keep_source_audio, width=0, height=0):
     """Decode bounded material slices, then delegate all conditioning to RemakeConditioning."""
     pins = validate_segment(segment)
     cls = remake_nodes()["RemakeConditioning"]
     source = segment["materials"]["videos"][0]
-    width, height = canvas(source["snapshot"], short_edge)
+    width, height = canvas(source["snapshot"], short_edge, width, height)
     pixels = segment["length"] * width * height
     _check_decode(pixels * 3, LABEL, "來源影片的 rgb24 ", "請縮短分段或使用 480。")
     _check_decode_ram(pixels * 3 * 4, width, height)
@@ -105,4 +111,4 @@ def encode_remake(segment, clip, vae, audio_vae, short_edge, keep_source_audio):
     refs = {f"ref_{i + 1}": load_image(p, LABEL) for i, p in enumerate(segment["materials"]["pictures"])}
     fn = getattr(cls(), cls.FUNCTION)
     return fn(clip=clip, vae=vae, audio_vae=audio_vae, source=frames, prompt=segment["prompt"],
-              pins=pins, frames=segment["length"], short_edge=short_edge, audio=audio, **refs)
+              pins=pins, frames=segment["length"], short_edge=min(width, height), audio=audio, **refs)

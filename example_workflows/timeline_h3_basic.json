@@ -508,14 +508,14 @@
         "24",
         "h3_5+17n",
         "generate",
-        "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 107, \"prompt\": \"A red fox trots through a snowy forest in soft morning light and sniffs the air.\"}, {\"start\": 85, \"end\": 192, \"prompt\": \"The fox stops beside a frozen stream and looks around, its breath visible in the cold.\", \"seam_in\": {\"kind\": \"crossfade\", \"frames\": 12, \"audio_curve\": \"auto\"}}, {\"start\": 153, \"end\": 260, \"prompt\": \"The fox leaps over the stream and runs off between the pine trees.\"}]}"
+        "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 107, \"prompt\": \"A red fox trots through a snowy forest in soft morning light and sniffs the air.\"}, {\"start\": 85, \"end\": 192, \"prompt\": \"The fox stops beside a frozen stream and looks around, its breath visible in the cold.\", \"seam_in\": {\"kind\": \"crossfade\", \"frames\": 12, \"audio_curve\": \"auto\"}}, {\"start\": 153, \"end\": 260, \"prompt\": \"The fox leaps over the stream and runs off between the pine trees.\"}], \"render\": {\"mode\": \"direct\", \"width\": 832, \"height\": 480, \"base_width\": 416, \"base_height\": 256, \"model\": \"\", \"high_steps\": 2, \"ref_video_short_edge\": 0}}"
       ],
       "widgets_values_named": {
         "video": "(none)",
         "fps": "24",
         "grid": "h3_5+17n",
         "mode": "generate",
-        "timeline_data": "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 107, \"prompt\": \"A red fox trots through a snowy forest in soft morning light and sniffs the air.\"}, {\"start\": 85, \"end\": 192, \"prompt\": \"The fox stops beside a frozen stream and looks around, its breath visible in the cold.\", \"seam_in\": {\"kind\": \"crossfade\", \"frames\": 12, \"audio_curve\": \"auto\"}}, {\"start\": 153, \"end\": 260, \"prompt\": \"The fox leaps over the stream and runs off between the pine trees.\"}]}"
+        "timeline_data": "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 107, \"prompt\": \"A red fox trots through a snowy forest in soft morning light and sniffs the air.\"}, {\"start\": 85, \"end\": 192, \"prompt\": \"The fox stops beside a frozen stream and looks around, its breath visible in the cold.\", \"seam_in\": {\"kind\": \"crossfade\", \"frames\": 12, \"audio_curve\": \"auto\"}}, {\"start\": 153, \"end\": 260, \"prompt\": \"The fox leaps over the stream and runs off between the pine trees.\"}], \"render\": {\"mode\": \"direct\", \"width\": 832, \"height\": 480, \"base_width\": 416, \"base_height\": 256, \"model\": \"\", \"high_steps\": 2, \"ref_video_short_edge\": 0}}"
       }
     },
     {

@@ -10,12 +10,13 @@ from ..utils.timeline_media import describe_material
 from ..utils.timeline_messages import format_message
 from ..utils.timeline_plan import FPS_PRESETS, H3_GRID, MODES, compile_plan, cut_ranges_seconds, parse_timeline_data
 from ..utils.timeline_source import describe_source, resolve_timeline_source
+from ..utils.timeline_render import DEFAULT_RENDER
 from .select_video import _list_input_videos
 
 NO_SOURCE = "(none)"
 # 新節點預設即合法：H3 單段 107 幀（≈4.46 s @24fps）
-DEFAULT_TIMELINE = json.dumps({"version": 1, "source": {"origin_frame": 0},
-                               "segments": [{"start": 0, "end": 107, "prompt": ""}]})
+DEFAULT_TIMELINE = json.dumps({"version": 2, "source": {"origin_frame": 0},
+                               "segments": [{"start": 0, "end": 107, "prompt": ""}], "render": DEFAULT_RENDER})
 
 
 class MF_EditTimeline:

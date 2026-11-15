@@ -71,7 +71,7 @@ export const S = {
         "保留原音：標記要保留原聲的範圍，不保證嘴型對齊。成品是否換回原聲看 🧵 Assemble Segments。",
         "剪現有影片：選出要保留的區間，依影片順序輸出。",
         "播放只播來源影片或選中的素材，不是生成結果。",
-        "快捷鍵：空白鍵 播放／暫停；← → 移動 1 幀（Shift ×10）；Alt + ← → 微調長條；S 分割；Delete 刪除；I / O 設起點、終點（剪輯）；Esc 取消拖曳。",
+        "快捷鍵：空白鍵 播放／暫停；← → 移動 1 幀（Shift ×10）；Alt + ← → 微調長條；S 分割；Delete 刪除選取素材或長條；I / O 設起點、終點（剪輯）；Esc 取消拖曳；Ctrl / ⌘ + Z 復原。",
     ],
 
     // timeline
@@ -153,6 +153,12 @@ export const S = {
     // materials and bars
     addMaterials: "加入素材",
     libraryTitle: "素材庫",
+    libraryCount: (n, limit) => `素材庫 · ${n} / ${limit}`,
+    materialCard: (name, kind) => `${kind}素材：${name}（Enter 選取，Delete 移除）`,
+    materialUsage: (refs, anchors) => refs || anchors ? `參考 ${refs} · 指定 ${anchors}` : "尚未用於時間軸",
+    removeMaterialTitle: (name) => `從素材庫移除「${name}」（保留原始檔案）`,
+    materialRemoveHint: "Delete 可移除素材及相關軌道項目；原始檔案保留。Ctrl / ⌘ + Z 可復原。",
+    materialRemoved: (name, refs, anchors, hasTags) => `已移除「${name}」${refs || anchors ? `及 ${refs} 個參考、${anchors} 個指定項目` : ""}（原始檔案保留，可復原）${hasTags ? `；prompt 仍有 <@${name}> 標籤，請修改或移除` : ""}`,
     library: "素材庫（可以拖到下方軌道）",
     emptyLibrary: "把圖片、影片、音檔拖到這裡，或按「加入素材」。只用文字生成可以跳過",
     upTo: "把它用在",

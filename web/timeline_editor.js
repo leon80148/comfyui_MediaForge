@@ -32,6 +32,7 @@ import {
 } from "./timeline_edit.js";
 import { attachMention } from "./timeline_mention.js";
 import { S } from "./timeline_strings.js";
+import { timelineConsumers } from "./timeline_controls.js";
 
 const NODE_TYPE = "MF_EditTimeline";
 const freshView = () => ({ active: 0, zoom: null, playhead: 0, sel: null, open: {}, caret: {} });
@@ -199,15 +200,18 @@ function installStyle() {
 .mf-tl:focus-visible, .mf-tl button:focus-visible, .mf-tl summary:focus-visible, .mf-tl-card:focus-visible, .mf-tl-item:focus-visible,
 .mf-tl-seg:focus-visible { outline: 2px solid #ffd23f; }
 .mf-tl button { background: var(--comfy-input-bg, #222); color: inherit; border: 1px solid var(--border-color, #444);
-  border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  border-radius: 4px; padding: 3px 8px; min-height: 24px; font: inherit; cursor: pointer; }
+.mf-tl button:hover:not(:disabled) { border-color: #9ba7b7; background: #343b46; }
+.mf-tl button.danger { color: #ffb1b1; }
+.mf-tl button.danger:hover:not(:disabled) { background: #613139; border-color: #f08080; }
 .mf-tl button:disabled { opacity: .45; cursor: default; }
 .mf-tl-bar { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; flex: none; }
-.mf-tl-group { display: flex; gap: 4px; align-items: center; }
-.mf-tl-top { display: flex; gap: 6px; height: 118px; flex: none; }
+.mf-tl-group { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.mf-tl-top { display: flex; gap: 8px; height: 150px; flex: none; }
 .mf-tl-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .mf-tl-col.preview { width: 210px; flex: none; }
 .mf-tl-col.library { flex: 1; }
-.mf-tl-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; height: 22px; flex: none; }
+.mf-tl-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; height: 26px; flex: none; }
 .mf-tl-head .mf-tl-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mf-tl-head button { flex: none; padding: 1px 6px; font-size: 11px; }
 .mf-tl-video { width: 100%; flex: 1; min-height: 0; background: #000; border-radius: 4px; object-fit: contain; }
@@ -217,17 +221,21 @@ function installStyle() {
   border: 1px dashed var(--border-color, #555); border-radius: 4px; padding: 4px; }
 .mf-tl-lib.drop { border-color: #ffd23f; }
 .mf-tl-lib > .mf-tl-label { align-self: center; padding: 0 6px; }
-.mf-tl-card { flex: none; width: 100px; display: flex; flex-direction: column; gap: 1px; padding: 3px; border-radius: 4px;
+.mf-tl-card { position: relative; flex: none; width: 112px; display: flex; flex-direction: column; gap: 2px; padding: 4px; border-radius: 4px;
   background: var(--comfy-input-bg, #262626); border: 1px solid transparent; cursor: grab; touch-action: none; user-select: none; }
-.mf-tl-card.selected { border-color: #fff; }
+.mf-tl-card.selected { border-color: #ffd23f; background: #303b4b; }
 .mf-tl-card.pending { cursor: default; opacity: .6; }
 .mf-tl-card.failed { opacity: 1; }
 .mf-tl-card .acts { display: flex; gap: 2px; }
 .mf-tl-card .acts button { padding: 0 4px; font-size: 10px; }
+.mf-tl-card .remove { position: absolute; right: 5px; top: 5px; width: 24px; padding: 0; background: #25272deb;
+  font-size: 18px; line-height: 20px; }
+.mf-tl-card .retry { position: absolute; left: 5px; top: 5px; padding: 0 4px; background: #25272deb; }
 .mf-tl-card img { width: 100%; height: 40px; flex: none; object-fit: cover; border-radius: 3px; background: #111; pointer-events: none; }
 .mf-tl-card .icon { height: 40px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 20px; background: #111; border-radius: 3px; }
 .mf-tl-card.failed .icon { height: 16px; font-size: 12px; }
 .mf-tl-card .name { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mf-tl-card .filename, .mf-tl-card .usage { font-size: 10px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mf-tl-card .state { font-size: 10px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mf-tl-card .state.error { color: #ff7a7a; opacity: 1; }
 .mf-tl-ghost { position: fixed; z-index: 10000; pointer-events: none; padding: 2px 8px; border-radius: 4px; background: #ffd23f;
@@ -272,12 +280,15 @@ function installStyle() {
 .mf-tl-status.locate .mf-tl-status-text { cursor: pointer; text-decoration: underline dotted; }
 .mf-tl-status button { padding: 0 6px; font-size: 11px; }
 .mf-tl-status details { font-size: 11px; opacity: .8; } .mf-tl-status summary { cursor: pointer; }
-.mf-tl-notice { font-size: 11px; opacity: .8; min-height: 14px; }
-.mf-tl-form { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: auto 1fr; gap: 4px 8px;
+.mf-tl-notice { font-size: 11px; opacity: .9; min-height: 14px; overflow-wrap: anywhere; }
+.mf-tl-form { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: minmax(100px, max-content) minmax(0, 1fr); gap: 6px 8px;
   align-items: center; align-content: start; }
 .mf-tl-form input, .mf-tl-form select, .mf-tl-form textarea, .mf-tl-panel input, .mf-tl-panel select, .mf-tl-panel textarea {
   background: var(--comfy-input-bg, #222); color: inherit; border: 1px solid var(--border-color, #444); border-radius: 3px;
-  padding: 2px 4px; font: inherit; }
+  padding: 4px 6px; min-width: 0; font: inherit; }
+.mf-tl-selection-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px;
+  padding: 6px 0; border-bottom: 1px solid var(--border-color, #444); }
+.mf-tl-selection-head > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .mf-tl-form textarea { resize: vertical; min-height: 38px; width: 100%; }
 .mf-tl-form textarea.main { min-height: 56px; }
 .mf-tl-form input[type=checkbox] { justify-self: start; }
@@ -287,7 +298,7 @@ function installStyle() {
 .mf-tl-form .warn { color: #ffb36b; } .mf-tl-form .bad { color: #ff7a7a; }
 .mf-tl-form details { border: 1px solid var(--border-color, #444); border-radius: 4px; padding: 3px 6px; min-width: 0; }
 .mf-tl-form summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mf-tl-form details > .body { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; margin-top: 4px; }
+.mf-tl-form details > .body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; align-items: center; margin-top: 4px; }
 .mf-tl-resolution-controls { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .mf-tl-resolution-controls select { flex: 1; min-width: 100px; }
 .mf-tl-resolution-controls input { flex: 1; min-width: 80px; width: 100px; }
@@ -413,6 +424,7 @@ class TimelineEditor {
         clearTimeout(this.fieldTimer);
         this.loadGen++;
         this.editGen++;
+        this.notice = "";
         this.uploads = [];
         this.deferredBatches = [];
         // Malformed JSON stays as typed (never canonicalized and re-saved); the editor pauses
@@ -729,10 +741,11 @@ class TimelineEditor {
         for (const media of [this.video, this.materialVideo]) {
             for (const type of ["play", "pause", "ended"]) media.addEventListener(type, () => this.syncPlayButton());
         }
-        this.lib = el("div", { class: "mf-tl-lib", title: S.library });
+        this.lib = el("div", { class: "mf-tl-lib", title: S.library, role: "group", "aria-label": S.libraryTitle });
         this.materialButton = button(S.addMaterials, () => this.materialInput.click());
+        this.libraryLabel = el("span", { class: "mf-tl-label", text: S.libraryTitle });
         this.libraryHead = el("div", { class: "mf-tl-head" }, [
-            el("span", { class: "mf-tl-label", text: S.libraryTitle }), this.materialButton, this.materialInput,
+            this.libraryLabel, this.materialButton, this.materialInput,
         ]);
         this.cutHint = el("div", { class: "mf-tl-placeholder", text: S.cutHint });
         const top = el("div", { class: "mf-tl-top" }, [
@@ -752,8 +765,8 @@ class TimelineEditor {
         this.bar = el("div", { class: "mf-tl-bar" }, [
             group(this.playButton, this.frameLabel),
             group(this.addButton, this.deleteButton, this.fillButton, this.importButton),
-            group(button("−", () => this.zoom(0.5), { title: S.zoomOut }), button("＋", () => this.zoom(2), { title: S.zoomIn }), button(S.fit, () => this.zoom(null))),
-            group(button(S.help, () => this.togglePanel("help"), { title: S.helpTitle })),
+            group(button("−", () => this.zoom(0.5), { title: S.zoomOut, "aria-label": S.zoomOut }), button("＋", () => this.zoom(2), { title: S.zoomIn, "aria-label": S.zoomIn }), button(S.fit, () => this.zoom(null))),
+            group(button(S.help, () => this.togglePanel("help"), { title: S.helpTitle, "aria-label": S.helpTitle })),
         ]);
         this.ruler = el("canvas", { class: "mf-tl-ruler", height: "18" });
         this.playhead = el("div", { class: "mf-tl-playhead" });
@@ -777,6 +790,7 @@ class TimelineEditor {
         this.scroller.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
         this.panel = el("div");
         this.form = el("div", { class: "mf-tl-form" });
+        for (const area of [this.lib, this.form]) area.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
         // see render(): a field committing on its way out must not rebuild the control focus is moving to
         this.form.addEventListener("change", () => this.noteFieldCommit(), true);
         this.form.addEventListener("focusout", () => setTimeout(() => this.flushHeld()));
@@ -952,6 +966,7 @@ class TimelineEditor {
         const generate = st.mode === "generate";
         this.libraryHead.style.display = this.lib.style.display = generate ? "" : "none";
         this.cutHint.style.display = generate ? "none" : "";
+        this.libraryLabel.textContent = S.libraryCount(this.data.materials.length, MAX_MATERIALS);
         const [num, den] = st.fps;
         const cards = this.data.materials.map((m) => {
             const entry = this.media.get(m.id);
@@ -966,11 +981,27 @@ class TimelineEditor {
             const card = el("div", {
                 class: `mf-tl-card${this.view.sel?.type === "material" && this.view.sel.id === m.id ? " selected" : ""}`,
                 tabindex: "0", title: `${S.kinds[m.kind]}：${m.ref}`, "data-fk": `card:${m.id}`,
+                "aria-label": S.materialCard(m.name, S.kinds[m.kind]),
             }, [thumb, el("span", { class: "name", text: m.name }),
+                el("span", { class: "filename", text: splitSource(m.ref).filename, title: m.ref }),
+                el("span", { class: "usage", text: S.materialUsage(
+                    this.data.refs.filter((r) => r.material === m.id).length,
+                    this.data.anchors.filter((a) => a.material === m.id).length) }),
                 el("span", { class: `state${status === "error" ? " error" : ""}`, text: status === "error" ? `⚠ ${state}` : state })]);
+            card.append(button("×", (e) => {
+                e.stopPropagation();
+                this.removeMaterial(m.id);
+            }, { class: "remove danger", title: S.removeMaterialTitle(m.name), "aria-label": S.removeMaterialTitle(m.name), "data-fk": `remove:${m.id}` }));
+            if (status === "error") card.append(button(S.retry, (e) => {
+                e.stopPropagation();
+                const current = this.data.materials.find((x) => x.id === m.id);
+                if (current) this.probeMaterial(current);
+                this.render();
+            }, { class: "retry", "data-fk": `retry:${m.id}` }));
             card.dataset.id = m.id;
             card.addEventListener("pointerdown", (e) => this.startCardDrag(e, m, card));
             card.addEventListener("keydown", (e) => {
+                if (e.target !== card) return;
                 if (e.key !== "Enter" && e.key !== " ") return;
                 e.preventDefault();
                 e.stopPropagation();
@@ -1191,11 +1222,14 @@ class TimelineEditor {
         // prompts are only read when segments are generated: in cut the field would change nothing,
         // and the first-run hint is about writing one
         const rows = generate && this.isFresh() ? [el("div", { class: "full hint", text: S.firstRun })] : [];
-        if (generate) rows.push(this.sharedPrompt(), this.renderSettings(), ...this.sourceSettings(st));
+        const inspectingMaterial = generate && ["material", "ref", "anchor"].includes(sel?.type);
+        const common = generate ? [this.sharedPrompt(), this.renderSettings(), ...this.sourceSettings(st)] : [];
+        if (!inspectingMaterial) rows.push(...common);
         if (generate && sel?.type === "ref" && this.data.refs.some((r) => r.id === sel.id)) rows.push(...this.refForm(st, sel.id));
         else if (generate && sel?.type === "anchor" && this.data.anchors.some((a) => a.id === sel.id)) rows.push(...this.anchorForm(st, sel.id));
         else if (generate && sel?.type === "material" && this.data.materials.some((m) => m.id === sel.id)) rows.push(...this.materialForm(st, sel.id));
         else rows.push(...this.segmentForm(st));
+        if (inspectingMaterial) rows.push(...common);
         this.rebuild(this.form, rows);
     }
 
@@ -1227,9 +1261,13 @@ class TimelineEditor {
 
     renderSettings() {
         const r = this.data.render;
+        const consumers = timelineConsumers(this.node);
+        const remake = consumers.some((n) => n.type === "MF_SampleRemakeSegments");
+        const remakeOnly = remake && consumers.every((n) => n.type === "MF_SampleRemakeSegments");
+        const badRemakeSteps = remake && r?.mode === "two_stage" && (r.high_steps < 1 || r.high_steps > 5);
         const rows = [el("div", { class: "full hint", text: r
-            ? "此處設定會套用到 Sample Segments；該節點原本的 width / height 不再使用。"
-            : "目前沿用 Sample Segments 的解析度；啟用後，設定會隨時間軸存檔。" })];
+            ? "取樣器使用此處尺寸；原本的尺寸欄位會自動收合。"
+            : "沿用取樣器的尺寸。啟用後，改用此處顯示的目標尺寸。" })];
         const toggle = el("input", { type: "checkbox", "data-fk": "render-enable", onchange: (e) => {
             const next = { ...this.data };
             if (e.target.checked) next.render = { ...DEFAULT_RENDER };
@@ -1278,7 +1316,16 @@ class TimelineEditor {
                 chooseSize(v);
             }, { min: "0.001024", max: "67.108864", step: "any", "data-fk": "render-custom-mp", "aria-label": "自訂目標 MP" }));
             rows.push(el("span", { text: "目標畫素量" }), el("div", { class: "mf-tl-resolution-controls" }, mpControls));
-            rows.push(el("span", { text: "生成方式" }), this.selectSetting(RENDER_MODES, r.mode, (mode) => update((current) => renderModePatch(current, mode)), "render-mode", "生成方式"));
+            const modes = { ...RENDER_MODES };
+            if (remake) delete modes.selflift;
+            if (remake && r.mode === "selflift") modes.selflift = "SelfLift（Remake 不支援，請改選）";
+            const modeSelect = this.selectSetting(modes, r.mode, (mode) => update((current) => renderModePatch(current, mode)), "render-mode", "生成方式");
+            if (remake && r.mode === "selflift") {
+                [...modeSelect.children].find((o) => o.value === "selflift").disabled = true;
+                rows.push(el("div", { class: "full bad", text: "目前連接 Remake，無法執行 SelfLift；原設定保留，請改選生成方式。" }));
+            }
+            rows.push(el("span", { text: "生成方式" }), modeSelect);
+            if (badRemakeSteps) rows.push(el("div", { class: "full bad", text: "儲存的高清步數超過 Remake 支援範圍，請到進階設定調整為 1–5。" }));
             const staged = ["latent", "two_stage"].includes(r.mode);
             if (staged) rows.push(el("span", { text: "放大倍率" }), this.selectSetting({ ...UPSCALE_FACTORS, custom: "自訂基礎尺寸…" }, currentFactor(r), (v) => {
                 if (v === "custom") { openAdvanced(); return; }
@@ -1290,6 +1337,7 @@ class TimelineEditor {
                 el("strong", { text: `目標 ${r.width} × ${r.height} · ${formatMP(r.width, r.height)}` }),
                 el("div", { text: r.mode === "direct" ? "直接以目標尺寸生成"
                     : `先生成 ${lowWidth} × ${lowHeight}（${formatMP(lowWidth, lowHeight)}）→ 放大至目標尺寸` }),
+                ...(remake && r.mode === "two_stage" && !badRemakeSteps ? [el("div", { text: `Remake 六步：低解析度 ${6 - r.high_steps} 步 ＋ 高清 ${r.high_steps} 步` })] : []),
                 el("div", { class: "hint", text: `1 MP＝100 萬畫素；比例與 MP 依 ${grid} 倍數對齊，以上為實際尺寸。` }),
             ]));
             if (r.mode !== "direct") {
@@ -1300,25 +1348,32 @@ class TimelineEditor {
                     this.selectSetting(choices, r.model, (model) => update({ model }), "render-model", "H3 放大模型"),
                     button("重新讀取", () => this.loadRenderModels(), { title: "重新讀取 H3 放大模型清單" }),
                 ]));
-                rows.push(el("div", { class: "full hint", text: "僅列出結構相容的 H3 模型；不包含 LTX。" }));
                 if (!r.model || this.renderModels && !this.renderModels.includes(r.model)) rows.push(el("div", { class: "full bad", text: "請選擇存在且相容的 H3 放大模型後再執行。" }));
             }
             if (r.mode === "selflift") rows.push(el("div", { class: "full hint", text: `${this.hasSelfLift ? "已偵測到" : "尚未偵測到"} TimelineDirector SelfLift；只支援標準 Euler，低解析度固定為 50%。目標尺寸需為 64 的倍數。` }));
             if (this.renderModelsError) rows.push(el("div", { class: "full bad", text: this.renderModelsError }));
             const advanced = [el("div", { class: "full hint", text: "可直接指定精確寬高；修改目標時會同步調整基礎尺寸。載入舊工作流會保留原值。" })];
             const numeric = (key, label, min = 32, max = 8192, step = 32) => advanced.push(el("span", { text: label }),
-                this.number(r[key], (v) => update((current) => key === "width" ? resizeRender(current, v, current.height) : key === "height" ? resizeRender(current, current.width, v) : { [key]: v }),
+                this.number(r[key], (v) => {
+                    if (remake && key === "high_steps" && (!Number.isInteger(v) || v < 1 || v > 5)) {
+                        this.notice = "Remake 高清步數需介於 1–5；總步數固定為 6。";
+                        this.render();
+                        return;
+                    }
+                    update((current) => key === "width" ? resizeRender(current, v, current.height) : key === "height" ? resizeRender(current, current.width, v) : { [key]: v });
+                },
                     { min: String(min), max: String(max), step: String(step), "data-fk": `render-${key}`, "aria-label": label }));
             numeric("width", "目標寬度", grid, 8192, grid); numeric("height", "目標高度", grid, 8192, grid);
             if (staged) { numeric("base_width", "基礎寬度"); numeric("base_height", "基礎高度"); }
             if (["two_stage", "selflift"].includes(r.mode)) {
-                numeric("high_steps", "高清取樣步數", 1, 10000, 1);
-                advanced.push(el("div", { class: "full hint", text: `最後 ${r.high_steps} 步高清取樣；需少於連入 schedule 的總步數。` }));
+                numeric("high_steps", "高清取樣步數", 1, remake ? 5 : 10000, 1);
+                advanced.push(el("div", { class: "full hint", text: remake ? "Remake 固定 6 步，高清可選 1–5 步。" : `最後 ${r.high_steps} 步高清取樣；需少於 schedule 總步數。` }));
             }
-            numeric("ref_video_short_edge", "參考影片短邊上限（0＝自動）", 0, 4096);
+            if (!remakeOnly) numeric("ref_video_short_edge", "參考影片短邊上限（0＝自動）", 0, 4096);
+            if (remake) advanced.push(el("div", { class: "full hint", text: "Remake 來源會填滿畫布並置中裁切；不使用參考影片短邊上限。" }));
             rows.push(this.details("render-advanced", "進階：精確尺寸與取樣", advanced));
         }
-        return this.details("render", "解析度與 Latent 放大", rows);
+        return this.details("render", r ? `解析度與放大 · ${r.width} × ${r.height}` : "解析度與放大 · 使用取樣器設定", rows);
     }
 
     sourceSettings(st) {
@@ -1884,11 +1939,15 @@ class TimelineEditor {
         this.syncPlaceButton();
         uses.push(this.placeButton.element);
         return [
-            el("div", { class: "full" }, [el("b", { text: `${KIND_ICON[m.kind]} ${S.kinds[m.kind]}：${m.name}` }), ` · ${describe}`]),
+            el("div", { class: "full mf-tl-selection-head" }, [
+                el("span", {}, [el("b", { text: `${KIND_ICON[m.kind]} ${S.kinds[m.kind]}：${m.name}` }), ` · ${describe}`]),
+                button(S.removeMaterial, () => this.removeMaterial(id), { class: "danger", "data-fk": "remove-material", title: S.removeMaterialTitle(m.name) }),
+            ]),
+            el("div", { class: "full hint", text: S.materialRemoveHint }),
             el("span", { text: S.rename }),
-            el("input", { type: "text", "data-fk": "name", value: m.name, onchange: (e) => this.apply(renameMaterial(this.data, id, e.target.value.normalize("NFC"), this.editContext())) }),
+            el("input", { type: "text", "data-fk": "name", "aria-label": S.rename, value: m.name, onchange: (e) => this.apply(renameMaterial(this.data, id, e.target.value.normalize("NFC"), this.editContext())) }),
             el("span", { text: S.materialRef }),
-            el("input", { type: "text", "data-fk": "file", value: m.ref, onchange: (e) => {
+            el("input", { type: "text", "data-fk": "file", "aria-label": S.materialRef, value: m.ref, onchange: (e) => {
                 // a bad path would make the saved JSON fail strict parsing on the next load
                 if (!refOk(e.target.value)) {
                     this.notice = S.badRef;
@@ -1901,12 +1960,26 @@ class TimelineEditor {
                 this.number(m.short_edge ?? 0, (short_edge) => this.propose({ ...this.data,
                     materials: this.data.materials.map((x) => x.id === id ? { ...x, short_edge } : x) }),
                 { min: "0", max: "4096", step: "32", "data-fk": "material-short-edge" })] : []),
-            el("span"), el("div", { class: "mf-tl-chips" }, [button(S.removeMaterial, () => {
-                const r = deleteMaterial(this.data, id, this.editContext());
-                if (r.ok) this.select(null);
-                this.apply(r);
-            })]),
         ];
+    }
+
+    removeMaterial(id) {
+        if (this.broken || this.destroyed) return;
+        // Blur first so an unfinished field is saved before the removal, in its own undo step.
+        this.root.focus({ preventScroll: true });
+        const m = this.data.materials.find((x) => x.id === id);
+        if (!m) return;
+        const r = deleteMaterial(this.data, id, this.editContext());
+        if (!r.ok) return this.apply(r);
+        const refs = this.data.refs.length - r.next.refs.length;
+        const anchors = this.data.anchors.length - r.next.anchors.length;
+        const tag = new RegExp(`<@${m.name}(:audio)?>`);
+        const hasTags = [this.data.prompt, ...this.data.segments.map((s) => s.prompt)].some((text) => tag.test(text));
+        const sel = this.view.sel;
+        if (sel?.type === "material" && sel.id === id
+            || sel?.type === "ref" && !r.next.refs.some((x) => x.id === sel.id)
+            || sel?.type === "anchor" && !r.next.anchors.some((x) => x.id === sel.id)) this.select(null);
+        this.apply(r, S.materialRemoved(m.name, refs, anchors, hasTags));
     }
 
     // A button naming a time must name where the click really lands: createFromCard clips to the timeline and moves a
@@ -2461,6 +2534,11 @@ class TimelineEditor {
     }
 
     startCardDrag(e, m, card) {
+        // Card actions must keep their own click / keyboard activation, without pointer capture by a drag.
+        if (e.target.closest?.("button")) {
+            e.stopPropagation();
+            return;
+        }
         if (this.broken || e.button !== 0) return;
         e.stopPropagation();
         // a new press means the old pointer is gone (its pointerup missed us): discard that gesture
@@ -2602,19 +2680,31 @@ class TimelineEditor {
         if (e.key === " " && e.target.closest("button, summary")) return;
         const sel = this.view.sel;
         const bar = sel?.type === "ref" || sel?.type === "anchor";
+        const card = sel?.type === "material";
         // Ctrl+S is the workflow's save, Ctrl+O its open: never a timeline edit
         const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
         const range = this.settings().mode === "cut" && sel?.type !== "ref" && sel?.type !== "anchor";
         const remove = e.key === "Delete" || e.key === "Backspace";
+        // A focused card may differ from the inspector selection after Tab. Delete that card only.
+        const focusedCard = e.target.closest(".mf-tl-card");
+        const materialId = focusedCard ? focusedCard.dataset.id : card ? sel.id : null;
+        // Pending / failed upload cards have no material id. Their controls must never delete
+        // another selected material, a bar, or the enclosing ComfyUI node.
+        if (remove && plain && focusedCard && !materialId) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
         let handled = true;
-        if (e.key === " ") this.togglePlay();
-        else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.altKey && bar) {
+        if (e.key === " " && plain) this.togglePlay();
+        else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.altKey && !e.ctrlKey && !e.metaKey && bar) {
             const step = (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 10 : 1);
             this.apply(editBar(this.data, sel.type, sel.id, "move", step, this.editContext()));
-        } else if (e.key === "ArrowLeft") this.seek(this.view.playhead - (e.shiftKey ? 10 : 1));
-        else if (e.key === "ArrowRight") this.seek(this.view.playhead + (e.shiftKey ? 10 : 1));
+        } else if (e.key === "ArrowLeft" && plain) this.seek(this.view.playhead - (e.shiftKey ? 10 : 1));
+        else if (e.key === "ArrowRight" && plain) this.seek(this.view.playhead + (e.shiftKey ? 10 : 1));
         else if ((e.key === "s" || e.key === "S") && bar && plain) this.splitSelected();
-        else if (remove && bar) this.removeSelected();
+        else if (remove && materialId && plain) this.removeMaterial(materialId);
+        else if (remove && bar && plain) this.removeSelected();
         else if (remove && range && plain && this.data.segments.length > 1) this.removeCutSegment();
         else if ((e.key === "i" || e.key === "I") && range && plain) this.markPoint("left");
         else if ((e.key === "o" || e.key === "O") && range && plain) this.markPoint("right");
@@ -2628,8 +2718,10 @@ class TimelineEditor {
     // ---------- source preview ----------
 
     seek(frame) {
-        const { fps } = this.settings();
-        this.view.playhead = Math.max(0, frame);
+        const { fps, mode, sourceFrames } = this.settings();
+        const end = mode === "cut" && sourceFrames != null
+            ? this.data.source.origin_frame + sourceFrames : this.data.segments.at(-1).end;
+        this.view.playhead = Math.max(0, Math.min(Math.round(frame), end));
         if (this.video.getAttribute("src")) {
             this.video.currentTime = Math.max(0, ((this.view.playhead - this.data.source.origin_frame) * fps[1]) / fps[0]);
         }

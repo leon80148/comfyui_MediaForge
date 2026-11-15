@@ -55,7 +55,7 @@ def h3_models():
     return out
 
 
-def validate_runtime(settings, sigmas, sampler):
+def validate_runtime(settings, sigmas, sampler, label="Sample Segments"):
     """Fail before encoding references / sampling if the recipe cannot run."""
     if settings["mode"] == "direct":
         return
@@ -64,11 +64,11 @@ def validate_runtime(settings, sigmas, sampler):
     if settings["mode"] == "selflift":
         required = ["MiniMaxH3TimelineSelfLiftSampler", "MiniMaxH3FiniteLatentContinuation"]
         if getattr(getattr(sampler, "sampler_function", None), "__name__", "") != "sample_euler":
-            raise ValueError("[Sample Segments] SelfLift 只支援標準 Euler；請選擇 euler 或改用一般二階段生成。")
+            raise ValueError(f"[{label}] SelfLift 只支援標準 Euler；請選擇 euler 或改用一般二階段生成。")
     missing = [n for n in required if n not in nodes.NODE_CLASS_MAPPINGS]
     if missing:
-        raise ValueError(f"[Sample Segments] 缺少放大節點：{', '.join(missing)}。SelfLift 需要 TimelineDirector；一般 latent 放大需要新版 ComfyUI。")
+        raise ValueError(f"[{label}] 缺少放大節點：{', '.join(missing)}。SelfLift 需要 TimelineDirector；一般 latent 放大需要新版 ComfyUI。")
     if settings["model"] not in h3_models():
-        raise ValueError("[Sample Segments] 請選擇存在且相容的 H3 latent 放大模型；LTX 模型不能用於 H3。")
+        raise ValueError(f"[{label}] 請選擇存在且相容的 H3 latent 放大模型；LTX 模型不能用於 H3。")
     if settings["mode"] in ("two_stage", "selflift") and not 1 <= settings["high_steps"] < len(sigmas) - 1:
-        raise ValueError(f"[Sample Segments] 高清步數必須介於 1 和 {len(sigmas) - 2}（小於實際 schedule 的總步數）。")
+        raise ValueError(f"[{label}] 高清步數必須介於 1 和 {len(sigmas) - 2}（小於實際 schedule 的總步數）。")
