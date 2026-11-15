@@ -6,7 +6,7 @@
 
 import { app } from "../../scripts/app.js";
 
-const INTERNAL = new Set(["MF_EncodeH3Segment", "MF_ExtendLatent", "MF_AppendSegment", "MF_PrepareH3Upscale", "MF_CopyH3Provenance"]);
+const INTERNAL = new Set(["MF_EncodeH3Segment", "MF_EncodeRemakeSegment", "MF_ExtendLatent", "MF_AppendSegment", "MF_PrepareH3Upscale", "MF_CopyH3Provenance"]);
 
 app.registerExtension({
     name: "MediaForge.InternalNodes",
