@@ -21,6 +21,7 @@ import {
 } from "./timeline_grid.js";
 import { MAX_MATERIALS, refOk, strictParse } from "./timeline_materials.js";
 import { DEFAULT_RENDER, RENDER_MODES } from "./timeline_render.js";
+import { prepareRemakeTail } from "./remake_tail.js";
 import { ASPECT_RATIOS, MP_PRESETS, UPSCALE_FACTORS, aspectValue, currentAspect, currentFactor, currentMP,
     formatMP, megapixels, renderModePatch, resizeRender, resolutionSize, scaledBase } from "./timeline_resolution.js";
 import { useSource } from "./timeline_source.js";
@@ -161,6 +162,7 @@ function serialize(data) {
         materials: data.materials,
         refs: data.refs,
         anchors: data.anchors,
+        ...(data.remake_tail_policy !== undefined ? { remake_tail_policy: data.remake_tail_policy } : {}),
         ...(data.render ? { render: data.render } : {}),
         segments: data.segments.map((s) => ({
             start: s.start, end: s.end, prompt: s.prompt,
@@ -1276,6 +1278,20 @@ class TimelineEditor {
         } });
         toggle.checked = !!r;
         rows.push(el("span", { text: "時間軸管理解析度" }), toggle);
+        if (remake) {
+            const tail = el("input", { type: "checkbox", "data-fk": "remake-tail", onchange: (e) => {
+                this.propose({ ...this.data, remake_tail_policy: e.target.checked ? "pad_trim" : "strict" });
+            } });
+            tail.checked = this.data.remake_tail_policy === "pad_trim";
+            if (tail.checked) {
+                try {
+                    const p = prepareRemakeTail(this.data, this.editContext().snapshots);
+                    rows.push(el("div", { class: "full hint", text: `尾段有效 ${p.validFrames} 幀／推論 ${p.inferenceFrames} 幀／補 ${p.paddedFrames} 幀；成片 ${p.outputEnd} 幀。` }));
+                } catch (e) { rows.push(el("div", { class: "full hint", text: e.message })); }
+            }
+            rows.push(el("span", { text: "Remake 尾段補幀並裁回來源" }), tail,
+                el("div", { class: "full hint", text: "不足一段時重複最後一幀，生成後裁回來源結尾，保留全部有效片尾。舊工作流需勾選啟用。" }));
+        }
         if (r) {
             // The form may be held while a field commits. Read the current data on each action.
             const update = (patch) => {

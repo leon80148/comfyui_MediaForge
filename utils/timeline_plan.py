@@ -160,7 +160,7 @@ def parse_timeline_data(text):
     if not isinstance(data, dict):
         _fail("必須是物件", "timeline_data", "not_object")
     v2 = data.get("version") == 2
-    _keys(data, ("version", "source", "prompt", "segments", "materials", "refs", "anchors", "render") if v2
+    _keys(data, ("version", "source", "prompt", "segments", "materials", "refs", "anchors", "render", "remake_tail_policy") if v2
           else ("version", "source", "segments"), "timeline_data")
     if _int(data.get("version", _MISSING), "version") not in (1, 2):
         _fail("只支援 version 1 / 2", "version", "unsupported_version")
@@ -195,6 +195,10 @@ def parse_timeline_data(text):
     refs = timeline_materials.parse_refs(data.get("refs", []), materials)
     anchors = timeline_materials.parse_anchors(data.get("anchors", []), materials)
     extra = {}
+    if "remake_tail_policy" in data:
+        if data["remake_tail_policy"] not in ("strict", "pad_trim"):
+            _fail("remake_tail_policy 必須是 strict 或 pad_trim", "remake_tail_policy", "bad_tail_policy")
+        extra["remake_tail_policy"] = data["remake_tail_policy"]
     if "render" in data:
         try:
             extra["render"] = parse_render(data["render"])
@@ -300,6 +304,11 @@ def compile_plan(data, mode, fps_key, grid, source=None, snapshots=None):
     if effective_grid == H3_GRID and fps != H3_FPS:
         raise TimelineError(NODE_LABEL, "E_H3_FPS", location="fps",
                             detail=timeline_materials.json_detail("fps", reason="h3_fps"))
+    output_end = None
+    if mode == "generate" and data.get("remake_tail_policy") == "pad_trim":
+        from .remake_tail import prepare_tail
+        _validate_generate(data["segments"], effective_grid)
+        data, snapshots, output_end = prepare_tail(data, snapshots or {})
     segments = data["segments"]
     origin = data["source"]["origin_frame"]
     if mode == "generate":
@@ -321,6 +330,10 @@ def compile_plan(data, mode, fps_key, grid, source=None, snapshots=None):
                 **{k: data[k] for k in ("source", "prompt", "segments", "materials", "refs", "anchors")}}
     if "render" in data and mode == "generate":
         semantic["render"] = data["render"]
+    if "remake_tail_policy" in data:
+        semantic["remake_tail_policy"] = data["remake_tail_policy"]
+    if output_end is not None:
+        semantic["output_end"] = output_end
     plan_id = _digest(canonical_json(semantic))
     material_fps = sorted([m["id"], snapshots[m["id"]]["fingerprint"]] for m in data["materials"])
     fingerprint = source["fingerprint"] if source else ""
@@ -338,6 +351,11 @@ def compile_plan(data, mode, fps_key, grid, source=None, snapshots=None):
         "segments": [{"index": i, **s} for i, s in enumerate(segments)],
         "total_frames": total, "diagnostics": diagnostics,
     }
+    if "remake_tail_policy" in data:
+        plan["remake_tail_policy"] = data["remake_tail_policy"]
+    if output_end is not None:
+        plan["output_end"] = output_end
+        plan["total_frames"] = output_end
     plan["specs"] = _build_specs(plan, data, snapshots, h3)
     if "render" in semantic:
         plan["render"] = semantic["render"]
@@ -424,6 +442,10 @@ def _build_specs(plan, data, snapshots, h3):
                       "source_start_us": source["source_start_us"], "origin_frame": source["origin_frame"],
                       "start_frame": seg["start"], "end_frame": seg["end"]}
         manifest, prompt, template = manifests[index], prompts[index], templates[index]
+        output_length = None
+        if nxt is None and "output_end" in plan:
+            output_length = plan["output_end"] - seg["start"]
+            emits[index][1] = plan["output_end"]
         spec = {
             "type": "MF_SEGMENT", "version": 2, "view": "full",
             "index": index, "is_first": index == 0, "is_last": index == count - 1,
@@ -441,6 +463,8 @@ def _build_specs(plan, data, snapshots, h3):
             # 本段寫進 latent 的鎖音 token（只有 H3 profile 會鎖 latent）
             "latent_locks": [x["tokens"] for x in manifest["locks"] if "tokens" in x],
         }
+        if output_length is not None:
+            spec["output_length"] = output_length
         encode = segment_view(spec, "encode")
         spec["encode_id"] = _digest(canonical_json({k: v for k, v in encode.items() if k not in ("type", "version", "view", "index")}))
         # 鏡頭切換（overlap_in = 0）不需要前段 latent：取樣鏈在這裡重新起算，改前鏡不必重抽後鏡
@@ -474,6 +498,8 @@ def segment_view(spec, view):
     out = {"type": "MF_SEGMENT", "version": 2, "view": view}
     for key in VIEW_FIELDS[view]:
         out[key] = _encode_materials(spec["materials"]) if (view, key) == ("encode", "materials") else spec[key]
+    if view == "assemble" and "output_length" in spec:
+        out["output_length"] = spec["output_length"]
     return out
 
 
