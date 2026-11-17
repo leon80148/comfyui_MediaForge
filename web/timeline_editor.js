@@ -1266,7 +1266,10 @@ class TimelineEditor {
         const consumers = timelineConsumers(this.node);
         const remake = consumers.some((n) => n.type === "MF_SampleRemakeSegments");
         const remakeOnly = remake && consumers.every((n) => n.type === "MF_SampleRemakeSegments");
-        const badRemakeSteps = remake && r?.mode === "two_stage" && (r.high_steps < 1 || r.high_steps > 5);
+        // Keep six-step guidance only when a Remake consumer still uses its built-in schedule.
+        const officialRemake = consumers.some((n) => n.type === "MF_SampleRemakeSegments"
+            && !n.inputs?.some((input) => input.name === "sigmas" && input.link != null));
+        const badRemakeSteps = officialRemake && r?.mode === "two_stage" && (r.high_steps < 1 || r.high_steps > 5);
         const rows = [el("div", { class: "full hint", text: r
             ? "取樣器使用此處尺寸；原本的尺寸欄位會自動收合。"
             : "沿用取樣器的尺寸。啟用後，改用此處顯示的目標尺寸。" })];
@@ -1341,7 +1344,12 @@ class TimelineEditor {
                 rows.push(el("div", { class: "full bad", text: "目前連接 Remake，無法執行 SelfLift；原設定保留，請改選生成方式。" }));
             }
             rows.push(el("span", { text: "生成方式" }), modeSelect);
-            if (badRemakeSteps) rows.push(el("div", { class: "full bad", text: "儲存的高清步數超過 Remake 支援範圍，請到進階設定調整為 1–5。" }));
+            if (remake) rows.push(el("div", { class: "full hint", text: officialRemake
+                ? "未外接 sigmas：使用官方六步排程。進階使用可在 Sample Remake Segments 接 sampler／sigmas。"
+                : "已外接 sigmas：總步數依外接排程；實際步數與高清分配會寫入取樣報告。" }));
+            if (r.mode === "two_stage") rows.push(el("div", { class: "full hint", text: "先低清取樣，放大後用剩餘步數完成高清，不額外增加總步數。可先試 1.5× 放大、高清 2 步，再比較畫質。" }));
+            if (r.mode === "latent") rows.push(el("div", { class: "full hint", text: "低清完成全部取樣後直接放大，不再高清取樣。需要更多高清細節時，改選二階段生成。" }));
+            if (badRemakeSteps) rows.push(el("div", { class: "full bad", text: "儲存的高清步數超過官方六步排程範圍，請到進階設定調整為 1–5，或外接較長排程。" }));
             const staged = ["latent", "two_stage"].includes(r.mode);
             if (staged) rows.push(el("span", { text: "放大倍率" }), this.selectSetting({ ...UPSCALE_FACTORS, custom: "自訂基礎尺寸…" }, currentFactor(r), (v) => {
                 if (v === "custom") { openAdvanced(); return; }
@@ -1353,7 +1361,7 @@ class TimelineEditor {
                 el("strong", { text: `目標 ${r.width} × ${r.height} · ${formatMP(r.width, r.height)}` }),
                 el("div", { text: r.mode === "direct" ? "直接以目標尺寸生成"
                     : `先生成 ${lowWidth} × ${lowHeight}（${formatMP(lowWidth, lowHeight)}）→ 放大至目標尺寸` }),
-                ...(remake && r.mode === "two_stage" && !badRemakeSteps ? [el("div", { text: `Remake 六步：低解析度 ${6 - r.high_steps} 步 ＋ 高清 ${r.high_steps} 步` })] : []),
+                ...(officialRemake && r.mode === "two_stage" && !badRemakeSteps ? [el("div", { text: `Remake 六步：低解析度 ${6 - r.high_steps} 步 ＋ 高清 ${r.high_steps} 步` })] : []),
                 el("div", { class: "hint", text: `1 MP＝100 萬畫素；比例與 MP 依 ${grid} 倍數對齊，以上為實際尺寸。` }),
             ]));
             if (r.mode !== "direct") {
@@ -1371,8 +1379,8 @@ class TimelineEditor {
             const advanced = [el("div", { class: "full hint", text: "可直接指定精確寬高；修改目標時會同步調整基礎尺寸。載入舊工作流會保留原值。" })];
             const numeric = (key, label, min = 32, max = 8192, step = 32) => advanced.push(el("span", { text: label }),
                 this.number(r[key], (v) => {
-                    if (remake && key === "high_steps" && (!Number.isInteger(v) || v < 1 || v > 5)) {
-                        this.notice = "Remake 高清步數需介於 1–5；總步數固定為 6。";
+                    if (officialRemake && key === "high_steps" && (!Number.isInteger(v) || v < 1 || v > 5)) {
+                        this.notice = "Remake 官方排程共 6 步，高清步數需介於 1–5。";
                         this.render();
                         return;
                     }
@@ -1382,8 +1390,8 @@ class TimelineEditor {
             numeric("width", "目標寬度", grid, 8192, grid); numeric("height", "目標高度", grid, 8192, grid);
             if (staged) { numeric("base_width", "基礎寬度"); numeric("base_height", "基礎高度"); }
             if (["two_stage", "selflift"].includes(r.mode)) {
-                numeric("high_steps", "高清取樣步數", 1, remake ? 5 : 10000, 1);
-                advanced.push(el("div", { class: "full hint", text: remake ? "Remake 固定 6 步，高清可選 1–5 步。" : `最後 ${r.high_steps} 步高清取樣；需少於 schedule 總步數。` }));
+                numeric("high_steps", "高清取樣步數", 1, officialRemake ? 5 : 10000, 1);
+                advanced.push(el("div", { class: "full hint", text: officialRemake ? "官方排程共 6 步，高清預設 2 步（低清 4＋高清 2）。" : `最後 ${r.high_steps} 步高清取樣；需少於外接排程總步數，執行前會檢查。` }));
             }
             if (!remakeOnly) numeric("ref_video_short_edge", "參考影片短邊上限（0＝自動）", 0, 4096);
             if (remake) advanced.push(el("div", { class: "full hint", text: "Remake 來源會填滿畫布並置中裁切；不使用參考影片短邊上限。" }));

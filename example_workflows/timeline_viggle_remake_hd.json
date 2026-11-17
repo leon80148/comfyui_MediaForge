@@ -1,0 +1,683 @@
+{
+  "id": "e2fe5cb1-1e63-4d14-96b1-78ec89bace3d",
+  "revision": 0,
+  "last_node_id": 13,
+  "last_link_id": 7,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        320,
+        82
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "unet_name",
+          "name": "unet_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "unet_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "weight_dtype",
+          "name": "weight_dtype",
+          "type": "COMBO",
+          "widget": {
+            "name": "weight_dtype"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "模型",
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_FL2VA_BASE.safetensors",
+        "default"
+      ],
+      "widgets_values_named": {
+        "unet_name": "SELECT_MINIMAX_H3_FL2VA_UNET.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    {
+      "id": 2,
+      "type": "LoraLoaderBypassModelOnly",
+      "pos": [
+        0,
+        160
+      ],
+      "size": [
+        320,
+        82
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "model",
+          "name": "model",
+          "type": "MODEL",
+          "link": 1
+        },
+        {
+          "localized_name": "lora_name",
+          "name": "lora_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "lora_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "strength_model",
+          "name": "strength_model",
+          "type": "FLOAT",
+          "widget": {
+            "name": "strength_model"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "模型",
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoraLoaderBypassModelOnly"
+      },
+      "widgets_values": [
+        "viggle_remake_swap_comfyui.safetensors",
+        1.0
+      ],
+      "widgets_values_named": {
+        "lora_name": "SELECT_MINIMAX_H3_TURBO_LORA.safetensors",
+        "strength_model": 1
+      }
+    },
+    {
+      "id": 3,
+      "type": "CLIPLoader",
+      "pos": [
+        0,
+        370
+      ],
+      "size": [
+        320,
+        106
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "clip_name",
+          "name": "clip_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "clip_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "type",
+          "name": "type",
+          "type": "COMBO",
+          "widget": {
+            "name": "type"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "device",
+          "name": "device",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "device"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "CLIP",
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_QWEN3VL_TEXT_ENCODER.safetensors",
+        "minimax",
+        "default"
+      ],
+      "widgets_values_named": {
+        "clip_name": "SELECT_MINIMAX_H3_QWEN3VL_TEXT_ENCODER.safetensors",
+        "type": "minimax",
+        "device": "default"
+      }
+    },
+    {
+      "id": 4,
+      "type": "VAELoader",
+      "pos": [
+        0,
+        540
+      ],
+      "size": [
+        320,
+        58
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "vae_name",
+          "name": "vae_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "vae_name"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "VAE",
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            4
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_VIDEO_VAE.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "SELECT_MINIMAX_H3_VIDEO_VAE.safetensors"
+      }
+    },
+    {
+      "id": 5,
+      "type": "VAELoader",
+      "pos": [
+        0,
+        680
+      ],
+      "size": [
+        320,
+        58
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "vae_name",
+          "name": "vae_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "vae_name"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "VAE",
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            5
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "SELECT_MINIMAX_H3_AUDIO_VAE.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "SELECT_MINIMAX_H3_AUDIO_VAE.safetensors"
+      }
+    },
+    {
+      "id": 10,
+      "type": "MF_EditTimeline",
+      "pos": [
+        430,
+        0
+      ],
+      "size": [
+        760,
+        900
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "video",
+          "name": "video",
+          "type": "COMBO",
+          "widget": {
+            "name": "video"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "fps",
+          "name": "fps",
+          "type": "COMBO",
+          "widget": {
+            "name": "fps"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "grid",
+          "name": "grid",
+          "type": "COMBO",
+          "widget": {
+            "name": "grid"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mode",
+          "name": "mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "timeline_data",
+          "name": "timeline_data",
+          "type": "STRING",
+          "widget": {
+            "name": "timeline_data"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "segment_plan",
+          "name": "segment_plan",
+          "type": "MF_SEGMENT_PLAN",
+          "links": [
+            6
+          ]
+        },
+        {
+          "localized_name": "ranges",
+          "name": "ranges",
+          "type": "SILENCE_RANGES",
+          "links": null
+        },
+        {
+          "localized_name": "plan_json",
+          "name": "plan_json",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "localized_name": "segment_count",
+          "name": "segment_count",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "localized_name": "total_frames",
+          "name": "total_frames",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "localized_name": "video_path",
+          "name": "video_path",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_EditTimeline"
+      },
+      "widgets_values": [
+        "(none)",
+        "24",
+        "h3_5+17n",
+        "generate",
+        "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"prompt\": \"subject_definitions:\\n<Subject 1> is the pineapple mascot shown in <@target>. The mascot has the same clothing, face and proportions as the painted reference.\\nsummary:\\n<Subject 1> performs the dough-tossing action from <@source>, with the source camera and timing.\\nretention_analysis:\\nThe original performer becomes <Subject 1>. Preserve the kitchen, props, camera movement, framing and timing from <@source>.\\ndetailed_description:\\n[Shot 1] 00:00.000–00:05.167: <Subject 1> follows the original performer's movements. The hands interact naturally with the dough. The background remains stable.\\noverall_soundscape:\\nThe source soundtrack continues with its original timing.\\nnon_diegetic_music:\\nPreserve any music in the source soundtrack.\", \"materials\": [{\"id\": \"source\", \"kind\": \"video\", \"name\": \"source\", \"ref\": \"remake_swap_source.mp4\"}, {\"id\": \"target\", \"kind\": \"image\", \"name\": \"target\", \"ref\": \"remake_swap_ref1.png\"}], \"refs\": [{\"id\": \"source_ref\", \"material\": \"source\", \"from\": 0, \"to\": 124, \"mode\": \"follow\", \"in\": 0, \"audio\": false}, {\"id\": \"target_ref\", \"material\": \"target\", \"from\": 0, \"to\": 124}], \"anchors\": [], \"segments\": [{\"start\": 0, \"end\": 124}], \"render\": {\"mode\": \"two_stage\", \"width\": 1920, \"height\": 1088, \"base_width\": 1280, \"base_height\": 736, \"model\": \"\", \"high_steps\": 2, \"ref_video_short_edge\": 0}, \"remake_tail_policy\": \"pad_trim\"}"
+      ],
+      "widgets_values_named": {
+        "video": "(none)",
+        "fps": "24",
+        "grid": "h3_5+17n",
+        "mode": "generate",
+        "timeline_data": "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"prompt\": \"subject_definitions:\\n<Subject 1> is the pineapple mascot shown in <@target>. The mascot has the same clothing, face and proportions as the painted reference.\\nsummary:\\n<Subject 1> performs the dough-tossing action from <@source>, with the source camera and timing.\\nretention_analysis:\\nThe original performer becomes <Subject 1>. Preserve the kitchen, props, camera movement, framing and timing from <@source>.\\ndetailed_description:\\n[Shot 1] 00:00.000–00:05.167: <Subject 1> follows the original performer's movements. The hands interact naturally with the dough. The background remains stable.\\noverall_soundscape:\\nThe source soundtrack continues with its original timing.\\nnon_diegetic_music:\\nPreserve any music in the source soundtrack.\", \"materials\": [{\"id\": \"source\", \"kind\": \"video\", \"name\": \"source\", \"ref\": \"remake_swap_source.mp4\"}, {\"id\": \"target\", \"kind\": \"image\", \"name\": \"target\", \"ref\": \"remake_swap_ref1.png\"}], \"refs\": [{\"id\": \"source_ref\", \"material\": \"source\", \"from\": 0, \"to\": 124, \"mode\": \"follow\", \"in\": 0, \"audio\": false}, {\"id\": \"target_ref\", \"material\": \"target\", \"from\": 0, \"to\": 124}], \"anchors\": [], \"segments\": [{\"start\": 0, \"end\": 124}], \"render\": {\"mode\": \"two_stage\", \"width\": 1920, \"height\": 1088, \"base_width\": 1280, \"base_height\": 736, \"model\": \"\", \"high_steps\": 2, \"ref_video_short_edge\": 0}, \"remake_tail_policy\": \"pad_trim\"}"
+      },
+      "title": "Edit Timeline · 1080p 二階段（先選 H3 放大模型）"
+    },
+    {
+      "id": 11,
+      "type": "MF_SampleRemakeSegments",
+      "pos": [
+        1460,
+        0
+      ],
+      "size": [
+        360,
+        310
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 2
+        },
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 3
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 4
+        },
+        {
+          "name": "audio_vae",
+          "type": "VAE",
+          "link": 5
+        },
+        {
+          "name": "segment_plan",
+          "type": "MF_SEGMENT_PLAN",
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "state",
+          "name": "state",
+          "type": "MF_SEGMENT_STATE",
+          "links": [
+            7
+          ]
+        },
+        {
+          "localized_name": "report",
+          "name": "report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_SampleRemakeSegments"
+      },
+      "widgets_values": [
+        "swap",
+        0,
+        "fixed",
+        480,
+        true,
+        0.9
+      ],
+      "widgets_values_named": {
+        "noise_seed": 42,
+        "control_after_generate": "fixed",
+        "width": 832,
+        "height": 480,
+        "mask": "hard",
+        "carry_audio": true,
+        "cfg": 1.0,
+        "ref_image_size": "match",
+        "ref_video_short_edge": 0,
+        "video_taper_tokens": 2,
+        "audio_taper_tokens": 2,
+        "on_conflict": "error"
+      },
+      "title": "🎭 Sample Remake Segments"
+    },
+    {
+      "id": 12,
+      "type": "MF_AssembleSegments",
+      "pos": [
+        1910,
+        0
+      ],
+      "size": [
+        320,
+        174
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "state",
+          "name": "state",
+          "type": "MF_SEGMENT_STATE",
+          "link": 7
+        },
+        {
+          "localized_name": "audio",
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "localized_name": "filename_prefix",
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": {
+            "name": "filename_prefix"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "codec",
+          "name": "codec",
+          "type": "COMBO",
+          "widget": {
+            "name": "codec"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "crf",
+          "name": "crf",
+          "type": "INT",
+          "widget": {
+            "name": "crf"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "preset",
+          "name": "preset",
+          "type": "COMBO",
+          "widget": {
+            "name": "preset"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "lock_audio",
+          "name": "lock_audio",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "lock_audio"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "final_video_path",
+          "name": "final_video_path",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "localized_name": "report",
+          "name": "report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MF_AssembleSegments"
+      },
+      "widgets_values": [
+        "MediaForge/timeline_viggle_remake",
+        "h264 (libx264)",
+        18,
+        "medium",
+        "generated"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "MediaForge/timeline_h3_basic",
+        "codec": "h264 (libx264)",
+        "crf": 18,
+        "preset": "medium",
+        "lock_audio": "original"
+      }
+    },
+    {
+      "id": 13,
+      "type": "MarkdownNote",
+      "pos": [
+        1460,
+        400
+      ],
+      "size": [
+        700,
+        640
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## Viggle Remake · 三顆主節點\n\nEdit Timeline → Sample Remake Segments → Assemble Segments\n\n1. 選擇 fl2va 基底、Viggle swap LoRA、H3 Qwen3VL 與兩個 VAE。\n   使用 Load LoRA (Bypass, Model Only)；不要再加 turbo LoRA。\n2. 在時間軸素材庫把 source 換成來源影片、target 換成改繪後的參考圖，修改六段式 prompt。\n   此範本使用官方範例檔名 remake_swap_source.mp4 / remake_swap_ref1.png；需自行準備或更換。\n3. 執行前先用單段 124 幀、short_edge=480。來源會以 24 fps 解碼。\n\n若用已合併的 Remake int8 / GGUF，移除 LoRA loader，直接接 model；mode 必須對應模型。\n要用 edit LoRA，改 LoRA 與 mode=edit 即可，六步 sigmas 自動切換。\n圖片需同時用作該段參考；要 pin 就替每張參考圖各設一個關鍵幀，或全部不設。\n目前支援 90–345 幀且為 17n+5、1 支完整覆蓋的參考影片、1–4 張圖、圖片關鍵幀。\n段內時間戳需從 00:00 開始。原音經 audio VAE 重建；長片沿用 MediaForge 的 video latent 續接。\n本範本未經完整 GPU 生成驗收；不保證與官方逐像素相同或接縫無痕。詳見 timeline_viggle_remake.md。\n"
+      ],
+      "widgets_values_named": {
+        "text": "## MediaForge Timeline — MiniMax H3 long clip (text only)\n\n1. Pick your H3 models in the loaders: fl2va UNet (+ optional turbo LoRA), the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE.\n2. Edit the segments in **⏱️ Edit Timeline** (drag the edges; lengths and overlaps stay on the H3 5+17n grid, 24 fps). Each segment has its own prompt.\n3. Queue. 🎛️ Sample Segments generates one segment at a time, carrying the previous tail (video + audio) into the next; 🧵 Assemble Segments writes one MP4.\n\nDefault plan: 3 × 107 frames, overlaps 22 / 39 → **260 frames**, 346,667 samples at 32 kHz. Batch 1 only. Seams are not guaranteed to be invisible. To use reference images / videos / audio, open `timeline_h3_director.json`.\n\n---\n1. 在載入器選好 H3 模型：fl2va UNet（可加 turbo LoRA）、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。\n2. 在 **⏱️ Edit Timeline** 編輯分段（拖邊界；段長與重疊落在 H3 的 5+17n 格點、24 fps）；每段有自己的 prompt。\n3. 執行。🎛️ Sample Segments 一次生成一段，把上一段尾端（影像 + 音訊）續接進下一段；🧵 Assemble Segments 輸出一個 MP4。\n\n預設計畫：3 × 107 幀、重疊 22 / 39 → **260 幀**、32 kHz 共 346,667 samples。只支援 batch 1；不保證接縫無痕。要用參考圖片／影片／音訊，請開 `timeline_h3_director.json`。"
+      },
+      "color": "#432",
+      "bgcolor": "#653"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "MODEL"
+    ],
+    [
+      2,
+      2,
+      0,
+      11,
+      0,
+      "MODEL"
+    ],
+    [
+      3,
+      3,
+      0,
+      11,
+      1,
+      "CLIP"
+    ],
+    [
+      4,
+      4,
+      0,
+      11,
+      2,
+      "VAE"
+    ],
+    [
+      5,
+      5,
+      0,
+      11,
+      3,
+      "VAE"
+    ],
+    [
+      6,
+      10,
+      0,
+      11,
+      4,
+      "MF_SEGMENT_PLAN"
+    ],
+    [
+      7,
+      11,
+      0,
+      12,
+      0,
+      "MF_SEGMENT_STATE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
