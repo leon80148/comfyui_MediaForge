@@ -5,6 +5,7 @@ import re
 from .timeline_media import (_check_decode, decode_video_window, load_audio_slice, load_image,
                              material_origin, material_path, scale_filter)
 from .timeline_plan import H3_FPS, H3_GRID, require_segment
+from .timeline_materials import audio_sample_count
 from .video_io import _check_decode_ram
 
 LABEL = "Sample Remake Segments"
@@ -98,16 +99,27 @@ def encode_remake(segment, clip, vae, audio_vae, short_edge, keep_source_audio, 
     snap = source["snapshot"]
     # Resample on the source's absolute 24 fps clock before selecting a window. Seeking and then restarting
     # an fps filter for each segment can shift non-24-fps / VFR footage at the seams.
-    frames = decode_video_window(material_path(source, LABEL), source["source_start"], segment["length"], H3_FPS,
+    valid = min(segment["length"], snap.get("remake_valid_frames", source["source_start"] + segment["length"]) - source["source_start"])
+    if valid <= 0:
+        raise ValueError(f"[{LABEL}] 來源沒有可用畫面。")
+    frames = decode_video_window(material_path(source, LABEL), source["source_start"], valid, H3_FPS,
                                  material_origin(snap, "source_start_us"), (width, height),
                                  [scale_filter("fill", width, height)], snap["video_ordinal"], LABEL)
-    if frames.shape[0] != segment["length"]:
-        raise ValueError(f"[{LABEL}] 第 {segment['index'] + 1} 段來源影片不足 {segment['length']} 幀。")
+    if frames.shape[0] != valid:
+        raise ValueError(f"[{LABEL}] 第 {segment['index'] + 1} 段來源影片不足 {valid} 幀。")
+    if valid < segment["length"]:
+        import torch
+        frames = torch.cat((frames, frames[-1:].expand(segment["length"] - valid, -1, -1, -1)), dim=0)
     audio = None
     if keep_source_audio and source["snapshot"].get("has_audio"):
         # Keep all PCM samples here: RemakeConditioning pads the end to the audio VAE's 800-sample grid itself.
-        audio = load_audio_slice(source, source["source_start"], segment["length"], H3_FPS, LABEL,
+        audio = load_audio_slice(source, source["source_start"], valid, H3_FPS, LABEL,
                                  sample_rate=32000, multiple=1, origin_key="source_start_us")
+        if valid < segment["length"]:
+            import torch.nn.functional as F
+            keep = audio_sample_count(source["source_start"], valid, 32000, H3_FPS)
+            total = audio_sample_count(source["source_start"], segment["length"], 32000, H3_FPS)
+            audio = {**audio, "waveform": F.pad(audio["waveform"][..., :keep], (0, total - keep))}
     refs = {f"ref_{i + 1}": load_image(p, LABEL) for i, p in enumerate(segment["materials"]["pictures"])}
     fn = getattr(cls(), cls.FUNCTION)
     return fn(clip=clip, vae=vae, audio_vae=audio_vae, source=frames, prompt=segment["prompt"],

@@ -1,3 +1,4 @@
+import { prepareRemakeTail } from "./remake_tail.js";
 // MediaForge timeline v2 edit commands — pure functions used by the timeline editor.
 //
 // Every command takes the canonical v2 timeline (version / source / prompt / materials / refs /
@@ -99,8 +100,12 @@ function covers(data, snaps) {
 // positions or by problems that were already there.
 function geometryProblems(data, ctx) {
     const verified = verifiedSnapshots(data, ctx.snapshots);
-    const snaps = Object.fromEntries(data.materials.map((m) => [m.id,
+    let snaps = Object.fromEntries(data.materials.map((m) => [m.id,
         verified[m.id] ?? { id: m.id, kind: m.kind, frames: Infinity, has_audio: true }]));
+    if (data.remake_tail_policy === "pad_trim" && covers(data, verified)) {
+        try { ({ data, snapshots: snaps } = prepareRemakeTail(data, snaps)); }
+        catch (e) { return [{ key: "remake-tail", stage: "geometry", error: { code: "E_REMAKE_TAIL", reason: e.message } }]; }
+    }
     const segs = data.segments;
     const out = [];
     const add = (key, error, frame) => out.push({ key, stage: "geometry", error, segment: segmentAt(segs, frame) });
@@ -157,8 +162,13 @@ function manifestFor(data, index, snaps, ctx) {
 // prompt = resolvePrompt()'s result, {ok: false, error} for a manifest error, or null while a
 // material some segment uses has no verified snapshot.
 export function segmentInputs(data, index, ctx) {
-    const snaps = verifiedSnapshots(data, ctx.snapshots);
+    let snaps = verifiedSnapshots(data, ctx.snapshots);
     if (!covers(data, snaps)) return null;
+    if (ctx.mode === "generate" && data.remake_tail_policy === "pad_trim") {
+        try { ({ data, snapshots: snaps } = prepareRemakeTail(data, snaps)); }
+        catch (e) { return { ok: false, error: { code: "E_REMAKE_TAIL", reason: e.message } }; }
+        if (!data.segments[index]) return null;
+    }
     const r = manifestFor(data, index, snaps, ctx);
     if (!r.ok) return r;
     const template = templateOf(data, index);

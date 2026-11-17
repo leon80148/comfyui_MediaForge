@@ -11,6 +11,7 @@ import {
     resolvePrompt, segmentManifest, validateGeometry,
 } from "./timeline_materials.js";
 import { DEFAULT_RENDER, renderOk } from "./timeline_render.js";
+import { prepareRemakeTail } from "./remake_tail.js";
 
 export const FPS_PRESETS = {
     "16": [16, 1], "24": [24, 1], "25": [25, 1], "30": [30, 1],
@@ -98,6 +99,7 @@ export function canonicalize(data) {
         materials: materials.materials,
         refs: refs.refs,
         anchors: anchors.anchors,
+        ...(data.remake_tail_policy !== undefined ? { remake_tail_policy: data.remake_tail_policy } : {}),
         ...(data.render !== undefined ? { render: { ...DEFAULT_RENDER, ...data.render } } : {}),
     };
 }
@@ -140,9 +142,10 @@ export function schemaErrorDetail(data) {
     const at = (location, reason) => ({ code: "E_TIMELINE_JSON", location, ...jsonErrorDetail(location, null, reason) });
     // Python picks the key set with `version == 2`, which 2.0 satisfies too
     const v2 = data?.version === 2 || (data?.version instanceof FloatToken && Number(data.version.text) === 2);
-    let why = objectReason(data, v2 ? ["version", "source", "prompt", "segments", "materials", "refs", "anchors", "render"]
+    let why = objectReason(data, v2 ? ["version", "source", "prompt", "segments", "materials", "refs", "anchors", "render", "remake_tail_policy"]
         : ["version", "source", "segments"]);
     if (why) return at("timeline_data", why);
+    if (data.remake_tail_policy !== undefined && !["strict", "pad_trim"].includes(data.remake_tail_policy)) return at("remake_tail_policy", "bad_tail_policy");
     why = intReason(data.version, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)
         ?? (data.version === 1 || data.version === 2 ? null : "unsupported_version");
     if (why) return at("version", why);
@@ -301,6 +304,10 @@ export function segmentSpecs(segs, mode, grid) {
 // segment's prompt — so the first error is the one Python reports. Call it on data that passed validate();
 // snapshots are keyed by material id. Cut mode keeps manifests empty and prompts unresolved, as Python does.
 export function resolveSegments(data, mode, grid, snapshots) {
+    if (mode === "generate" && data.remake_tail_policy === "pad_trim") {
+        try { ({ data, snapshots } = prepareRemakeTail(data, snapshots)); }
+        catch (e) { return { ok: false, error: { code: "E_REMAKE_TAIL", reason: e.message } }; }
+    }
     const segs = data.segments;
     const generate = mode === "generate";
     const h3 = generate && grid === H3_GRID;

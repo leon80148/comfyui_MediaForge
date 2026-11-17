@@ -110,6 +110,12 @@ class MF_AppendSegment:
             raise TimelineError(LABEL, "E_LOCK_DRIFT", reason=f"取樣後最大差 {locked:.3g}")
         images = _decode_video(vae, latent, segment)
         wave = _decode_audio(audio_vae, latent) if audio_vae is not None else None
+        if "output_length" in segment:
+            valid = segment["output_length"]
+            if not segment["is_last"] or not segment["overlap_in"] < valid <= segment["length"]:
+                raise ValueError(f"[{LABEL}] 尾段有效長度不合法。")
+            images = images[:valid]
+            segment = {**segment, "length": valid, "end": segment["start"] + valid}
         new_state = segment_spill.append_segment(
             state, segment, images, wave,
             curve=_audio_curve(segment["seam_in"], audio_vae is not None, provenance, marker),

@@ -128,7 +128,11 @@ class MF_SampleRemakeSegments:
                   "width": width, "height": height, "keyframe_until": keyframe_until,
                   "audio": "source_reconstructed_by_vae" if keep_source_audio else "silence",
                   "continuation": "mediaforge_hard_video_latent_carry", "audio_carry": False,
+                  "tail_policy": segment_plan.get("remake_tail_policy", "strict"),
+                  "total_frames": segment_plan["total_frames"],
                   "segments": [{"index": s["index"], "frames": s["length"], "pins": pins[i],
+                                "output_frames": s.get("output_length", s["length"]),
+                                "padded_frames": s["length"] - s.get("output_length", s["length"]),
                                 "seed": s["seed"] if s["seed"] is not None else noise_seed}
                                for i, s in enumerate(specs)]}
         if recipe:
