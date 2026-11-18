@@ -120,8 +120,10 @@ function applyResolution(node) {
     if (render && !node.mfResolutionHint && node.addDOMWidget) {
         const element = document.createElement("div");
         element.style.cssText = "font:12px sans-serif;color:var(--fg-color,#ddd);padding:2px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+        // margin: the classic renderer takes it off the row above and below (10 px by default), which left this
+        // 22 px row 2–14 px for a line that needs about 21. Nodes 2.0 does not use it.
         const widget = node.addDOMWidget("timeline_resolution_source", "mf_resolution_source", element, {
-            serialize: false, hideOnZoom: false, getMinHeight: () => 22, getHeight: () => 22,
+            serialize: false, hideOnZoom: false, margin: 0, getMinHeight: () => 22, getHeight: () => 22,
         });
         widget.serialize = false;
         node.mfResolutionHint = { widget, element };

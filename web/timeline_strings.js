@@ -90,6 +90,11 @@ export const S = {
     hintAudio: "拖音檔到這裡，設定要保留原音的範圍",
     barLabel: (n, seconds) => `第 ${n} 段 · ${seconds.toFixed(2)} 秒`,
     barTitle: (n, from, to, overlapSeconds) => `第 ${n} 段：${from.toFixed(2)}–${to.toFixed(2)} 秒${overlapSeconds ? `；前 ${overlapSeconds.toFixed(2)} 秒和前一段重疊` : ""}`,
+    // Remake tail padding plans only the windows its source reference still reaches: the bar ends first, or the video does
+    tailDropped: (short) => (short
+        ? "來源影片的參考長條沒有涵蓋到這段：尾段補幀開啟時不會生成，也不會出現在成片。要生成它，把參考長條拉長到這段（來源影片要夠長）"
+        : "這段超出來源影片的結尾：尾段補幀開啟時不會生成，也不會出現在成片"),
+    tailDroppedBar: "不生成",
 
     // segment form
     segment: (n) => `第 ${n} 段`,
@@ -111,6 +116,7 @@ export const S = {
     chipInsert: (name) => `插入 <@${name}> 到這段的 prompt`,
     chipAdd: (name) => `把 ${name} 加入這段的參考，並在 prompt 插入 <@${name}>`,
     chipsBlocked: "素材資訊還沒確認，暫時不能用這些按鈕",
+    chipsDropped: (n) => `第 ${n} 段不會生成（尾段補幀），所以這些按鈕暫時不能用；選取那一段可以看到原因`,
     sharedChipInsert: (name) => `插入 <@${name}> 到共用 prompt`,
     sharedChipAdd: (name, segs) => `把 ${name} 加入第 ${segs.join("、")} 段的參考，並在共用 prompt 插入 <@${name}>`,
     // the @ material list of the prompt boxes
@@ -121,6 +127,9 @@ export const S = {
         sharedAll: (n) => `✓ ${n} 段都有`,
         sharedNone: "目前沒有段落使用共用 prompt",
         sharedAdd: (segs) => `＋ 會補上第 ${segs.join("、")} 段的參考`,
+        // short: this column does not wrap. The row's tooltip carries the full reason
+        dropped: "這段不會生成（尾段補幀）",
+        sharedDropped: (n) => `第 ${n} 段不會生成（尾段補幀）`,
         hint: "↑↓ 選擇 · Enter / Tab 插入 · Esc 關閉",
     },
     lengthLabel: "長度",
@@ -132,8 +141,8 @@ export const S = {
     curves: { auto: "自動", linear: "線性", equal_power: "等功率" },
     advanced: "進階設定",
     seed: "seed（隨機種子）",
-    seedAuto: "自動（用 Sample Segments 的 noise_seed）",
-    seedNote: "只有 🎛️ Sample Segments 會用這個 seed",
+    seedAuto: "自動（用取樣節點的 noise_seed）",
+    seedNote: "🎛️ Sample Segments 與 🎭 Sample Remake Segments 會用這個 seed",
     reroll: "換一個",
     shotCut: "從這段開始新鏡頭",
     shotContinue: "接續前一段",
@@ -275,7 +284,7 @@ export const S = {
     conformed: (from, to) => `已調整段長與重疊，總長 ${from.toFixed(2)} 秒 → ${to.toFixed(2)} 秒`,
     fadeShortened: (list) => `第 ${list.join("、")} 段的交叉淡化已縮短或改回直接切換`,
     next: {
-        h3: "下一步：把 segment_plan 接到 🎛️ Sample Segments",
+        h3: "下一步：把 segment_plan 接到 🎛️ Sample Segments（Viggle Remake 接 🎭 Sample Remake Segments）",
         cut: "下一步：把 ranges 與 video_path 接到 ✂️ Trim by Ranges（mode 選 keep），後面再接一顆輸出節點（例如 PreviewAny）",
     },
     jsonBroken: "timeline_data 內容有誤，圖形編輯已暫停。請在下方文字框修正，修好會自動恢復",

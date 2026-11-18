@@ -175,6 +175,24 @@ export function segmentInputs(data, index, ctx) {
     return { ok: true, manifest: r.manifest, template, prompt: resolvePrompt(template, r.manifest, data.materials, index, ctx.h3) };
 }
 
+// What the tail plan leaves out. Python drops the windows past the follow reference's last source frame
+// (remake_tail.py), and segmentInputs() answers null for them just as it does for unverified materials; this tells
+// the two apart. `kept`: how many leading segments are planned. `short`: the reference bar stops before its video
+// does, so lengthening the bar brings the dropped windows back. null while tail padding is off, the materials are
+// not verified, or no plan can be made (the status line reports that case).
+export function tailPlan(data, ctx) {
+    if (ctx.mode !== "generate" || data.remake_tail_policy !== "pad_trim") return null;
+    const snaps = verifiedSnapshots(data, ctx.snapshots);
+    if (!covers(data, snaps)) return null;
+    try {
+        const kept = prepareRemakeTail(data, snaps).data.segments.length;
+        const ref = data.refs.find((r) => snaps[r.material].kind === "video");
+        return { kept, short: ref.to < snaps[ref.material].frames - ref.in };
+    } catch {
+        return null;
+    }
+}
+
 // What the status line reports, in Python's order (§4.2): structure → segment chain → geometry
 // (refs → anchors → occupancy, every problem) → then resolveSegments(), the shared mirror of
 // compile_plan's material pass (all manifests, then all prompts; first error). `verified` is false

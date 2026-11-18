@@ -312,14 +312,14 @@ API 使用者可在 v2 `timeline_data` 加入可選的 `render`：
 - **標籤按鈕**（只限 H3 grid）—— `✓ 名稱`：已是本段參考，點一下插入 `<@名稱>`。`＋ 名稱`：點一下同時建立本段參考並插入標籤，一個 undo 步驟。標籤插在這個 prompt 框上次失去焦點時的游標位置；框沒用過就接在最後，prompt 已有該標籤時只補參考。共用 prompt 下方也有一排，狀態與行為和它的 `@` 清單相同。無法使用時停用，並在提示文字說明原因（同素材多條參考、該類已達上限、素材未讀取完成）。只想加參考不插標籤時，把卡片拖到軌道。
 - **Prompt** —— 共用 prompt 給沒寫 prompt 的段使用；段落有自己的 prompt 就取代它、不會合併。表單持續顯示目前是哪一種，並可 `清空，改用共用 prompt`。用按鈕插入標籤而本段空白時，會先把共用文字複製到本段並說明；在空白段落框打 `@` 則開始自己的 prompt，不複製共用文字。只補共用 prompt 已有標籤的參考時，繼續使用共用 prompt。影片參考的配對音軌寫 `<@名稱:audio>`。每段把別名解析成自己的 `<Picture N>` / `<Video N>` / `<Audio N>` 標籤（只限 H3 grid）。直接手寫的編號標籤仍可用，但參考順序改變時意義會跟著變；對應明確時可按「轉成 <@名稱>」改寫成別名，新增參考前也會先做這個轉換，轉不了就拒絕並說明。
 - **這段送給模型的內容** —— 收合時一行摘要（例如 `1 張圖、1 支影片、保留原音 3.96 秒`）。展開後每段在所有素材讀取完成時顯示：標籤對照表、每支參考影片實際使用的秒數與幀數（以及未使用多少）、關鍵畫面與引導片段的時間、保留原音的範圍、解析後的 prompt，以及 H3 技術細節（token 範圍以 `[起點, 終點)` 表示、覆蓋圖、接續邊界偏差）。錯誤與「保留原音和接續前段的聲音重疊」的警告不會隨收合隱藏。
-- **Seed** —— 每段可選的 seed，附「換一個」；空白 = 使用 Sample Segments 的 `noise_seed`。只有 Sample Segments 會套用。
+- **Seed** —— 每段可選的 seed，附「換一個」；空白 = 使用取樣節點的 `noise_seed`。Sample Segments 與 Sample Remake Segments 會套用。
 - **鏡頭切換 / 接續** —— 「從這段開始新鏡頭」把該段與前段的重疊設為 0、銜接改為直接切換，生成時不接續前段；本段與後續各段及屬於它們的參考與指定一起平移，跨過舊段界的項目會被標示。「接續前一段」恢復預設重疊（22 幀；段太短時取放得下的最大值）。各是一個 undo 步驟。
 
 狀態列：
 
 - 第一行是持續狀態。`✓ 時間軸檢查通過` 只代表時間軸本身（結構、分段、素材位置、每段的 prompt 與上限），不檢查下游接線或模型。有問題時顯示白話的對象與原因，點一下定位，`詳情` 內有原始位置與代碼。
 - 少數問題附修復按鈕：長度或重疊不符（例如手改的 JSON）→ `調整段長與重疊`（依序只修不合法的值，後面的段會跟著移，交叉淡化放不下時縮短，不是整體最佳化）；generate 的 fps 不是 24 → `改成 24 fps`；cut 缺來源 → `上傳來源影片`；cut 帶素材 → 見上。一個 undo 步驟，並說明總長變化。
-- 第二行是這次操作的通知：哪幾段送給模型的內容變了；參考換了段或編號標籤改指別的素材時會明確點名，因為這些變更全部合法、檢查仍會通過。狀態正常且本節點輸出還沒接線時，提示下一步（generate → 🎛️ Sample Segments；cut → 把 ranges 與 video_path 接到 ✂️ Trim by Ranges）。
+- 第二行是這次操作的通知：哪幾段送給模型的內容變了；參考換了段或編號標籤改指別的素材時會明確點名，因為這些變更全部合法、檢查仍會通過。狀態正常且本節點輸出還沒接線時，提示下一步（generate → 🎛️ Sample Segments，Viggle Remake 則是 🎭 Sample Remake Segments；cut → 把 ranges 與 video_path 接到 ✂️ Trim by Ranges）。
 
 一般：
 
@@ -481,7 +481,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 | `segments` | 1–256 段 |
 | `segments[].start` / `end` | 整數幀，`end` 不包含；`generate`：段長 5 + 17n、重疊 0 或 5 + 17j；`cut`：落在來源範圍內、不重疊 |
 | `segments[].prompt` | 字串，預設空 |
-| `segments[].seed` | 選填，`null` 或 0 … 2⁵³ − 1；只有 Sample Segments 會套用 |
+| `segments[].seed` | 選填，`null` 或 0 … 2⁵³ − 1；Sample Segments 與 Sample Remake Segments 會套用 |
 | `segments[].seam_in.kind` | `cut` / `crossfade`；`crossfade` 需合法的 `frames` |
 | `segments[].seam_in.audio_curve` | `auto` / `linear` / `equal_power` |
 | `materials` | 最多 64 個 `{id, kind, ref, name}`：`kind` = `image` / `video` / `audio`；`ref` = `input/` 內的檔案；`name` = 別名，1–32 個 ASCII 英數 / `_` / `-` / 中日韓文字 / 假名 / 韓文，NFC、不重複 |
@@ -814,7 +814,7 @@ ComfyUI `VIDEO` → H.264 MP4，有音訊時編成 AAC。讀檔時的解碼器�
 | `video_path` | `input/sample.mp4` | |
 | `filename_prefix` | `MediaForge/trimmed` | |
 | `mode` | `remove` | `remove` = 刪除指定區間、留其他；`keep` = 留指定區間、刪其他 |
-| `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | 沒接 `ranges` pin 時用這個 |
+| `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | 沒接 `ranges` pin 時用這個；`ranges` pin 接上時隱藏（值仍保留） |
 | `crossfade_sec` | `0.0` (0–2) | 保留段之間走 `xfade`；`0` = 硬切。`precision=lossless` 時隱藏且被忽略（stream copy 無法混合像素） |
 | `codec` / `crf` / `preset` | smart / `18` / `medium` | `precision=lossless` 時忽略（輸出容器改沿用來源） |
 | `precision` | `precise (re-encode)` | `lossless (stream copy)` 會隱藏 `codec` / `crf` / `preset` / `crossfade_sec`（前端強制）— 這幾個在該模式下都不會傳給 ffmpeg。刻意宣告在 `optional` 的**最後一個位置**（在 `tensor_fps` 之後），不是放 `required`：ComfyUI 存檔的 widget 值是按「整個 required+optional widget 列表」的位置對齊，`tensor_fps` 已經佔了一個位置——若改放 `required` 尾端會把它擠後一位、錯位舊 workflow JSON |

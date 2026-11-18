@@ -309,14 +309,14 @@ Materials (`generate` mode):
 - **Tag buttons** — `✓ name`: already a reference of this segment, a click inserts `<@name>`. `＋ name`: a click makes it this segment's reference and inserts the tag, as one undo step. The tag goes where the caret was when the prompt box last lost focus; if the box was never used, it is appended, and if the prompt already has that tag it only adds the reference. The shared prompt has its own row, with the same states and behaviour as its `@` list. A button that cannot work is disabled and its tooltip says why (several references to the same material, that category is full, the material is not probed yet). To add a reference without a tag, drag the card onto the lane.
 - **Prompts** — the shared prompt (共用 prompt) is used by segments without their own; a segment's own prompt replaces it, they are not merged. The form keeps showing which one applies and offers 清空，改用共用 prompt (clear, use shared). When a button writes a tag into an empty segment prompt, the shared text is copied into it first, with a notice; typing `@` in an empty segment box starts its own prompt without copying the shared text. when ＋ only adds the reference for a tag the shared prompt already has, the segment keeps using the shared prompt. Write `<@name:audio>` for a video reference's soundtrack. Each segment resolves its aliases to its own `<Picture N>` / `<Video N>` / `<Audio N>` tags. Hand-written numbered tags still work, but their meaning changes when references are reordered; 轉成 <@名稱> rewrites them as aliases when the mapping is unambiguous, and adding a reference does the same first, refusing with a reason if it cannot.
 - **這段送給模型的內容 (what this segment sends to the model)** — collapsed to one line, such as `1 張圖、1 支影片、保留原音 3.96 秒`. Expanded, once every material is probed: the tag table, the seconds and frames each reference video really uses (and how many are unused), keyframe and guide times, kept-audio ranges, the resolved prompt, and H3 technical details (token ranges as `[start, end)`, the token map, the carry boundary offset). Errors and the warning that a lock overlaps the audio carried from the previous segment stay visible when the section is collapsed.
-- **Seed** — optional per-segment seed with 換一個 (new one); empty uses Sample Segments' `noise_seed`. Only Sample Segments applies it.
+- **Seed** — optional per-segment seed with 換一個 (new one); empty uses the sampler node's `noise_seed`. Sample Segments and Sample Remake Segments apply it.
 - **Shot cut / continue** — 從這段開始新鏡頭 (new shot) sets a segment's incoming overlap to 0 with a straight cut, so it no longer continues from the previous segment; it, later segments, and the references and placements that belong to them shift together, and items crossing the old boundary are flagged. 接續前一段 (continue) restores the default overlap (22 frames, or the largest that fits a shorter segment). Each is one undo step.
 
 Status line:
 
 - First line: the lasting state. `✓ 時間軸檢查通過` covers the timeline itself (structure, segments, material placement, each segment's prompt and limits), not the downstream wiring or the models. A problem names its object and reason in plain words; click to locate it, and 詳情 (details) holds the raw location and code.
 - A few problems come with a fix button: a length or overlap that does not fit (for example in hand-edited JSON) → 調整段長與重疊 (fixes only the illegal values in order, later segments shift along, crossfades that no longer fit get shorter; this is not a global optimum); an fps other than 24 in `generate` → 改成 24 fps; `cut` without a source → 上傳來源影片; `cut` with materials → see above. One undo step, and the total length change is reported.
-- Second line: notices about the last action, such as which segments now send something different to the model. When a reference moved to another segment or a numbered tag now names another material it says so by name, because such changes are legal and still pass the check. While the state is fine and this node's outputs are not wired, it suggests the next step (`generate` → 🎛️ Sample Segments; `cut` → `ranges` and `video_path` into ✂️ Trim by Ranges).
+- Second line: notices about the last action, such as which segments now send something different to the model. When a reference moved to another segment or a numbered tag now names another material it says so by name, because such changes are legal and still pass the check. While the state is fine and this node's outputs are not wired, it suggests the next step (`generate` → 🎛️ Sample Segments, or 🎭 Sample Remake Segments for Viggle Remake; `cut` → `ranges` and `video_path` into ✂️ Trim by Ranges).
 
 General:
 
@@ -478,7 +478,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 | `segments` | 1–256 segments |
 | `segments[].start` / `end` | integer frames, `end` exclusive; `generate`: lengths 5 + 17n, overlaps 0 or 5 + 17j; `cut`: inside the source, no overlap |
 | `segments[].prompt` | string, default empty |
-| `segments[].seed` | optional, `null` or 0 … 2⁵³ − 1; applied only by Sample Segments |
+| `segments[].seed` | optional, `null` or 0 … 2⁵³ − 1; applied by Sample Segments and Sample Remake Segments |
 | `segments[].seam_in.kind` | `cut` / `crossfade`; `crossfade` needs a legal `frames` |
 | `segments[].seam_in.audio_curve` | `auto` / `linear` / `equal_power` |
 | `materials` | ≤ 64 of `{id, kind, ref, name}`: `kind` = `image` / `video` / `audio`; `ref` = a file under `input/`; `name` = the alias, 1–32 ASCII letters / digits / `_` / `-` / CJK / kana / Hangul, NFC, unique |
@@ -811,7 +811,7 @@ Cut a video by time ranges. Primary use case: auto-remove silence (wire from `MF
 | `video_path` | `input/sample.mp4` | |
 | `filename_prefix` | `MediaForge/trimmed` | |
 | `mode` | `remove` | `remove` = drop ranges, keep rest. `keep` = keep ranges, drop rest |
-| `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | Used when `ranges` pin not wired |
+| `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | Used when `ranges` pin not wired. Hidden when the `ranges` pin is wired (the value is kept) |
 | `crossfade_sec` | `0.0` (0–2) | `xfade` between adjacent kept segments; `0` = hard cut. Hidden and ignored in `precision=lossless` (stream copy can't blend pixels) |
 | `codec` / `crf` / `preset` | smart / `18` / `medium` | Ignored in `precision=lossless` (output container follows the source instead) |
 | `precision` | `precise (re-encode)` | `lossless (stream copy)` hides `codec` / `crf` / `preset` / `crossfade_sec` (frontend-enforced) — none of them reach ffmpeg in that mode. Declared as the **last entry of `optional`** (after `tensor_fps`), not in `required`: ComfyUI aligns a saved workflow's widget values positionally across the *entire* required+optional widget list, and `tensor_fps` already occupies a slot there — appending to `required` instead would have shifted it one slot over and corrupted old workflow JSON |
