@@ -1493,7 +1493,7 @@ class TimelineEditor {
             for (const o of audioSelect.children) o.disabled = o.value !== "none";
         }
         return [this.details("source-use", "來源影片用途", [
-            el("div", { class: "full hint", text: m ? `素材 ${m.name} · <@${m.name}>${role === "guide" ? "；Guide 本身沒有 Video 標籤" : ""}` : "此舊流程的來源尚未加入素材；選擇用途即可共用同一個檔案。" }),
+            el("div", { class: "full hint", text: m ? `素材 ${m.name} · <@${m.name}>${role === "guide" ? "；Guide 本身沒有 Video 標籤" : ""}` : "這支來源影片還沒有加入素材庫；選擇用途就會用同一個檔案建立素材。" }),
             ...(remake ? [el("div", { class: "full hint", text: "Remake 把來源影片當參考影片；聲音由 🎭 Sample Remake Segments 的 keep_source_audio 決定（預設保留來源音軌），這裡維持「不用」。" })] : []),
             el("span", { text: "畫面用途（重設此素材的編排）" }), roleSelect,
             el("span", { text: "來源聲音" }), audioSelect,
