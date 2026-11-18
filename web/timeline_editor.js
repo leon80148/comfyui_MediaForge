@@ -211,6 +211,7 @@ function installStyle() {
 .mf-tl-bar { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; flex: none; }
 .mf-tl-group { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .mf-tl-top { display: flex; gap: 8px; height: 150px; flex: none; }
+.mf-tl-top.compact { height: 58px; }
 .mf-tl-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .mf-tl-col.preview { width: 210px; flex: none; }
 .mf-tl-col.library { flex: 1; }
@@ -756,7 +757,7 @@ class TimelineEditor {
             this.libraryLabel, this.materialButton, this.materialInput,
         ]);
         this.cutHint = el("div", { class: "mf-tl-placeholder", text: S.cutHint });
-        const top = el("div", { class: "mf-tl-top" }, [
+        this.top = el("div", { class: "mf-tl-top" }, [
             el("div", { class: "mf-tl-col preview" }, [
                 el("div", { class: "mf-tl-head" }, [this.previewLabel, this.materialLabel, button(S.upload, () => this.fileInput.click()), this.fileInput]),
                 this.previewEmpty, this.video, this.materialImage, this.materialVideo,
@@ -819,7 +820,7 @@ class TimelineEditor {
             this.render();
         });
         this.root = el("div", { class: "mf-tl", tabindex: "0", onkeydown: (e) => this.onKey(e) }, [
-            top, this.bar, this.panel, this.timeline, this.status, this.form,
+            this.top, this.bar, this.panel, this.timeline, this.status, this.form,
         ]);
         this.root.addEventListener("pointerdown", (e) => this.beginPress(e), true);
         // OS file drops go to the library; stopping them here keeps the canvas from treating
@@ -1035,6 +1036,10 @@ class TimelineEditor {
         const empty = generate && !cards.length && !pending.length
             ? [el("span", { class: "mf-tl-label", text: S.emptyLibrary })] : [];
         this.rebuild(this.lib, [...cards, ...pending, ...empty]);
+        // With no source to preview and no card to hold, the row keeps its titles, buttons and one line of hint and
+        // leaves the rest of its height to the form. It changes here, together with the cards, so a rebuild that is
+        // held while a prompt is being typed holds the height too.
+        this.top.classList.toggle("compact", !st.hasSource && (!generate || !(cards.length + pending.length)));
     }
 
     layout(data, st) {

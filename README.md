@@ -221,7 +221,7 @@ ComfyUI lists a plugin's `example_workflows/` folder in its template browser. Mo
 
 Edit Timeline shows a visual editor in place of the raw `timeline_data` widget. The three native widgets you see show plain labels (`來源影片（video）`, `每秒幀數（fps）`, `用途（mode）`, and options such as `生成新影片（generate）`). This is display only: the names and values used by saved workflows and the API do not change. The fourth, `grid`, has one value left and stays hidden.
 
-Layout, top to bottom: preview and library, toolbar, lanes (a left column names 分段 / 參考 / 指定畫面 / 保留原音, and empty lanes say what they are for), status line, inspector. Times show seconds first, such as `4.46 秒（107 幀）`. `？` opens a glossary and the keyboard shortcuts.
+Layout, top to bottom: preview and library, toolbar, lanes (a left column names 分段 / 參考 / 指定畫面 / 保留原音, and empty lanes say what they are for), status line, inspector. With no source video and an empty library, the preview and library row keeps only its titles, buttons and one line of hint and leaves its height to the inspector below; it opens once a source video is chosen or the first material is added (one that is still uploading counts). Times show seconds first, such as `4.46 秒（107 幀）`. `？` opens a glossary and the keyboard shortcuts.
 
 What an action applies to: clicking or tabbing to a segment makes it the edit target; a playhead that is elsewhere jumps there (in `generate` to where the opening overlap ends, in `cut` to the source range's start). After that, clicking or dragging the ruler, the arrow keys and playback only move the playhead; they never change the edit target. Buttons say where they act, such as `＋ 用在第 2 段` (use in segment 2) or `＋ 在 3.54 秒指定畫面` (set a frame at 3.54 s).
 
