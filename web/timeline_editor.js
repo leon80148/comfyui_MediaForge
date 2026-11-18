@@ -27,7 +27,7 @@ import { ASPECT_RATIOS, MP_PRESETS, UPSCALE_FACTORS, aspectValue, currentAspect,
 import { useSource } from "./timeline_source.js";
 import {
     addMaterials, aliasRawTags, checkEdit, conformSegments, createFromCard, deleteBar, deleteCut, deleteMaterial, editBar,
-    emitIntervals, inputImpact, insertCut, markCut, moveRefInOrder, patchBar, pickSnap, probeIssue, refChanges, refillSegments,
+    emitIntervals, inputImpact, insertCut, markCut, moveRefInOrder, patchBar, pickSnap, plannedSegments, probeIssue, refChanges, refillSegments,
     removeAllMaterials, renameMaterial, segmentInputs, setShotBoundary, sharedTagButtons, snapTargets, splitBar, tagButtons,
     timelineProblems, useRefTag, useSharedTag,
 } from "./timeline_edit.js";
@@ -263,6 +263,7 @@ function installStyle() {
 .mf-tl-seg > span { position: relative; padding: 1px 4px; border-radius: 3px; background: rgba(0,0,0,.45); }
 .mf-tl-seg.active { outline: 2px solid #fff; opacity: 1; }
 .mf-tl-seg.invalid { outline: 2px solid #ff5a5a; }
+.mf-tl-seg.dropped { opacity: .45; filter: grayscale(1); }
 .mf-tl-seg .overlap { position: absolute; top: 0; left: 0; height: 100%;
   background: repeating-linear-gradient(45deg, rgba(0,0,0,.28) 0 4px, transparent 4px 8px); pointer-events: none; }
 .mf-tl-handle { position: absolute; top: 0; width: 8px; height: 100%; cursor: ew-resize; background: rgba(255,255,255,.35); }
@@ -372,6 +373,7 @@ class TimelineEditor {
         this.fieldTimer = 0;
         this.fixKey = "";
         this.gutterKey = "";
+        this.kept = Infinity;            // segments from this index on are left out by Remake tail padding (see render())
         this.destroyed = false;
         this.boxHandles = [];            // the current form's prompt boxes: their @ lists and size observers
         this.lastPick = null;            // the prompt box whose last change was an @ pick (Ctrl+Z undoes the pick)
@@ -555,6 +557,8 @@ class TimelineEditor {
         if (p.stage === "schema") return e.reason === "bad_render" ? S.renderInvalid
             : e.reason === "bad_short_edge" ? S.shortEdgeInvalid : S.badField(this.placeText(e.location));
         if (p.stage === "grid") return S.invalid(this.placeText(e.location), S.reasons[e.reason] ?? e.reason);
+        // the tail plan refuses the timeline as a whole: its reason is already a sentence, and no bar or segment owns it
+        if (e.code === "E_REMAKE_TAIL") return e.reason;
         if (e.code === "E_ANCHOR_OVERLAP") {
             return where + S.anchorOverlap(S.streams[e.stream] ?? e.stream, this.itemLabel(e.first), this.itemLabel(e.second));
         }
@@ -568,7 +572,8 @@ class TimelineEditor {
     // the exact location and code, for the status line's details; an unknown error keeps all its fields
     problemDetail(p) {
         const e = p.error;
-        return S.problemReasons[e.reason] || S.reasons[e.reason] ? S.detailsText(e.location, e.code) : this.errorText(e);
+        const said = S.problemReasons[e.reason] || S.reasons[e.reason] || e.code === "E_REMAKE_TAIL";
+        return said ? S.detailsText(e.location, e.code) : this.errorText(e);
     }
 
     // where a problem lives, for "click the status to locate it"
@@ -864,6 +869,7 @@ class TimelineEditor {
         this.ctx = this.editContext(st);
         this.result = validate(this.data, st.mode, st.fpsKey, st.grid, st.sourceFrames, st.hasSource);
         this.check = timelineProblems(this.data, this.ctx);
+        this.kept = plannedSegments(this.data, this.ctx);
         this.addButton.disabled = this.fillButton.disabled = this.importButton.disabled = this.materialButton.disabled = false;
         this.addButton.textContent = generate ? S.add : S.addCut;
         this.deleteButton.disabled = this.data.segments.length <= 1;
@@ -1075,11 +1081,13 @@ class TimelineEditor {
         const bad = new Set((this.check?.list ?? []).map((p) => p.segment).filter((i) => i != null));
         segs.forEach((s, i) => {
             const e = this.segEls[i];
+            // said in words too, not only by the dimmed bar; during a drag this still shows the committed plan
+            const dropped = i >= this.kept;
             e.dataset.index = String(i);
-            e.label.textContent = `${bad.has(i) ? "⚠ " : ""}${S.barLabel(i + 1, sec(s.end - s.start))}${s.seed != null ? " · 🎲" : ""}`;
+            e.label.textContent = `${bad.has(i) ? "⚠ " : ""}${S.barLabel(i + 1, sec(s.end - s.start))}${s.seed != null ? " · 🎲" : ""}${dropped ? ` · ${S.tailDroppedBar}` : ""}`;
             // incoming overlap is hatched: those frames belong to the previous segment's output
             const incoming = st.mode === "generate" && i ? Math.max(0, segs[i - 1].end - s.start) : 0;
-            e.title = S.barTitle(i + 1, sec(s.start), sec(s.end), sec(incoming));
+            e.title = `${S.barTitle(i + 1, sec(s.start), sec(s.end), sec(incoming))}${dropped ? `；${S.tailDropped}` : ""}`;
             e.overlap.style.width = `${incoming * this.px}px`;
             Object.assign(e.style, {
                 left: `${s.start * this.px}px`, width: `${Math.max(6, (s.end - s.start) * this.px)}px`,
@@ -1087,6 +1095,7 @@ class TimelineEditor {
             });
             e.classList.toggle("active", i === this.view.active && this.view.sel?.type !== "ref" && this.view.sel?.type !== "anchor");
             e.classList.toggle("invalid", bad.has(i));
+            e.classList.toggle("dropped", dropped);
             e.classList.toggle("refused", g?.type === "segment" && g.index === i && !!g.refused);
         });
         this.renderGutter(geometry, st);
@@ -1281,11 +1290,14 @@ class TimelineEditor {
         } });
         toggle.checked = !!r;
         rows.push(el("span", { text: "時間軸管理解析度" }), toggle);
-        if (remake) {
+        // A setting that can stop the run stays reachable: while it is on, and when the plan goes somewhere this editor
+        // cannot follow (an unknown node before the sampler). Only a traced plain sampler, or no link at all, hides it.
+        const tailOn = this.data.remake_tail_policy === "pad_trim";
+        if (remake || tailOn || (!consumers.length && this.outputLinked("segment_plan"))) {
             const tail = el("input", { type: "checkbox", "data-fk": "remake-tail", onchange: (e) => {
                 this.propose({ ...this.data, remake_tail_policy: e.target.checked ? "pad_trim" : "strict" });
             } });
-            tail.checked = this.data.remake_tail_policy === "pad_trim";
+            tail.checked = tailOn;
             if (tail.checked) {
                 try {
                     const p = prepareRemakeTail(this.data, this.editContext().snapshots);
@@ -1294,6 +1306,8 @@ class TimelineEditor {
             }
             rows.push(el("span", { text: "Remake 尾段補幀並裁回來源" }), tail,
                 el("div", { class: "full hint", text: "不足一段時重複最後一幀，生成後裁回來源結尾，保留全部有效片尾。舊工作流需勾選啟用。" }));
+            if (tailOn && consumers.length && !remake) rows.push(el("div", { class: "full bad",
+                text: "目前連接 Sample Segments，無法執行尾段補幀；它只適用於 Sample Remake Segments，請取消勾選。" }));
         }
         if (r) {
             // The form may be held while a field commits. Read the current data on each action.
@@ -1468,7 +1482,7 @@ class TimelineEditor {
     sharedTagRow() {
         const b = sharedTagButtons(this.data, this.ctx);
         if (b.hidden || !this.data.materials.length || b.blocked === "manifest") return [];
-        if (b.blocked) return [el("div", { class: "hint", text: S.chipsBlocked })];
+        if (b.blocked) return [el("div", { class: "hint", text: this.sharedBlockedText(b) })];
         return [el("div", { class: "mf-tl-chips" }, this.data.materials.map((m) => {
             const item = b.items[m.id];
             const chip = el("button", {
@@ -1481,6 +1495,12 @@ class TimelineEditor {
             chip.disabled = item.state === "blocked";
             return chip;
         }))];
+    }
+
+    // The shared prompt's buttons need every segment that uses it to be readable. `b.segment` is the one that is not:
+    // its materials are unverified, or tail padding leaves that window out.
+    sharedBlockedText(b) {
+        return b.segment >= this.kept ? S.chipsDropped(b.segment + 1) : S.chipsBlocked;
     }
 
     caretKey(scope) {
@@ -1570,13 +1590,15 @@ class TimelineEditor {
         const ctx = this.editContext();
         const b = shared ? sharedTagButtons(this.data, ctx) : tagButtons(this.data, scope.index, ctx);
         if (b.hidden) return [];
+        // why a row without a verdict is off: unverified materials, or a window that tail padding leaves out
+        const off = shared ? this.sharedBlockedText(b) : scope.index >= this.kept ? S.tailDropped : S.chipsBlocked;
         const rows = [];
         for (const m of this.data.materials) {
             const item = b.items?.[m.id];
             const base = { id: m.id, name: m.name, icon: KIND_ICON[m.kind],
                 thumb: m.kind === "image" ? viewURL({ ...splitSource(m.ref), type: "input" }) : null };
             if (!item) {
-                rows.push({ ...base, key: m.id, label: m.name, audio: false, status: S.chipsBlocked, disabled: true });
+                rows.push({ ...base, key: m.id, label: m.name, audio: false, status: off, disabled: true });
                 continue;
             }
             rows.push({ ...base, key: m.id, label: m.name, audio: false, ...this.mentionStatus(item, b, shared, false) });
@@ -1662,7 +1684,8 @@ class TimelineEditor {
     // three separate steps here, and a button can no longer write a tag the segment cannot resolve.
     tagRow(i) {
         const buttons = tagButtons(this.data, i, this.ctx);
-        if (buttons.hidden || !this.data.materials.length || buttons.blocked === "manifest") return [];
+        // a window left out by tail padding has nothing to tag: segmentWarnings() says why
+        if (buttons.hidden || !this.data.materials.length || buttons.blocked === "manifest" || i >= this.kept) return [];
         if (buttons.blocked) return [el("span", { text: S.chipRow }), el("span", { class: "hint", text: S.chipsBlocked })];
         return [el("span", { text: S.chipRow }), el("div", { class: "mf-tl-chips" }, this.data.materials.map((m) => {
             const item = buttons.items[m.id];
@@ -1735,7 +1758,8 @@ class TimelineEditor {
     // what must not disappear with a collapsed section
     segmentWarnings(i) {
         const view = segmentInputs(this.data, i, this.ctx);
-        if (!view) return [el("div", { class: "full warn", text: S.unverified })];
+        // a window left out by tail padding answers null as well: that is not "unverified"
+        if (!view) return [el("div", { class: "full warn", text: i >= this.kept ? S.tailDropped : S.unverified })];
         if (!view.ok) return [el("div", { class: "full bad", text: this.problemText({ stage: "manifest", error: view.error, segment: i }) })];
         const out = [];
         if (!view.prompt.ok) out.push(el("div", { class: "full bad", text: this.problemText({ stage: "prompt", error: view.prompt.error, segment: i }) }));
@@ -2104,12 +2128,15 @@ class TimelineEditor {
         this.apply(r, notes.join(" · "));
     }
 
+    outputLinked(name) {
+        return (this.node.outputs?.find((o) => o.name === name)?.links?.length ?? 0) > 0;
+    }
+
     // Only looks at this node's own outputs; whether the rest of the workflow is complete is not for this node to judge.
     nextStep(st) {
-        const linked = (name) => (this.node.outputs?.find((o) => o.name === name)?.links?.length ?? 0) > 0;
         // cut needs both links: with ranges alone, Trim by Ranges reads whatever file its own widget names
-        if (st.mode === "cut") return linked("ranges") && linked("video_path") ? "" : S.next.cut;
-        return linked("segment_plan") ? "" : S.next.h3;
+        if (st.mode === "cut") return this.outputLinked("ranges") && this.outputLinked("video_path") ? "" : S.next.cut;
+        return this.outputLinked("segment_plan") ? "" : S.next.h3;
     }
 
     // during a gesture the status line says why the current position cannot be dropped / committed

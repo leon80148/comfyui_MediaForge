@@ -175,6 +175,16 @@ export function segmentInputs(data, index, ctx) {
     return { ok: true, manifest: r.manifest, template, prompt: resolvePrompt(template, r.manifest, data.materials, index, ctx.h3) };
 }
 
+// How many leading segments the tail plan keeps: Python drops the windows past the source end (remake_tail.py) and
+// segmentInputs() answers null for them, as it does for unverified materials. This tells the two apart. Every
+// segment while tail padding is off, or cannot be planned yet (the status line reports that case).
+export function plannedSegments(data, ctx) {
+    if (ctx.mode !== "generate" || data.remake_tail_policy !== "pad_trim") return data.segments.length;
+    const snaps = verifiedSnapshots(data, ctx.snapshots);
+    if (!covers(data, snaps)) return data.segments.length;
+    try { return prepareRemakeTail(data, snaps).data.segments.length; } catch { return data.segments.length; }
+}
+
 // What the status line reports, in Python's order (§4.2): structure → segment chain → geometry
 // (refs → anchors → occupancy, every problem) → then resolveSegments(), the shared mirror of
 // compile_plan's material pass (all manifests, then all prompts; first error). `verified` is false
