@@ -211,6 +211,8 @@ One way to generate, one way to cut:
 
 ComfyUI lists a plugin's `example_workflows/` folder in its template browser. Model fields use `SELECT_*` placeholders — pick your own files. The codec is `h264 (libx264)`.
 
+Each example has its own thumbnail in the template browser (`<name>.jpg` in the same folder; right after an update the browser may still remember the old answer for up to an hour, and a hard refresh clears it). The timeline examples are written alike: the note sits at the far left and is bilingual (English, then 繁中 after `---`) with a title, numbered steps, and what the plan contains and where its limits are; in the generating examples the loaders are on top, Edit Timeline is under them, and the sampler and the output are to the right, so no loader link runs behind the editor. Each example writes to its own file-name prefix.
+
 | File | Contents |
 |---|---|
 | `timeline_h3_basic.json` | Text only: 3 MiniMax H3 segments of 107 frames, overlaps 22 / 39 → 260 frames. Runs as soon as the model files are picked |
