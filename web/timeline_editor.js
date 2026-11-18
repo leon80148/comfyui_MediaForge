@@ -1307,11 +1307,16 @@ class TimelineEditor {
         }
         if (!r) return out;
         if (remakes.length && r.mode === "selflift") out.selflift = "目前連接 Remake，無法執行 SelfLift；原設定保留，請改選生成方式。";
+        // the same answer that lists the models says whether the TimelineDirector nodes are registered
+        const asked = !!this.renderModels && !this.renderModelsError;
+        if (r.mode === "selflift" && asked && !this.hasSelfLift) {
+            out.director = "尚未偵測到 TimelineDirector 的 SelfLift 節點：請安裝 Songssx/ComfyUI-MiniMaxH3-TimelineDirector 並重啟 ComfyUI，或改選其他生成方式。";
+        }
         const sixSteps = remakes.some((n) => !n.inputs?.some((input) => input.name === "sigmas" && input.link != null));
         if (sixSteps && r.mode === "two_stage" && (r.high_steps < 1 || r.high_steps > 5)) {
             out.steps = "儲存的高清步數超過官方六步排程範圍，請到進階設定調整為 1–5，或外接較長排程。";
         }
-        const listed = this.renderModels && !this.renderModelsError ? this.renderModels.includes(r.model) : null;
+        const listed = asked ? this.renderModels.includes(r.model) : null;
         if (r.mode !== "direct" && (!r.model || listed === false)) out.model = "請選擇存在且相容的 H3 放大模型後再執行。";
         return out;
     }
@@ -1435,7 +1440,7 @@ class TimelineEditor {
                 ]));
                 rows.push(...issue("model"));
             }
-            if (r.mode === "selflift") rows.push(el("div", { class: "full hint", text: `${this.hasSelfLift ? "已偵測到" : "尚未偵測到"} TimelineDirector SelfLift；只支援標準 Euler，低解析度固定為 50%。目標尺寸需為 64 的倍數。` }));
+            if (r.mode === "selflift") rows.push(el("div", { class: "full hint", text: `${this.hasSelfLift ? "已偵測到" : "尚未偵測到"} TimelineDirector SelfLift；只支援標準 Euler，低解析度固定為 50%。目標尺寸需為 64 的倍數。` }), ...issue("director"));
             if (this.renderModelsError) rows.push(el("div", { class: "full bad", text: this.renderModelsError }));
             const advanced = [el("div", { class: "full hint", text: "可直接指定精確寬高；修改目標時會同步調整基礎尺寸。載入舊工作流會保留原值。" })];
             const numeric = (key, label, min = 32, max = 8192, step = 32) => advanced.push(el("span", { text: label }),

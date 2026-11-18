@@ -149,11 +149,14 @@ export function syncTimelineControls(graph) {
         if (!watchedGraphs.has(g)) {
             watchedGraphs.add(g);
             chain(g, "onConnectionChange", () => scheduleTimelineControls(g));
-            // A muted or bypassed sampler no longer decides what the editor offers. The frontend reports the change
-            // as a graph event; one that never sends it leaves the editor to catch up on its next rebuild.
-            chain(g, "onTrigger", (e) => {
-                if (e?.type === "node:property:changed" && e.property === "mode") scheduleTimelineControls(g);
-            });
+            // A muted or bypassed sampler no longer decides what the editor offers, so a node's mode change refreshes
+            // it. The frontend sends that to the graph's event target and to graph.onTrigger. The event target is the
+            // one to use: the frontend's own error tracker wraps graph.onTrigger and, when it detaches, puts back the
+            // handler it found when it attached, which drops a hook chained in between. A frontend without the event
+            // target gets the chained hook; one that sends neither leaves the editor to catch up on its next rebuild.
+            const onMode = (property) => { if (property === "mode") scheduleTimelineControls(g); };
+            if (g.events?.addEventListener) g.events.addEventListener("node:property:changed", (e) => onMode(e?.detail?.property));
+            else chain(g, "onTrigger", (e) => { if (e?.type === "node:property:changed") onMode(e.property); });
         }
         for (const node of nodesOf(g)) applyResolution(node);
     }
