@@ -303,6 +303,7 @@ function installStyle() {
 .mf-tl-form .warn { color: #ffb36b; } .mf-tl-form .bad { color: #ff7a7a; }
 .mf-tl-form details { border: 1px solid var(--border-color, #444); border-radius: 4px; padding: 3px 6px; min-width: 0; }
 .mf-tl-form summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mf-tl-form details[open] > summary > .mf-tl-closed-only { display: none; }
 .mf-tl-form details > .body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; align-items: center; margin-top: 4px; }
 .mf-tl-resolution-controls { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .mf-tl-resolution-controls select { flex: 1; min-width: 100px; }
@@ -820,6 +821,7 @@ class TimelineEditor {
             if (target.type === "segment") this.selectSegment(target.index);
             else this.select(target);
             this.render();
+            if (target.reveal) this.revealRow(target.reveal);
         });
         this.root = el("div", { class: "mf-tl", tabindex: "0", onkeydown: (e) => this.onKey(e) }, [
             this.top, this.bar, this.panel, this.timeline, this.status, this.form,
@@ -1456,9 +1458,12 @@ class TimelineEditor {
             if (remake) advanced.push(el("div", { class: "full hint", text: "Remake 來源會填滿畫布並置中裁切；不使用參考影片短邊上限。" }));
             rows.push(this.details("render-advanced", "進階：精確尺寸與取樣", advanced));
         }
-        // a closed section must not hide what will stop the run: the header carries the first of them
+        // A closed section must not hide what will stop the run: its header carries the first of them. Open, the same
+        // sentence is the red line right below, so the header drops it again (CSS on the section's own open state).
         const [first] = Object.values(issues);
-        return this.details("render", `${RENDER_SECTION} · ${r ? `${r.width} × ${r.height}` : "使用取樣器設定"}${first ? ` · ⚠ ${first}` : ""}`, rows);
+        const box = this.details("render", `${RENDER_SECTION} · ${r ? `${r.width} × ${r.height}` : "使用取樣器設定"}`, rows);
+        if (first) box.children[0].append(el("span", { class: "mf-tl-closed-only", text: ` · ⚠ ${first}` }));
+        return box;
     }
 
     sourceSettings(st) {
@@ -1520,6 +1525,17 @@ class TimelineEditor {
         this.view.open[key] = true;
         const top = box.offsetTop - this.form.offsetTop;
         if (Number.isFinite(top)) this.form.scrollTop = top;
+    }
+
+    // Brings a row of the inspector into view, moving it no further than needed. Only the classic renderer scrolls the
+    // inspector (in Nodes 2.0 the node grows instead), and there a segment's own lines sit below its prompt box.
+    revealRow(key) {
+        const row = [...this.form.querySelectorAll("[data-fk]")].find((e) => e.getAttribute("data-fk") === key);
+        if (!row) return;
+        const top = row.offsetTop - this.form.offsetTop, bottom = top + row.offsetHeight;
+        if (!Number.isFinite(bottom)) return;
+        if (top < this.form.scrollTop) this.form.scrollTop = top;
+        else if (bottom > this.form.scrollTop + this.form.clientHeight) this.form.scrollTop = bottom - this.form.clientHeight;
     }
 
     // A collapsible section. Its state lives in the view, so rebuilding the form never closes what the user opened;
@@ -2166,11 +2182,12 @@ class TimelineEditor {
             // then what a Remake sampler would refuse in a segment: the first one, and how many more there are
             const needs = issue ? [] : (this.remakeIssues ?? []).flatMap((p, index) => (p ? [{ p, index }] : []));
             className = issue || needs.length ? "warn" : "good";
-            text = issue ? `⚠ ${RENDER_SECTION}：${issue}`
+            // each keeps the count and the total, as the other lines of this colour do: they are watched while editing
+            text = `${issue ? `⚠ ${RENDER_SECTION}：${issue.replace(/。$/, "")}`
                 : needs.length ? `⚠ ${S.remake.status(needs[0].index + 1, S.remake.short(needs[0].p), needs.length - 1)}`
-                    : `${S.valid} · ${summary()}`;
+                    : S.valid} · ${summary()}`;
             if (issue) this.statusTarget = { type: "section", key: "render" };
-            else if (needs.length) this.statusTarget = { type: "segment", index: needs[0].index };
+            else if (needs.length) this.statusTarget = { type: "segment", index: needs[0].index, reveal: "remake-need" };
         }
         if (className === "bad" && !text.startsWith("⚠")) text = `⚠ ${text}`;
         if (this.sourceError && source && !text.includes(source)) text += ` · ${source}`;
