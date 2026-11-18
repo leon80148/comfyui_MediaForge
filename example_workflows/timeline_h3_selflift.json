@@ -323,7 +323,7 @@
         "euler"
       ],
       "widgets_values_named": {
-        "sampler_name": "res_multistep"
+        "sampler_name": "euler"
       }
     },
     {
@@ -515,9 +515,8 @@
         "fps": "24",
         "grid": "h3_5+17n",
         "mode": "generate",
-        "timeline_data": "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 107, \"prompt\": \"A red fox trots through a snowy forest in soft morning light and sniffs the air.\"}, {\"start\": 85, \"end\": 192, \"prompt\": \"The fox stops beside a frozen stream and looks around, its breath visible in the cold.\", \"seam_in\": {\"kind\": \"crossfade\", \"frames\": 12, \"audio_curve\": \"auto\"}}, {\"start\": 153, \"end\": 260, \"prompt\": \"The fox leaps over the stream and runs off between the pine trees.\"}]}"
-      },
-      "title": "Edit Timeline — resolution and upscale"
+        "timeline_data": "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"segments\": [{\"start\": 0, \"end\": 107, \"prompt\": \"A red fox trots through a snowy forest in soft morning light and sniffs the air.\"}, {\"start\": 85, \"end\": 192, \"prompt\": \"The fox stops beside a frozen stream and looks around, its breath visible in the cold.\", \"seam_in\": {\"kind\": \"crossfade\", \"frames\": 12, \"audio_curve\": \"auto\"}}, {\"start\": 153, \"end\": 260, \"prompt\": \"The fox leaps over the stream and runs off between the pine trees.\"}], \"render\": {\"mode\": \"selflift\", \"width\": 1344, \"height\": 768, \"base_width\": 672, \"base_height\": 384, \"model\": \"SELECT_H3_LATENT_UPSCALE_MODEL.safetensors\", \"high_steps\": 1, \"ref_video_short_edge\": 384}}"
+      }
     },
     {
       "id": 11,
@@ -838,7 +837,7 @@
         "original"
       ],
       "widgets_values_named": {
-        "filename_prefix": "MediaForge/timeline_h3_basic",
+        "filename_prefix": "MediaForge/timeline_h3_selflift",
         "codec": "h264 (libx264)",
         "crf": 18,
         "preset": "medium",
@@ -863,10 +862,10 @@
       "outputs": [],
       "properties": {},
       "widgets_values": [
-        "## MediaForge H3 — selflift\n\n1. Choose H3 UNet, compatible turbo LoRA, CLIP and both VAEs in the loaders.\n2. Open Edit Timeline > Resolution / Latent upscale. Select a compatible local H3 latent model. The SELECT_* filename is a placeholder, not a download.\n3. This example uses 672x384 -> 1344x768, 4 total steps, 1 high-resolution step (3 + 1). Timeline settings override Sample Segments width/height.\n4. Uploading a source in generate mode also creates a named video reference. Source purpose and original-audio controls are in the editor.\n5. SelfLift additionally requires Songssx/ComfyUI-MiniMaxH3-TimelineDirector and standard Euler; select an appropriate model/LoRA/schedule combination. General two_stage supports the connected standard sampler.\n\nH3 AV only, 24 fps. Native low/high latent tails are continued independently. Test a short clip at your target size first; no VRAM, speed or seam-quality guarantee."
+        "## MediaForge Timeline — MiniMax H3 SelfLift\n\n1. Pick your H3 models in the loaders: fl2va UNet (+ optional turbo LoRA), the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE.\n2. In **⏱️ Edit Timeline** open **解析度與放大** (resolution and upscaling) and choose your H3 latent upscale model under **H3 放大模型**. `SELECT_H3_LATENT_UPSCALE_MODEL` is a placeholder, not a download: until a model from the list is chosen the status line stays orange and the run stops before sampling.\n3. SelfLift runs through the Songssx/ComfyUI-MiniMaxH3-TimelineDirector nodes, which have to be installed, and only with standard Euler: the sampler here is already `euler`.\n4. Queue. 🎛️ Sample Segments samples each segment at half size (672×384) and lifts it to 1344×768: 4 steps in all, the last 1 at the high resolution. 🧵 Assemble Segments writes one MP4.\n\nThe size is set on the timeline, so Sample Segments' own width / height are folded away. Plan: 3 × 107 frames, overlaps 22 / 39 → **260 frames**, text only. The low- and the high-resolution latent tails are carried separately. Batch 1 only. Seams are not guaranteed to be invisible, and no VRAM or speed figure is promised: try a short clip at your target size first.\n\n---\n1. 在載入器選好 H3 模型：fl2va UNet（可加 turbo LoRA）、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。\n2. 在 **⏱️ Edit Timeline** 展開「解析度與放大」，在「H3 放大模型」選你的 H3 latent 放大模型。`SELECT_H3_LATENT_UPSCALE_MODEL` 是佔位名稱，不會自動下載：還沒選到清單裡的模型之前，狀態列會維持橘色提醒，執行也會在取樣前停下來。\n3. SelfLift 交給 Songssx/ComfyUI-MiniMaxH3-TimelineDirector 的節點執行，必須先安裝，而且只支援標準 Euler：這裡的取樣器已經是 `euler`。\n4. 執行。🎛️ Sample Segments 每段先以一半尺寸（672×384）取樣，再提升到 1344×768：總共 4 步，最後 1 步在高解析度。🧵 Assemble Segments 輸出一個 MP4。\n\n尺寸由時間軸管理，所以 Sample Segments 自己的 width／height 已收合。計畫：3 × 107 幀、重疊 22 / 39 → **260 幀**，純文字。低、高解析度的 latent 尾端各自續接。只支援 batch 1；不保證接縫無痕，也不保證顯存用量或速度，請先用短片在目標尺寸試跑。"
       ],
       "widgets_values_named": {
-        "text": "## MediaForge Timeline — MiniMax H3 long clip (text only)\n\n1. Pick your H3 models in the loaders: fl2va UNet (+ optional turbo LoRA), the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE.\n2. Edit the segments in **⏱️ Edit Timeline** (drag the edges; lengths and overlaps stay on the H3 5+17n grid, 24 fps). Each segment has its own prompt.\n3. Queue. 🎛️ Sample Segments generates one segment at a time, carrying the previous tail (video + audio) into the next; 🧵 Assemble Segments writes one MP4.\n\nDefault plan: 3 × 107 frames, overlaps 22 / 39 → **260 frames**, 346,667 samples at 32 kHz. Batch 1 only. Seams are not guaranteed to be invisible. To use reference images / videos / audio, open `timeline_h3_director.json`.\n\n---\n1. 在載入器選好 H3 模型：fl2va UNet（可加 turbo LoRA）、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。\n2. 在 **⏱️ Edit Timeline** 編輯分段（拖邊界；段長與重疊落在 H3 的 5+17n 格點、24 fps）；每段有自己的 prompt。\n3. 執行。🎛️ Sample Segments 一次生成一段，把上一段尾端（影像 + 音訊）續接進下一段；🧵 Assemble Segments 輸出一個 MP4。\n\n預設計畫：3 × 107 幀、重疊 22 / 39 → **260 幀**、32 kHz 共 346,667 samples。只支援 batch 1；不保證接縫無痕。要用參考圖片／影片／音訊，請開 `timeline_h3_director.json`。"
+        "text": "## MediaForge Timeline — MiniMax H3 SelfLift\n\n1. Pick your H3 models in the loaders: fl2va UNet (+ optional turbo LoRA), the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE.\n2. In **⏱️ Edit Timeline** open **解析度與放大** (resolution and upscaling) and choose your H3 latent upscale model under **H3 放大模型**. `SELECT_H3_LATENT_UPSCALE_MODEL` is a placeholder, not a download: until a model from the list is chosen the status line stays orange and the run stops before sampling.\n3. SelfLift runs through the Songssx/ComfyUI-MiniMaxH3-TimelineDirector nodes, which have to be installed, and only with standard Euler: the sampler here is already `euler`.\n4. Queue. 🎛️ Sample Segments samples each segment at half size (672×384) and lifts it to 1344×768: 4 steps in all, the last 1 at the high resolution. 🧵 Assemble Segments writes one MP4.\n\nThe size is set on the timeline, so Sample Segments' own width / height are folded away. Plan: 3 × 107 frames, overlaps 22 / 39 → **260 frames**, text only. The low- and the high-resolution latent tails are carried separately. Batch 1 only. Seams are not guaranteed to be invisible, and no VRAM or speed figure is promised: try a short clip at your target size first.\n\n---\n1. 在載入器選好 H3 模型：fl2va UNet（可加 turbo LoRA）、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。\n2. 在 **⏱️ Edit Timeline** 展開「解析度與放大」，在「H3 放大模型」選你的 H3 latent 放大模型。`SELECT_H3_LATENT_UPSCALE_MODEL` 是佔位名稱，不會自動下載：還沒選到清單裡的模型之前，狀態列會維持橘色提醒，執行也會在取樣前停下來。\n3. SelfLift 交給 Songssx/ComfyUI-MiniMaxH3-TimelineDirector 的節點執行，必須先安裝，而且只支援標準 Euler：這裡的取樣器已經是 `euler`。\n4. 執行。🎛️ Sample Segments 每段先以一半尺寸（672×384）取樣，再提升到 1344×768：總共 4 步，最後 1 步在高解析度。🧵 Assemble Segments 輸出一個 MP4。\n\n尺寸由時間軸管理，所以 Sample Segments 自己的 width／height 已收合。計畫：3 × 107 幀、重疊 22 / 39 → **260 幀**，純文字。低、高解析度的 latent 尾端各自續接。只支援 batch 1；不保證接縫無痕，也不保證顯存用量或速度，請先用短片在目標尺寸試跑。"
       },
       "color": "#432",
       "bgcolor": "#653"

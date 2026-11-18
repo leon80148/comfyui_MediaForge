@@ -56,7 +56,7 @@
         "default"
       ],
       "widgets_values_named": {
-        "unet_name": "SELECT_MINIMAX_H3_FL2VA_UNET.safetensors",
+        "unet_name": "SELECT_MINIMAX_H3_FL2VA_BASE.safetensors",
         "weight_dtype": "default"
       }
     },
@@ -64,8 +64,8 @@
       "id": 2,
       "type": "LoraLoaderBypassModelOnly",
       "pos": [
-        0,
-        160
+        400,
+        0
       ],
       "size": [
         320,
@@ -118,7 +118,7 @@
         1.0
       ],
       "widgets_values_named": {
-        "lora_name": "SELECT_MINIMAX_H3_TURBO_LORA.safetensors",
+        "lora_name": "viggle_remake_swap_comfyui.safetensors",
         "strength_model": 1
       }
     },
@@ -127,7 +127,7 @@
       "type": "CLIPLoader",
       "pos": [
         0,
-        370
+        152
       ],
       "size": [
         320,
@@ -195,7 +195,7 @@
       "type": "VAELoader",
       "pos": [
         0,
-        540
+        328
       ],
       "size": [
         320,
@@ -240,7 +240,7 @@
       "type": "VAELoader",
       "pos": [
         0,
-        680
+        456
       ],
       "size": [
         320,
@@ -284,8 +284,8 @@
       "id": 10,
       "type": "MF_EditTimeline",
       "pos": [
-        430,
-        0
+        0,
+        712
       ],
       "size": [
         760,
@@ -397,15 +397,14 @@
         "grid": "h3_5+17n",
         "mode": "generate",
         "timeline_data": "{\"version\": 2, \"source\": {\"origin_frame\": 0}, \"prompt\": \"subject_definitions:\\n<Subject 1> is the pineapple mascot shown in <@target>. The mascot has the same clothing, face and proportions as the painted reference.\\nsummary:\\n<Subject 1> performs the dough-tossing action from <@source>, with the source camera and timing.\\nretention_analysis:\\nThe original performer becomes <Subject 1>. Preserve the kitchen, props, camera movement, framing and timing from <@source>.\\ndetailed_description:\\n[Shot 1] 00:00.000–00:05.167: <Subject 1> follows the original performer's movements. The hands interact naturally with the dough. The background remains stable.\\noverall_soundscape:\\nThe source soundtrack continues with its original timing.\\nnon_diegetic_music:\\nPreserve any music in the source soundtrack.\", \"materials\": [{\"id\": \"source\", \"kind\": \"video\", \"name\": \"source\", \"ref\": \"remake_swap_source.mp4\"}, {\"id\": \"target\", \"kind\": \"image\", \"name\": \"target\", \"ref\": \"remake_swap_ref1.png\"}], \"refs\": [{\"id\": \"source_ref\", \"material\": \"source\", \"from\": 0, \"to\": 124, \"mode\": \"follow\", \"in\": 0, \"audio\": false}, {\"id\": \"target_ref\", \"material\": \"target\", \"from\": 0, \"to\": 124}], \"anchors\": [], \"segments\": [{\"start\": 0, \"end\": 124}], \"render\": {\"mode\": \"two_stage\", \"width\": 1920, \"height\": 1088, \"base_width\": 1280, \"base_height\": 736, \"model\": \"\", \"high_steps\": 2, \"ref_video_short_edge\": 0}, \"remake_tail_policy\": \"pad_trim\"}"
-      },
-      "title": "Edit Timeline · 1080p 二階段（先選 H3 放大模型）"
+      }
     },
     {
       "id": 11,
       "type": "MF_SampleRemakeSegments",
       "pos": [
-        1460,
-        0
+        850,
+        300
       ],
       "size": [
         360,
@@ -469,18 +468,12 @@
         0.9
       ],
       "widgets_values_named": {
-        "noise_seed": 42,
+        "mode": "swap",
+        "noise_seed": 0,
         "control_after_generate": "fixed",
-        "width": 832,
-        "height": 480,
-        "mask": "hard",
-        "carry_audio": true,
-        "cfg": 1.0,
-        "ref_image_size": "match",
-        "ref_video_short_edge": 0,
-        "video_taper_tokens": 2,
-        "audio_taper_tokens": 2,
-        "on_conflict": "error"
+        "short_edge": 480,
+        "keep_source_audio": true,
+        "keyframe_until": 0.9
       },
       "title": "🎭 Sample Remake Segments"
     },
@@ -488,8 +481,8 @@
       "id": 12,
       "type": "MF_AssembleSegments",
       "pos": [
-        1910,
-        0
+        1280,
+        300
       ],
       "size": [
         320,
@@ -577,26 +570,26 @@
         "Node name for S&R": "MF_AssembleSegments"
       },
       "widgets_values": [
-        "MediaForge/timeline_viggle_remake",
+        "MediaForge/timeline_viggle_remake_hd",
         "h264 (libx264)",
         18,
         "medium",
         "generated"
       ],
       "widgets_values_named": {
-        "filename_prefix": "MediaForge/timeline_h3_basic",
+        "filename_prefix": "MediaForge/timeline_viggle_remake_hd",
         "codec": "h264 (libx264)",
         "crf": 18,
         "preset": "medium",
-        "lock_audio": "original"
+        "lock_audio": "generated"
       }
     },
     {
       "id": 13,
       "type": "MarkdownNote",
       "pos": [
-        1460,
-        400
+        -760,
+        0
       ],
       "size": [
         700,
@@ -609,10 +602,10 @@
       "outputs": [],
       "properties": {},
       "widgets_values": [
-        "## Viggle Remake · 三顆主節點\n\nEdit Timeline → Sample Remake Segments → Assemble Segments\n\n1. 選擇 fl2va 基底、Viggle swap LoRA、H3 Qwen3VL 與兩個 VAE。\n   使用 Load LoRA (Bypass, Model Only)；不要再加 turbo LoRA。\n2. 在時間軸素材庫把 source 換成來源影片、target 換成改繪後的參考圖，修改六段式 prompt。\n   此範本使用官方範例檔名 remake_swap_source.mp4 / remake_swap_ref1.png；需自行準備或更換。\n3. 此範例是二階段：基礎 1280×736 → 目標 1920×1088、高清 2 步。先在 Edit Timeline 的「解析度與放大」選擇 H3 放大模型；取樣器的 short_edge 已由時間軸接管而收合。來源會以 24 fps 解碼。\n\n若用已合併的 Remake int8 / GGUF，移除 LoRA loader，直接接 model；mode 必須對應模型。\n要用 edit LoRA，改 LoRA 與 mode=edit 即可，六步 sigmas 自動切換。\n圖片需同時用作該段參考；要 pin 就替每張參考圖各設一個關鍵幀，或全部不設。\n目前支援 90–345 幀且為 17n+5、1 支完整覆蓋的參考影片、1–4 張圖、圖片關鍵幀。\n段內時間戳需從 00:00 開始。原音經 audio VAE 重建；長片沿用 MediaForge 的 video latent 續接。\n本範本未經完整 GPU 生成驗收；不保證與官方逐像素相同或接縫無痕。詳見 timeline_viggle_remake.md。\n"
+        "## MediaForge Timeline — Viggle Remake, two-stage 1080p\n\n1. Pick the models in the loaders: the fl2va base UNet, the Viggle swap LoRA in **Load LoRA (Bypass, Model Only)**, the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE. Do not add a turbo LoRA. The official ComfyUI-Viggle-Remake nodes have to be installed.\n2. The two materials in **⏱️ Edit Timeline** are placeholders named after the official sample files (`remake_swap_source.mp4`, `remake_swap_ref1.png`): select each card in the material library and point it at your own source video (`source`) and edited reference picture (`target`), then edit the six-section prompt.\n3. Open **解析度與放大** (resolution and upscaling) in Edit Timeline and choose your H3 latent upscale model under **H3 放大模型**. None is chosen in this example: the status line stays orange until you pick one, and the run stops before sampling.\n4. Queue. 🎭 Sample Remake Segments runs each segment through the official Remake nodes; 🧵 Assemble Segments writes one MP4.\n\nPlan: one 124-frame segment in two stages: sampled at 1280×736, upscaled, and finished at 1920×1088 with 2 of the six official steps at the high resolution (4 + 2). The size is set on the timeline, so the sampler's `short_edge` is folded away. The source is decoded at 24 fps and its audio is rebuilt through the audio VAE. Each segment needs 90–345 frames on 17n+5, one reference video that covers the whole segment, 1–4 picture references and timestamps that start at 00:00; a picture used as a keyframe must also be a reference of that segment, with one keyframe for every picture or none at all. For a merged Remake int8 / GGUF model remove the LoRA loader and wire the model directly; for the edit LoRA change the LoRA and set `mode = edit` (the six-step sigmas follow). `mode` has to match the model. Not verified with a full GPU run; not guaranteed to match the official nodes pixel for pixel or to hide seams. More in `timeline_viggle_remake.md`.\n\n---\n1. 在載入器選好模型：fl2va 基底 UNet、放在 **Load LoRA (Bypass, Model Only)** 的 Viggle swap LoRA、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。不要再加 turbo LoRA。需要先安裝官方 ComfyUI-Viggle-Remake 節點。\n2. **⏱️ Edit Timeline** 的兩個素材是佔位，沿用官方範例檔名（`remake_swap_source.mp4`、`remake_swap_ref1.png`）：在素材庫選取卡片，把 `source` 改成自己的來源影片、`target` 改成改繪後的參考圖，再修改六段式 prompt。\n3. 在 Edit Timeline 展開「解析度與放大」，在「H3 放大模型」選你的 H3 latent 放大模型。這個範例沒有預選：選好之前狀態列會維持橘色提醒，執行也會在取樣前停下來。\n4. 執行。🎭 Sample Remake Segments 逐段交給官方 Remake 節點；🧵 Assemble Segments 輸出一個 MP4。\n\n計畫：單段 124 幀、二階段：先以 1280×736 取樣，放大後在 1920×1088 完成，官方六步中的 2 步在高解析度（4 + 2）。尺寸由時間軸管理，所以取樣器的 `short_edge` 已收合。來源以 24 fps 解碼，原音經 audio VAE 重建。每段需要 90–345 幀且為 17n+5、一支完整覆蓋該段的參考影片、1–4 張圖片參考，段內時間戳從 00:00 開始；當作關鍵幀的圖片也必須是該段的參考，要嘛每張圖各一個關鍵幀、要嘛全部不設。使用已合併的 Remake int8／GGUF 時移除 LoRA loader、直接接 model；要用 edit LoRA 就換 LoRA 並設 `mode = edit`（六步 sigmas 會跟著切換）。`mode` 必須與模型相符。本範本未經完整 GPU 生成驗收；不保證與官方逐像素相同或接縫無痕。詳見 `timeline_viggle_remake.md`。"
       ],
       "widgets_values_named": {
-        "text": "## MediaForge Timeline — MiniMax H3 long clip (text only)\n\n1. Pick your H3 models in the loaders: fl2va UNet (+ optional turbo LoRA), the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE.\n2. Edit the segments in **⏱️ Edit Timeline** (drag the edges; lengths and overlaps stay on the H3 5+17n grid, 24 fps). Each segment has its own prompt.\n3. Queue. 🎛️ Sample Segments generates one segment at a time, carrying the previous tail (video + audio) into the next; 🧵 Assemble Segments writes one MP4.\n\nDefault plan: 3 × 107 frames, overlaps 22 / 39 → **260 frames**, 346,667 samples at 32 kHz. Batch 1 only. Seams are not guaranteed to be invisible. To use reference images / videos / audio, open `timeline_h3_director.json`.\n\n---\n1. 在載入器選好 H3 模型：fl2va UNet（可加 turbo LoRA）、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。\n2. 在 **⏱️ Edit Timeline** 編輯分段（拖邊界；段長與重疊落在 H3 的 5+17n 格點、24 fps）；每段有自己的 prompt。\n3. 執行。🎛️ Sample Segments 一次生成一段，把上一段尾端（影像 + 音訊）續接進下一段；🧵 Assemble Segments 輸出一個 MP4。\n\n預設計畫：3 × 107 幀、重疊 22 / 39 → **260 幀**、32 kHz 共 346,667 samples。只支援 batch 1；不保證接縫無痕。要用參考圖片／影片／音訊，請開 `timeline_h3_director.json`。"
+        "text": "## MediaForge Timeline — Viggle Remake, two-stage 1080p\n\n1. Pick the models in the loaders: the fl2va base UNet, the Viggle swap LoRA in **Load LoRA (Bypass, Model Only)**, the Qwen3-VL text encoder (`type = minimax`), the **video** VAE and the **audio** VAE. Do not add a turbo LoRA. The official ComfyUI-Viggle-Remake nodes have to be installed.\n2. The two materials in **⏱️ Edit Timeline** are placeholders named after the official sample files (`remake_swap_source.mp4`, `remake_swap_ref1.png`): select each card in the material library and point it at your own source video (`source`) and edited reference picture (`target`), then edit the six-section prompt.\n3. Open **解析度與放大** (resolution and upscaling) in Edit Timeline and choose your H3 latent upscale model under **H3 放大模型**. None is chosen in this example: the status line stays orange until you pick one, and the run stops before sampling.\n4. Queue. 🎭 Sample Remake Segments runs each segment through the official Remake nodes; 🧵 Assemble Segments writes one MP4.\n\nPlan: one 124-frame segment in two stages: sampled at 1280×736, upscaled, and finished at 1920×1088 with 2 of the six official steps at the high resolution (4 + 2). The size is set on the timeline, so the sampler's `short_edge` is folded away. The source is decoded at 24 fps and its audio is rebuilt through the audio VAE. Each segment needs 90–345 frames on 17n+5, one reference video that covers the whole segment, 1–4 picture references and timestamps that start at 00:00; a picture used as a keyframe must also be a reference of that segment, with one keyframe for every picture or none at all. For a merged Remake int8 / GGUF model remove the LoRA loader and wire the model directly; for the edit LoRA change the LoRA and set `mode = edit` (the six-step sigmas follow). `mode` has to match the model. Not verified with a full GPU run; not guaranteed to match the official nodes pixel for pixel or to hide seams. More in `timeline_viggle_remake.md`.\n\n---\n1. 在載入器選好模型：fl2va 基底 UNet、放在 **Load LoRA (Bypass, Model Only)** 的 Viggle swap LoRA、Qwen3-VL text encoder（`type = minimax`）、**video** VAE 與 **audio** VAE。不要再加 turbo LoRA。需要先安裝官方 ComfyUI-Viggle-Remake 節點。\n2. **⏱️ Edit Timeline** 的兩個素材是佔位，沿用官方範例檔名（`remake_swap_source.mp4`、`remake_swap_ref1.png`）：在素材庫選取卡片，把 `source` 改成自己的來源影片、`target` 改成改繪後的參考圖，再修改六段式 prompt。\n3. 在 Edit Timeline 展開「解析度與放大」，在「H3 放大模型」選你的 H3 latent 放大模型。這個範例沒有預選：選好之前狀態列會維持橘色提醒，執行也會在取樣前停下來。\n4. 執行。🎭 Sample Remake Segments 逐段交給官方 Remake 節點；🧵 Assemble Segments 輸出一個 MP4。\n\n計畫：單段 124 幀、二階段：先以 1280×736 取樣，放大後在 1920×1088 完成，官方六步中的 2 步在高解析度（4 + 2）。尺寸由時間軸管理，所以取樣器的 `short_edge` 已收合。來源以 24 fps 解碼，原音經 audio VAE 重建。每段需要 90–345 幀且為 17n+5、一支完整覆蓋該段的參考影片、1–4 張圖片參考，段內時間戳從 00:00 開始；當作關鍵幀的圖片也必須是該段的參考，要嘛每張圖各一個關鍵幀、要嘛全部不設。使用已合併的 Remake int8／GGUF 時移除 LoRA loader、直接接 model；要用 edit LoRA 就換 LoRA 並設 `mode = edit`（六步 sigmas 會跟著切換）。`mode` 必須與模型相符。本範本未經完整 GPU 生成驗收；不保證與官方逐像素相同或接縫無痕。詳見 `timeline_viggle_remake.md`。"
       },
       "color": "#432",
       "bgcolor": "#653"
