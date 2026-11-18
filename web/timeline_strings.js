@@ -97,6 +97,37 @@ export const S = {
         ? "來源影片的參考長條沒有涵蓋到這段：尾段補幀開啟時不會生成，也不會出現在成片。要生成它，把參考長條拉長到這段（來源影片要夠長）"
         : "這段超出來源影片的結尾：尾段補幀開啟時不會生成，也不會出現在成片"),
     tailDroppedBar: "不生成",
+    // What a Sample Remake Segments node would refuse in a segment (remake_rules.js). `short` fits the status line;
+    // `full` continues it with what to do, for the segment's own form. The sampler's message stays the authority.
+    remake: {
+        short: (p) => ({
+            length: () => `Remake 每段要 90–345 幀（這段 ${p.frames} 幀）`,
+            source: () => (p.videos === 0 ? "Remake 需要一支涵蓋整段的影片參考"
+                : p.videos > 1 ? `Remake 每段只能有一支影片參考（這段 ${p.videos} 支）`
+                    : `影片參考只涵蓋這段的 ${p.covered}／${p.frames} 幀`),
+            pictures: () => `Remake 每段要 1–4 張圖片參考（這段 ${p.count} 張）`,
+            unsupported: () => `Remake 不支援${p.kinds.map((k) => ({ audios: "音訊參考", guides: "引導片段", locks: "保留原音" })[k]).join("、")}`,
+            audio_tag: () => "Remake 的 prompt 不能有音訊標籤",
+            sections: () => `prompt 缺少 Remake 六段式的 ${p.missing.length > 2 ? `${p.missing.length} 個段名` : p.missing.join("、")}`,
+            duplicate_picture: () => "同一個圖片檔案被加成兩張參考圖",
+            keyframe_not_reference: () => "關鍵畫面的圖片不是這段的圖片參考",
+            pins_uneven: () => "關鍵畫面要每張參考圖各一個，或全部不放",
+        })[p.code](),
+        full: (p) => S.remake.short(p) + ({
+            length: () => "：請調整段長，建議先用 107 或 124 幀。",
+            source: () => (p.videos === 0 ? "：按「參考素材」裡的影片把它加進這段，或按「上傳來源影片」（上傳後自動成為參考）；參考長條要涵蓋整段。"
+                : p.videos > 1 ? "：請只留來源影片那一支。"
+                    : "：把參考長條拉到涵蓋整段。來源影片比時間軸短時，可以到「解析度與放大」勾選「Remake 尾段補幀並裁回來源」。"),
+            pictures: () => (p.count ? "：請移除多的圖片參考。" : "：按「參考素材」裡的圖片把它加進這段，或把圖片拖到「參考」軌道；素材庫還沒有圖片時先按「加入素材」。"),
+            unsupported: () => "：請從這段移除。Remake 的聲音由取樣器的 keep_source_audio 決定。",
+            audio_tag: () => "（<Audio N> 或 <@名稱:audio>）：請刪掉它，改在 overall_soundscape 描述聲音。",
+            sections: () => `：需要 ${p.missing.join("、")}。Remake 用官方六段式 prompt，每段的時間戳從 00:00 開始。`,
+            duplicate_picture: () => "：請移除重複的素材，只留一個。",
+            keyframe_not_reference: () => "：把同一張圖也拖到「參考」軌道，或移除那個關鍵畫面。",
+            pins_uneven: () => "：這是官方節點的規則，請補齊或全部移除。",
+        })[p.code](),
+        status: (n, short, more) => `第 ${n} 段：${short}${more ? ` · 另有 ${more} 段也不符合 Remake 的需求` : ""}`,
+    },
 
     // segment form
     segment: (n) => `第 ${n} 段`,

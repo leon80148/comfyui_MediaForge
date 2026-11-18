@@ -28,7 +28,7 @@ import { useSource } from "./timeline_source.js";
 import {
     addMaterials, aliasRawTags, checkEdit, conformSegments, createFromCard, deleteBar, deleteCut, deleteMaterial, editBar,
     emitIntervals, inputImpact, insertCut, markCut, moveRefInOrder, patchBar, pickSnap, probeIssue, refChanges, refillSegments,
-    removeAllMaterials, renameMaterial, segmentInputs, setShotBoundary, sharedTagButtons, snapTargets, splitBar, tagButtons,
+    remakeProblems, removeAllMaterials, renameMaterial, segmentInputs, setShotBoundary, sharedTagButtons, snapTargets, splitBar, tagButtons,
     tailPlan, timelineProblems, useRefTag, useSharedTag,
 } from "./timeline_edit.js";
 import { attachMention } from "./timeline_mention.js";
@@ -377,6 +377,7 @@ class TimelineEditor {
         this.gutterKey = "";
         this.tail = null;                // what Remake tail padding leaves out (timeline_edit.tailPlan), set by render()
         this.running = [];               // the samplers this plan reaches that will run (samplers()), set by render()
+        this.remakeIssues = null;        // what a running Remake sampler would refuse, per planned segment, set by render()
         this.destroyed = false;
         this.boxHandles = [];            // the current form's prompt boxes: their @ lists and size observers
         this.lastPick = null;            // the prompt box whose last change was an @ pick (Ctrl+Z undoes the pick)
@@ -875,6 +876,8 @@ class TimelineEditor {
         this.check = timelineProblems(this.data, this.ctx);
         this.tail = tailPlan(this.data, this.ctx);
         this.running = this.samplers();
+        // Remake's own needs are looked at once the timeline has no problem of its own: they are a second question
+        this.remakeIssues = this.remake() && !this.check.list.length ? remakeProblems(this.data, this.ctx) : null;
         this.addButton.disabled = this.fillButton.disabled = this.importButton.disabled = this.materialButton.disabled = false;
         this.addButton.textContent = generate ? S.add : S.addCut;
         this.deleteButton.disabled = this.data.segments.length <= 1;
@@ -1841,6 +1844,9 @@ class TimelineEditor {
         const out = [];
         if (!view.prompt.ok) out.push(el("div", { class: "full bad", text: this.problemText({ stage: "prompt", error: view.prompt.error, segment: i }) }));
         if (view.manifest.carry_conflicts?.length) out.push(el("div", { class: "full warn", text: S.lockCarry }));
+        // beside a Remake sampler: what it would refuse in this segment, with what to do about it
+        const need = this.remakeIssues?.[i];
+        if (need) out.push(el("div", { class: "full warn", "data-fk": "remake-need", text: S.remake.full(need) }));
         return out;
     }
 
@@ -2157,9 +2163,14 @@ class TimelineEditor {
             // The timeline itself passed. Green still waits for the settings the editor knows will stop the run:
             // a check mark followed by a certain failure reassures about the wrong thing.
             const [issue] = st.mode === "generate" ? Object.values(this.renderIssues()) : [];
-            className = issue ? "warn" : "good";
-            text = issue ? `⚠ ${RENDER_SECTION}：${issue}` : `${S.valid} · ${summary()}`;
+            // then what a Remake sampler would refuse in a segment: the first one, and how many more there are
+            const needs = issue ? [] : (this.remakeIssues ?? []).flatMap((p, index) => (p ? [{ p, index }] : []));
+            className = issue || needs.length ? "warn" : "good";
+            text = issue ? `⚠ ${RENDER_SECTION}：${issue}`
+                : needs.length ? `⚠ ${S.remake.status(needs[0].index + 1, S.remake.short(needs[0].p), needs.length - 1)}`
+                    : `${S.valid} · ${summary()}`;
             if (issue) this.statusTarget = { type: "section", key: "render" };
+            else if (needs.length) this.statusTarget = { type: "segment", index: needs[0].index };
         }
         if (className === "bad" && !text.startsWith("⚠")) text = `⚠ ${text}`;
         if (this.sourceError && source && !text.includes(source)) text += ` · ${source}`;
