@@ -55,7 +55,7 @@ def reference_pins(segment):
     pictures = m["pictures"]
     by_ref = {p["ref"]: [] for p in pictures}
     if len(by_ref) != len(pictures):
-        raise ValueError(f"[{LABEL}] 同一段請勿重複加入相同檔案作為多張參考圖。")
+        raise ValueError(f"[{LABEL}] 第 {segment['index'] + 1} 段：同一段請勿重複加入相同檔案作為多張參考圖。")
     for k in m["keyframes"]:
         if k["ref"] not in by_ref:
             raise ValueError(f"[{LABEL}] 第 {segment['index'] + 1} 段：關鍵幀也必須是該段的圖片參考素材。")
@@ -79,11 +79,11 @@ def validate_segment(segment):
     if not 1 <= len(m["pictures"]) <= 4:
         raise ValueError(f"[{LABEL}] 第 {segment['index'] + 1} 段需要 1–4 張改繪後的圖片參考。")
     if any(m[k] for k in ("audios", "guides", "locks")):
-        raise ValueError(f"[{LABEL}] Remake 使用來源影片音軌；目前不支援額外參考音訊、guide 或獨立鎖音。圖片關鍵幀可繼續使用。")
+        raise ValueError(f"[{LABEL}] 第 {segment['index'] + 1} 段：Remake 使用來源影片音軌；目前不支援額外參考音訊、guide 或獨立鎖音。圖片關鍵幀可繼續使用。")
     if re.search(r"<Audio [0-9]+>", segment["prompt"]):
-        raise ValueError(f"[{LABEL}] Remake 的原音不是 <Audio N> 參考；請在 overall_soundscape 描述原音。")
+        raise ValueError(f"[{LABEL}] 第 {segment['index'] + 1} 段：Remake 的原音不是 <Audio N> 參考；請在 overall_soundscape 描述原音。")
     if any(section not in segment["prompt"] for section in PROMPT_SECTIONS):
-        raise ValueError(f"[{LABEL}] 請使用官方六段式 prompt：{', '.join(PROMPT_SECTIONS)}。每段時間戳從 00:00 開始。")
+        raise ValueError(f"[{LABEL}] 第 {segment['index'] + 1} 段：請使用官方六段式 prompt：{', '.join(PROMPT_SECTIONS)}。每段時間戳從 00:00 開始。")
     return reference_pins(segment)
 
 

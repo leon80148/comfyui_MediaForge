@@ -161,7 +161,10 @@ export function syncTimelineControls(graph) {
         for (const node of nodesOf(g)) applyResolution(node);
     }
     for (const node of graphsOf(graph).flatMap(nodesOf).filter((n) => n.type === "MF_EditTimeline")) {
-        const signature = timelineConsumers(node).map((n) => `${n.type}${n.mode === 2 || n.mode === 4 ? " off" : ""}`).sort().join(",");
+        // everything the editor reads from a sampler: what it is, whether it will run, and for Remake whether it
+        // brings its own schedule (the six official steps limit the high-resolution step count)
+        const signature = timelineConsumers(node).map((n) => `${n.type}${n.mode === 2 || n.mode === 4 ? " off" : ""}${
+            n.type === "MF_SampleRemakeSegments" && n.inputs?.some((i) => i.name === "sigmas" && i.link != null) ? " sigmas" : ""}`).sort().join(",");
         if (profiles.get(node) !== signature) {
             profiles.set(node, signature);
             node.mfTimeline?.render();

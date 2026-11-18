@@ -254,7 +254,7 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看�
 
 **Remake 尾段補幀**：在「解析度與放大」勾選「Remake 尾段補幀並裁回來源」。來源需是一支從時間軸起點連續跟隨的影片；尾段重複最後一幀、音訊補靜音到合法長度，生成後裁回有效來源結尾，保留全部片尾。Remake 範例預設啟用；舊工作流需勾選。API 設 `timeline_data.remake_tail_policy: "pad_trim"`，省略或 `"strict"` 維持嚴格檢查。🎛️ Sample Segments 不執行尾段補幀：接它時請取消勾選，否則狀態列會以橘色提醒，執行時的錯誤訊息也會指出這個勾選框的位置。
 
-**接上 Remake 時的編輯器**：`segment_plan` 追蹤到會執行的 🎭 Sample Remake Segments 時，編輯器改用 Remake 的規則。空白預覽不再寫「可只用文字規劃生成」，素材庫的空白提示改成每段需要 1–4 張圖片參考。「來源影片用途」的 固定 Guide 與 保留原音 會停用並標示「Remake 不支援」，音訊參考標示「Remake 不使用」：Remake 的聲音由取樣器的 `keep_source_audio` 決定。已存的值不會被改寫，仍會顯示並標示，由你改選。編輯器也會逐段比對 Remake 的需求：段長 90–345 幀、恰好一支涵蓋整段的影片參考、1–4 張圖片參考且不是同一個檔案加兩次、沒有音訊參考 / 引導片段 / 保留原音、prompt 沒有音訊標籤並包含六個段名、關鍵畫面的圖片也是該段的參考而且每張圖各一個或全部不放。不符合的段會在它自己的表單寫出原因與做法，狀態列以橘色指出第一個有問題的段（點一下選到那段）並說明另外還有幾段；開啟尾段補幀時比對的是實際規劃出來的段。這些是取樣器執行前檢查的一部分，不是全部：各段的畫布尺寸是否一致、官方節點是否已安裝、模型是否與 `mode` 相符，仍然要到執行時才知道，以取樣器的訊息為準。被 mute 或 bypass 的取樣器不算已連接：同一份時間軸接兩顆取樣器、輪流關掉其中一顆時，生成方式選單、尾段補幀、來源用途與狀態列都跟著目前會執行的那一顆，切換後立即更新。
+**接上 Remake 時的編輯器**：`segment_plan` 追蹤到會執行的 🎭 Sample Remake Segments 時，編輯器改用 Remake 的規則。空白預覽不再寫「可只用文字規劃生成」，素材庫的空白提示改成每段需要 1–4 張圖片參考。「來源影片用途」的 固定 Guide 與 保留原音 會停用並標示「Remake 不支援」，音訊參考標示「Remake 不使用」：Remake 的聲音由取樣器的 `keep_source_audio` 決定。已存的值不會被改寫，仍會顯示並標示，由你改選。編輯器也會逐段比對 Remake 的需求：段長 90–345 幀、恰好一支涵蓋整段的影片參考、1–4 張圖片參考且不是同一個檔案加兩次、沒有音訊參考 / 引導片段 / 保留原音、prompt 沒有音訊標籤並包含六個段名、關鍵畫面的圖片也是該段的參考而且每張圖各一個或全部不放。不符合的段會在它自己的表單寫出原因與做法，狀態列以橘色指出第一個有問題的段（點一下選到那段）並說明另外還有幾段；開啟尾段補幀時比對的是實際規劃出來的段。這些是取樣器執行前檢查的一部分，不是全部：各段的畫布尺寸是否一致、官方節點是否已安裝、模型是否與 `mode` 相符，仍然要到執行時才知道，以取樣器的訊息為準。被 mute 或 bypass 的取樣器不算已連接：同一份時間軸接兩顆取樣器、輪流關掉其中一顆時，生成方式選單、尾段補幀、來源用途與狀態列都跟著目前會執行的那一顆，切換後立即更新（以 frontend 1.58.5 實測；不回報節點 mode 改變的前端，會在下一次操作編輯器時更新）。取樣器放在子圖裡、而被 mute 或 bypass 的是那個子圖節點時，編輯器仍把它當成會執行。
 
 
 0.14.1 改用 **畫面比例＋目標 MP** 選擇尺寸：
@@ -321,7 +321,7 @@ API 使用者可在 v2 `timeline_data` 加入可選的 `render`：
 
 狀態列：
 
-- 第一行是持續狀態，有三種顏色。**紅色**是時間軸本身的問題（結構、分段、素材位置、每段的 prompt 與上限）：顯示白話的對象與原因，點一下定位，`詳情` 內有原始位置與代碼。**橘色**代表時間軸沒錯、但還不能放心執行：素材或來源尚未確認，或「解析度與放大」裡有已知會讓執行失敗的設定（沒選放大模型、選的模型不在清單裡、選了 SelfLift 卻沒有安裝 TimelineDirector 的節點、接 Remake 卻選 SelfLift、Remake 官方六步排程下高清步數超出 1–5、尾段補幀開著卻接了 Sample Segments）；這類提醒點一下會展開該區塊，區塊收合時標題也會顯示 `⚠` 與原因。接了 🎭 Sample Remake Segments 而某一段不符合 Remake 的需求時也是橘色，見[解析度、Latent 放大與 SelfLift](#解析度latent-放大與-selflift014) 的「接上 Remake 時的編輯器」。**綠色** `✓ 時間軸檢查通過` 代表以上都沒有。它仍然不檢查模型檔能否載入、其他節點的接線（包括 SelfLift 需要的標準 Euler sampler）與記憶體；放大模型清單讀不到時不會因此變橘（無法確認不等於有問題），被 mute 或 bypass 的取樣器不算已連接。
+- 第一行是持續狀態，有三種顏色。**紅色**是時間軸本身的問題（結構、分段、素材位置、每段的 prompt 與上限），或某個素材／來源影片讀不到（例如範例的佔位檔還沒換成自己的檔案）：顯示白話的對象與原因，點一下定位，`詳情` 內有原始位置與代碼。**橘色**代表時間軸沒錯、但還不能放心執行：素材或來源尚未確認，或「解析度與放大」裡有已知會讓執行失敗的設定（沒選放大模型——範例的 `SELECT_*` 佔位名稱也算沒選、選的模型不在清單裡、選了 SelfLift 卻沒有安裝 TimelineDirector 的節點、接 Remake 卻選 SelfLift、Remake 官方六步排程下高清步數超出 1–5、尾段補幀開著卻接了 Sample Segments）；這類提醒點一下會展開該區塊，區塊收合時標題也會顯示 `⚠` 與原因。接了 🎭 Sample Remake Segments 而某一段不符合 Remake 的需求時也是橘色，見[解析度、Latent 放大與 SelfLift](#解析度latent-放大與-selflift014) 的「接上 Remake 時的編輯器」。**綠色** `✓ 時間軸檢查通過` 代表以上都沒有。它仍然不檢查模型檔能否載入、其他節點的接線（包括 SelfLift 需要的標準 Euler sampler）與記憶體；放大模型清單讀不到時不會因此變橘（無法確認不等於有問題），被 mute 或 bypass 的取樣器不算已連接。
 - 少數問題附修復按鈕：長度或重疊不符（例如手改的 JSON）→ `調整段長與重疊`（依序只修不合法的值，後面的段會跟著移，交叉淡化放不下時縮短，不是整體最佳化）；generate 的 fps 不是 24 → `改成 24 fps`；cut 缺來源 → `上傳來源影片`；cut 帶素材 → 見上。一個 undo 步驟，並說明總長變化。
 - 第二行是這次操作的通知：哪幾段送給模型的內容變了；參考換了段或編號標籤改指別的素材時會明確點名，因為這些變更全部合法、檢查仍會通過。狀態正常且本節點輸出還沒接線時，提示下一步（generate → 🎛️ Sample Segments，Viggle Remake 則是 🎭 Sample Remake Segments；cut → 把 ranges 與 video_path 接到 ✂️ Trim by Ranges）。
 
@@ -1529,7 +1529,7 @@ SRT 文字 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`�
 | `🧬 Extend Latent` (`MF_ExtendLatent`) | 把前一段取樣後的 latent 尾端複製到本段 latent 開頭，並設定 `noise_mask` 讓 sampler 保留（或部分重新生成）這個區域。只做 tensor 運算：不載入模型、不取樣。加上 Append 會檢查的 `mf_carry` 標記 | `E_TOKENS`、`E_AUDIO_CARRY`、`E_CARRY_SOURCE`、`E_MASK_CONFLICT`、`E_PROVENANCE`、`W_PROVENANCE`、`W_LOCK_CARRY` |
 | `➕ Append Segment` (`MF_AppendSegment`) | 用你的 VAE（與 audio VAE）解碼取樣後的 latent、去掉與前段的重疊、套用進場的 crossfade，把無損分段檔暫存到磁碟。回傳新的 state，不修改輸入的 state | `E_SEQUENCE`、`E_PLAN`、`E_PROVENANCE`、`W_PROVENANCE`、`E_CARRY_DRIFT`、`E_LOCK_DRIFT`、`E_RAM`、`E_DISK`、`E_AUDIO_LAYOUT`、`W_AUDIO_PAD` |
 | `🎞️ Encode Remake Segment` (`MF_EncodeRemakeSegment`) | 解碼該段的來源影片與參考圖，交給已安裝的官方 `RemakeConditioning` 產生 conditioning 與 latent。尾段補幀時重複最後一幀、音訊補靜音 | 同 [🎭 Sample Remake Segments](#-sample-remake-segments-mf_sampleremakesegments) 每段的需求，訊息以 `[Sample Remake Segments]` 開頭 |
-| `MF_PrepareH3Upscale` | 解析度轉換時重建遮罩與原音鎖定，傳遞 SelfLift 原生低解析度上下文 | — |
+| `MF_PrepareH3Upscale` | 解析度轉換時重建遮罩與原音鎖定，傳遞 SelfLift 原生低解析度上下文 | 一則沒有代碼的訊息：Remake 保留原音時，放大前後的原音 latent 形狀不符 |
 | `MF_CopyH3Provenance` | 在乾淨的低解析度續接內容上保留段落標記 | — |
 
 `audio_curve = auto` 的 crossfade：本段音訊是從前一段續接來的用 `linear`，否則用 `equal_power`。Extend Latent 不檢查 conditioning（prompt、關鍵幀、參考）；它的 report 永遠寫 `conditioning_check: "unavailable"`。
