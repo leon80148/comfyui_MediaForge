@@ -74,6 +74,8 @@ const EXTRA_INPUT_LOCKS = {
     "MF_SampleSegments": { trigger_input: "negative", linked_widgets: ["cfg"] },
     // An external AUDIO replaces the whole soundtrack, so the lock-audio master never runs.
     "MF_AssembleSegments": { trigger_input: "audio", lock_widget: "lock_audio" },
+    // Linked ranges are what runs; ranges_json is the hand-typed fallback, and its sample text reads like the cut list.
+    "MF_TrimByRanges": { trigger_input: "ranges", lock_widget: "ranges_json" },
 };
 
 // node type → array of widget-value conditional rules

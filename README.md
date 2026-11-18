@@ -811,7 +811,7 @@ Cut a video by time ranges. Primary use case: auto-remove silence (wire from `MF
 | `video_path` | `input/sample.mp4` | |
 | `filename_prefix` | `MediaForge/trimmed` | |
 | `mode` | `remove` | `remove` = drop ranges, keep rest. `keep` = keep ranges, drop rest |
-| `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | Used when `ranges` pin not wired |
+| `ranges_json` | `"[[0.0, 1.0], [5.0, 7.5]]"` | Used when `ranges` pin not wired. Hidden when the `ranges` pin is wired (the value is kept) |
 | `crossfade_sec` | `0.0` (0–2) | `xfade` between adjacent kept segments; `0` = hard cut. Hidden and ignored in `precision=lossless` (stream copy can't blend pixels) |
 | `codec` / `crf` / `preset` | smart / `18` / `medium` | Ignored in `precision=lossless` (output container follows the source instead) |
 | `precision` | `precise (re-encode)` | `lossless (stream copy)` hides `codec` / `crf` / `preset` / `crossfade_sec` (frontend-enforced) — none of them reach ffmpeg in that mode. Declared as the **last entry of `optional`** (after `tensor_fps`), not in `required`: ComfyUI aligns a saved workflow's widget values positionally across the *entire* required+optional widget list, and `tensor_fps` already occupies a slot there — appending to `required` instead would have shifted it one slot over and corrupted old workflow JSON |
