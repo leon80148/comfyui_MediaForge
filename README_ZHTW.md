@@ -481,7 +481,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 | `segments` | 1–256 段 |
 | `segments[].start` / `end` | 整數幀，`end` 不包含；`generate`：段長 5 + 17n、重疊 0 或 5 + 17j；`cut`：落在來源範圍內、不重疊 |
 | `segments[].prompt` | 字串，預設空 |
-| `segments[].seed` | 選填，`null` 或 0 … 2⁵³ − 1；只有 Sample Segments 會套用 |
+| `segments[].seed` | 選填，`null` 或 0 … 2⁵³ − 1；Sample Segments 與 Sample Remake Segments 會套用 |
 | `segments[].seam_in.kind` | `cut` / `crossfade`；`crossfade` 需合法的 `frames` |
 | `segments[].seam_in.audio_curve` | `auto` / `linear` / `equal_power` |
 | `materials` | 最多 64 個 `{id, kind, ref, name}`：`kind` = `image` / `video` / `audio`；`ref` = `input/` 內的檔案；`name` = 別名，1–32 個 ASCII 英數 / `_` / `-` / 中日韓文字 / 假名 / 韓文，NFC、不重複 |

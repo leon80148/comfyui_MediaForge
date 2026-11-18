@@ -90,8 +90,10 @@ export const S = {
     hintAudio: "拖音檔到這裡，設定要保留原音的範圍",
     barLabel: (n, seconds) => `第 ${n} 段 · ${seconds.toFixed(2)} 秒`,
     barTitle: (n, from, to, overlapSeconds) => `第 ${n} 段：${from.toFixed(2)}–${to.toFixed(2)} 秒${overlapSeconds ? `；前 ${overlapSeconds.toFixed(2)} 秒和前一段重疊` : ""}`,
-    // Remake tail padding plans only the windows that still reach the source
-    tailDropped: "這段超出來源影片的結尾：尾段補幀開啟時不會生成，也不會出現在成片",
+    // Remake tail padding plans only the windows its source reference still reaches: the bar ends first, or the video does
+    tailDropped: (short) => (short
+        ? "來源影片的參考長條沒有涵蓋到這段：尾段補幀開啟時不會生成，也不會出現在成片。要生成它，把參考長條拉長到這段（來源影片要夠長）"
+        : "這段超出來源影片的結尾：尾段補幀開啟時不會生成，也不會出現在成片"),
     tailDroppedBar: "不生成",
 
     // segment form
@@ -114,7 +116,7 @@ export const S = {
     chipInsert: (name) => `插入 <@${name}> 到這段的 prompt`,
     chipAdd: (name) => `把 ${name} 加入這段的參考，並在 prompt 插入 <@${name}>`,
     chipsBlocked: "素材資訊還沒確認，暫時不能用這些按鈕",
-    chipsDropped: (n) => `第 ${n} 段超出來源影片的結尾，尾段補幀不會生成它，所以這些按鈕暫時不能用；刪除多出的段即可`,
+    chipsDropped: (n) => `第 ${n} 段不會生成（尾段補幀），所以這些按鈕暫時不能用；選取那一段可以看到原因`,
     sharedChipInsert: (name) => `插入 <@${name}> 到共用 prompt`,
     sharedChipAdd: (name, segs) => `把 ${name} 加入第 ${segs.join("、")} 段的參考，並在共用 prompt 插入 <@${name}>`,
     // the @ material list of the prompt boxes
@@ -125,6 +127,9 @@ export const S = {
         sharedAll: (n) => `✓ ${n} 段都有`,
         sharedNone: "目前沒有段落使用共用 prompt",
         sharedAdd: (segs) => `＋ 會補上第 ${segs.join("、")} 段的參考`,
+        // short: this column does not wrap. The row's tooltip carries the full reason
+        dropped: "這段不會生成（尾段補幀）",
+        sharedDropped: (n) => `第 ${n} 段不會生成（尾段補幀）`,
         hint: "↑↓ 選擇 · Enter / Tab 插入 · Esc 關閉",
     },
     lengthLabel: "長度",

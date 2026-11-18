@@ -478,7 +478,7 @@ curl "http://localhost:8188/view?filename=subtitled_00001.mp4&subfolder=MediaFor
 | `segments` | 1–256 segments |
 | `segments[].start` / `end` | integer frames, `end` exclusive; `generate`: lengths 5 + 17n, overlaps 0 or 5 + 17j; `cut`: inside the source, no overlap |
 | `segments[].prompt` | string, default empty |
-| `segments[].seed` | optional, `null` or 0 … 2⁵³ − 1; applied only by Sample Segments |
+| `segments[].seed` | optional, `null` or 0 … 2⁵³ − 1; applied by Sample Segments and Sample Remake Segments |
 | `segments[].seam_in.kind` | `cut` / `crossfade`; `crossfade` needs a legal `frames` |
 | `segments[].seam_in.audio_curve` | `auto` / `linear` / `equal_power` |
 | `materials` | ≤ 64 of `{id, kind, ref, name}`: `kind` = `image` / `video` / `audio`; `ref` = a file under `input/`; `name` = the alias, 1–32 ASCII letters / digits / `_` / `-` / CJK / kana / Hangul, NFC, unique |
