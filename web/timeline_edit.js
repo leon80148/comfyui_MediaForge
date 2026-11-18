@@ -1,4 +1,5 @@
 import { prepareRemakeTail } from "./remake_tail.js";
+import { remakeProblem } from "./remake_rules.js";
 // MediaForge timeline v2 edit commands — pure functions used by the timeline editor.
 //
 // Every command takes the canonical v2 timeline (version / source / prompt / materials / refs /
@@ -191,6 +192,30 @@ export function tailPlan(data, ctx) {
     } catch {
         return null;
     }
+}
+
+// What a Sample Remake Segments node would refuse, one entry per planned segment: null where it passes, otherwise
+// remake_rules.remakeProblem()'s answer. Python runs validate_segment() on every spec of the compiled plan, so this
+// walks the same plan: with tail padding the windows it keeps, at the lengths it gives them. null while the timeline
+// has something of its own to settle first (a material not verified yet, a manifest or prompt error, a tail that
+// cannot be planned): the status line reports those, and a Remake answer on top would be a guess.
+export function remakeProblems(data, ctx) {
+    if (ctx.mode !== "generate") return null;
+    let snaps = verifiedSnapshots(data, ctx.snapshots);
+    if (!covers(data, snaps)) return null;
+    if (data.remake_tail_policy === "pad_trim") {
+        try { ({ data, snapshots: snaps } = prepareRemakeTail(data, snaps)); }
+        catch { return null; }
+    }
+    const out = [];
+    for (const [i, s] of data.segments.entries()) {
+        const r = manifestFor(data, i, snaps, ctx);
+        if (!r.ok) return null;
+        const prompt = resolvePrompt(templateOf(data, i), r.manifest, data.materials, i, ctx.h3);
+        if (!prompt.ok) return null;
+        out.push(remakeProblem(s.end - s.start, r.manifest, prompt.prompt));
+    }
+    return out;
 }
 
 // What the status line reports, in Python's order (§4.2): structure → segment chain → geometry

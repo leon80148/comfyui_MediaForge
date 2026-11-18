@@ -46,7 +46,7 @@ class MF_SampleRemakeSegments:
                 or segment_plan.get("effective_grid") != H3_GRID or tuple(segment_plan.get("fps", ())) != H3_FPS):
             raise ValueError(f"[{LABEL}] 請連接新版 Edit Timeline，設為 generate、24 fps。")
         if mode not in SIGMAS or short_edge not in (480, 736) or not 0 <= keyframe_until <= 1:
-            raise ValueError(f"[{LABEL}] mode／short_edge／keyframe_until 不合法。")
+            raise ValueError(f"[{LABEL}] mode／short_edge／keyframe_until 不合法：mode 必須是 swap 或 edit，short_edge 必須是 480 或 736，keyframe_until 必須介於 0 與 1。")
         recipe = parse_render(segment_plan["render"]) if "render" in segment_plan else None
         strategy = recipe["mode"] if recipe else "direct"
         if strategy == "selflift":

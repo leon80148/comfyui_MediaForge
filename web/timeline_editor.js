@@ -28,7 +28,7 @@ import { useSource } from "./timeline_source.js";
 import {
     addMaterials, aliasRawTags, checkEdit, conformSegments, createFromCard, deleteBar, deleteCut, deleteMaterial, editBar,
     emitIntervals, inputImpact, insertCut, markCut, moveRefInOrder, patchBar, pickSnap, probeIssue, refChanges, refillSegments,
-    removeAllMaterials, renameMaterial, segmentInputs, setShotBoundary, sharedTagButtons, snapTargets, splitBar, tagButtons,
+    remakeProblems, removeAllMaterials, renameMaterial, segmentInputs, setShotBoundary, sharedTagButtons, snapTargets, splitBar, tagButtons,
     tailPlan, timelineProblems, useRefTag, useSharedTag,
 } from "./timeline_edit.js";
 import { attachMention } from "./timeline_mention.js";
@@ -83,6 +83,8 @@ const AUDIO_EXT = /\.(wav|mp3|flac|ogg|aac|m4a|opus)$/i;
 const VIDEO_EXT = /\.(mp4|mov|mkv|webm|avi|m4v|ts|mpg|mpeg)$/i;
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i;
 const FOCUSABLE = "button, input, select, textarea, summary, .mf-tl-card";
+const RENDER_SECTION = "解析度與放大";   // the section's name, as its header and the status line say it
+const PLACEHOLDER_MODEL = /^SELECT_/;    // what the example workflows put where the user picks a model file
 
 function chainCallback(object, property, callback) {
     if (object == undefined) return;
@@ -210,6 +212,7 @@ function installStyle() {
 .mf-tl-bar { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; flex: none; }
 .mf-tl-group { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .mf-tl-top { display: flex; gap: 8px; height: 150px; flex: none; }
+.mf-tl-top.compact { height: 58px; }
 .mf-tl-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .mf-tl-col.preview { width: 210px; flex: none; }
 .mf-tl-col.library { flex: 1; }
@@ -301,6 +304,7 @@ function installStyle() {
 .mf-tl-form .warn { color: #ffb36b; } .mf-tl-form .bad { color: #ff7a7a; }
 .mf-tl-form details { border: 1px solid var(--border-color, #444); border-radius: 4px; padding: 3px 6px; min-width: 0; }
 .mf-tl-form summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mf-tl-form details[open] > summary > .mf-tl-closed-only { display: none; }
 .mf-tl-form details > .body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; align-items: center; margin-top: 4px; }
 .mf-tl-resolution-controls { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .mf-tl-resolution-controls select { flex: 1; min-width: 100px; }
@@ -374,6 +378,9 @@ class TimelineEditor {
         this.fixKey = "";
         this.gutterKey = "";
         this.tail = null;                // what Remake tail padding leaves out (timeline_edit.tailPlan), set by render()
+        this.traced = [];                // every sampler this plan reaches (timelineConsumers()), set by render()
+        this.running = [];               // those of them that will run (samplers()), set by render()
+        this.remakeIssues = null;        // what a running Remake sampler would refuse, per planned segment, set by render()
         this.destroyed = false;
         this.boxHandles = [];            // the current form's prompt boxes: their @ lists and size observers
         this.lastPick = null;            // the prompt box whose last change was an @ pick (Ctrl+Z undoes the pick)
@@ -755,7 +762,7 @@ class TimelineEditor {
             this.libraryLabel, this.materialButton, this.materialInput,
         ]);
         this.cutHint = el("div", { class: "mf-tl-placeholder", text: S.cutHint });
-        const top = el("div", { class: "mf-tl-top" }, [
+        this.top = el("div", { class: "mf-tl-top" }, [
             el("div", { class: "mf-tl-col preview" }, [
                 el("div", { class: "mf-tl-head" }, [this.previewLabel, this.materialLabel, button(S.upload, () => this.fileInput.click()), this.fileInput]),
                 this.previewEmpty, this.video, this.materialImage, this.materialVideo,
@@ -812,12 +819,14 @@ class TimelineEditor {
         this.statusText.addEventListener("click", () => {
             const target = this.statusTarget;
             if (!target || this.gesture) return;
+            if (target.type === "section") return this.openSection(target.key);
             if (target.type === "segment") this.selectSegment(target.index);
             else this.select(target);
             this.render();
+            if (target.reveal) this.revealRow(target.reveal);
         });
         this.root = el("div", { class: "mf-tl", tabindex: "0", onkeydown: (e) => this.onKey(e) }, [
-            top, this.bar, this.panel, this.timeline, this.status, this.form,
+            this.top, this.bar, this.panel, this.timeline, this.status, this.form,
         ]);
         this.root.addEventListener("pointerdown", (e) => this.beginPress(e), true);
         // OS file drops go to the library; stopping them here keeps the canvas from treating
@@ -870,6 +879,10 @@ class TimelineEditor {
         this.result = validate(this.data, st.mode, st.fpsKey, st.grid, st.sourceFrames, st.hasSource);
         this.check = timelineProblems(this.data, this.ctx);
         this.tail = tailPlan(this.data, this.ctx);
+        this.traced = timelineConsumers(this.node);
+        this.running = this.samplers();
+        // Remake's own needs are looked at once the timeline has no problem of its own: they are a second question
+        this.remakeIssues = this.remake() && !this.check.list.length ? remakeProblems(this.data, this.ctx) : null;
         this.addButton.disabled = this.fillButton.disabled = this.importButton.disabled = this.materialButton.disabled = false;
         this.addButton.textContent = generate ? S.add : S.addCut;
         this.deleteButton.disabled = this.data.segments.length <= 1;
@@ -1031,8 +1044,12 @@ class TimelineEditor {
             ]);
         });
         const empty = generate && !cards.length && !pending.length
-            ? [el("span", { class: "mf-tl-label", text: S.emptyLibrary })] : [];
+            ? [el("span", { class: "mf-tl-label", text: this.remake() ? S.emptyLibraryRemake : S.emptyLibrary })] : [];
         this.rebuild(this.lib, [...cards, ...pending, ...empty]);
+        // With no source to preview and no card to hold, the row keeps its titles, buttons and one line of hint and
+        // leaves the rest of its height to the form. It changes here, together with the cards, so a rebuild that is
+        // held while a prompt is being typed holds the height too.
+        this.top.classList.toggle("compact", !st.hasSource && (!generate || !(cards.length + pending.length)));
     }
 
     layout(data, st) {
@@ -1270,10 +1287,54 @@ class TimelineEditor {
         return input;
     }
 
+    // The samplers this plan reaches that will run. A muted or bypassed one takes no part in the queue, so it does not
+    // decide what the editor offers or warns about either: one timeline feeding two samplers with one switched off
+    // is how the two get compared.
+    samplers() {
+        return this.traced.filter((n) => n.mode !== 2 && n.mode !== 4);
+    }
+
+    remake() {
+        return this.running.some((n) => n.type === "MF_SampleRemakeSegments");
+    }
+
+    // Whether the server could be asked what is installed: one answer lists the upscale models and says whether the
+    // TimelineDirector nodes are registered.
+    asked() {
+        return !!this.renderModels && !this.renderModelsError;
+    }
+
+    // What in 解析度與放大 is known to stop the run, the one to deal with first leading (a plugin to install before a
+    // model to pick). The section's red lines, its header while closed and the status line all read this one list, so
+    // none of them can say less than another. Only what is certain counts: a model list that could not be read proves
+    // nothing, while a SELECT_* name is the examples' placeholder and no model whatever the list says.
+    renderIssues() {
+        const r = this.data.render;
+        const remakes = this.running.filter((n) => n.type === "MF_SampleRemakeSegments");
+        const out = {};
+        if (this.data.remake_tail_policy === "pad_trim" && this.running.some((n) => n.type === "MF_SampleSegments")) {
+            out.tail = "目前連接的 Sample Segments 無法執行尾段補幀（只適用於 Sample Remake Segments）：請取消勾選，或改接 Sample Remake Segments。";
+        }
+        if (!r) return out;
+        if (remakes.length && r.mode === "selflift") out.selflift = "目前連接 Remake，無法執行 SelfLift；原設定保留，請改選生成方式。";
+        if (r.mode === "selflift" && this.asked() && !this.hasSelfLift) {
+            out.director = "尚未偵測到 TimelineDirector 的 SelfLift 節點：請安裝 Songssx/ComfyUI-MiniMaxH3-TimelineDirector 並重啟 ComfyUI，或改選其他生成方式。";
+        }
+        const sixSteps = remakes.some((n) => !n.inputs?.some((input) => input.name === "sigmas" && input.link != null));
+        if (sixSteps && r.mode === "two_stage" && (r.high_steps < 1 || r.high_steps > 5)) {
+            out.steps = "儲存的高清步數超過官方六步排程範圍：請到「進階：精確尺寸與取樣」把「高清取樣步數」調整為 1–5，或外接較長排程。";
+        }
+        const listed = this.asked() ? this.renderModels.includes(r.model) : null;
+        if (r.mode !== "direct" && (!r.model || PLACEHOLDER_MODEL.test(r.model) || listed === false)) out.model = "請選擇存在且相容的 H3 放大模型後再執行。";
+        return out;
+    }
+
     renderSettings() {
         const r = this.data.render;
-        const consumers = timelineConsumers(this.node);
-        const remake = consumers.some((n) => n.type === "MF_SampleRemakeSegments");
+        const consumers = this.running;
+        const issues = this.renderIssues();
+        const issue = (key) => (issues[key] ? [el("div", { class: "full bad", text: issues[key] })] : []);
+        const remake = this.remake();
         const remakeOnly = remake && consumers.every((n) => n.type === "MF_SampleRemakeSegments");
         // Keep six-step guidance only when a Remake consumer still uses its built-in schedule.
         const officialRemake = consumers.some((n) => n.type === "MF_SampleRemakeSegments"
@@ -1291,9 +1352,11 @@ class TimelineEditor {
         toggle.checked = !!r;
         rows.push(el("span", { text: "時間軸管理解析度" }), toggle);
         // A setting that can stop the run stays reachable: while it is on, and when the plan goes somewhere this editor
-        // cannot follow (an unknown node before the sampler). Only a traced plain sampler, or no link at all, hides it.
+        // cannot follow (an unknown node before the sampler). A sampler that was found hides it unless a Remake one will
+        // run, and so does no link at all. "Cannot follow" is about finding a sampler, not about whether it runs: a
+        // muted plain sampler is still a plain sampler.
         const tailOn = this.data.remake_tail_policy === "pad_trim";
-        if (remake || tailOn || (!consumers.length && this.outputLinked("segment_plan"))) {
+        if (remake || tailOn || (!this.traced.length && this.outputLinked("segment_plan"))) {
             const tail = el("input", { type: "checkbox", "data-fk": "remake-tail", onchange: (e) => {
                 this.propose({ ...this.data, remake_tail_policy: e.target.checked ? "pad_trim" : "strict" });
             } });
@@ -1307,8 +1370,7 @@ class TimelineEditor {
             rows.push(el("span", { text: "Remake 尾段補幀並裁回來源" }), tail,
                 el("div", { class: "full hint", text: "不足一段時重複最後一幀，生成後裁回來源結尾，保留全部有效片尾。舊工作流需勾選啟用。" }));
             // a traced plain sampler refuses a plan that carries tail padding, also when a Remake sampler shares the plan
-            if (tailOn && consumers.some((n) => n.type === "MF_SampleSegments")) rows.push(el("div", { class: "full bad",
-                text: "目前連接的 Sample Segments 無法執行尾段補幀（只適用於 Sample Remake Segments）：請取消勾選，或改接 Sample Remake Segments。" }));
+            rows.push(...issue("tail"));
         }
         if (r) {
             // The form may be held while a field commits. Read the current data on each action.
@@ -1354,17 +1416,15 @@ class TimelineEditor {
             if (remake) delete modes.selflift;
             if (remake && r.mode === "selflift") modes.selflift = "SelfLift（Remake 不支援，請改選）";
             const modeSelect = this.selectSetting(modes, r.mode, (mode) => update((current) => renderModePatch(current, mode)), "render-mode", "生成方式");
-            if (remake && r.mode === "selflift") {
-                [...modeSelect.children].find((o) => o.value === "selflift").disabled = true;
-                rows.push(el("div", { class: "full bad", text: "目前連接 Remake，無法執行 SelfLift；原設定保留，請改選生成方式。" }));
-            }
+            if (remake && r.mode === "selflift") [...modeSelect.children].find((o) => o.value === "selflift").disabled = true;
+            rows.push(...issue("selflift"));
             rows.push(el("span", { text: "生成方式" }), modeSelect);
             if (remake) rows.push(el("div", { class: "full hint", text: officialRemake
                 ? "未外接 sigmas：使用官方六步排程。進階使用可在 Sample Remake Segments 接 sampler／sigmas。"
                 : "已外接 sigmas：總步數依外接排程；實際步數與高清分配會寫入取樣報告。" }));
             if (r.mode === "two_stage") rows.push(el("div", { class: "full hint", text: "先低清取樣，放大後用剩餘步數完成高清，不額外增加總步數。可先試 1.5× 放大、高清 2 步，再比較畫質。" }));
             if (r.mode === "latent") rows.push(el("div", { class: "full hint", text: "低清完成全部取樣後直接放大，不再高清取樣。需要更多高清細節時，改選二階段生成。" }));
-            if (badRemakeSteps) rows.push(el("div", { class: "full bad", text: "儲存的高清步數超過官方六步排程範圍，請到進階設定調整為 1–5，或外接較長排程。" }));
+            rows.push(...issue("steps"));
             const staged = ["latent", "two_stage"].includes(r.mode);
             if (staged) rows.push(el("span", { text: "放大倍率" }), this.selectSetting({ ...UPSCALE_FACTORS, custom: "自訂基礎尺寸…" }, currentFactor(r), (v) => {
                 if (v === "custom") { openAdvanced(); return; }
@@ -1382,14 +1442,17 @@ class TimelineEditor {
             if (r.mode !== "direct") {
                 if (this.renderModels === null && !this.renderModelsLoading) this.loadRenderModels();
                 const choices = { "": "請選擇 H3 latent 放大模型", ...Object.fromEntries((this.renderModels ?? []).map((m) => [m, m])) };
-                if (r.model && !choices[r.model]) choices[r.model] = `${r.model}（未找到或不相容）`;
+                // a list that could not be read cannot say the saved model is missing
+                if (r.model && !choices[r.model]) choices[r.model] = PLACEHOLDER_MODEL.test(r.model) ? `${r.model}（範例的佔位名稱，請改選）`
+                    : this.renderModelsError ? `${r.model}（清單讀取失敗，無法確認）` : `${r.model}（未找到或不相容）`;
                 rows.push(el("span", { text: "H3 放大模型" }), el("div", { class: "mf-tl-resolution-controls" }, [
                     this.selectSetting(choices, r.model, (model) => update({ model }), "render-model", "H3 放大模型"),
                     button("重新讀取", () => this.loadRenderModels(), { title: "重新讀取 H3 放大模型清單" }),
                 ]));
-                if (!r.model || this.renderModels && !this.renderModels.includes(r.model)) rows.push(el("div", { class: "full bad", text: "請選擇存在且相容的 H3 放大模型後再執行。" }));
+                rows.push(...issue("model"));
             }
-            if (r.mode === "selflift") rows.push(el("div", { class: "full hint", text: `${this.hasSelfLift ? "已偵測到" : "尚未偵測到"} TimelineDirector SelfLift；只支援標準 Euler，低解析度固定為 50%。目標尺寸需為 64 的倍數。` }));
+            // "not found" is a statement about the server: it is made only when the server answered
+            if (r.mode === "selflift") rows.push(el("div", { class: "full hint", text: `${!this.asked() ? "無法確認是否已安裝" : this.hasSelfLift ? "已偵測到" : "尚未偵測到"} TimelineDirector SelfLift；只支援標準 Euler，低解析度固定為 50%。目標尺寸需為 64 的倍數。` }), ...issue("director"));
             if (this.renderModelsError) rows.push(el("div", { class: "full bad", text: this.renderModelsError }));
             const advanced = [el("div", { class: "full hint", text: "可直接指定精確寬高；修改目標時會同步調整基礎尺寸。載入舊工作流會保留原值。" })];
             const numeric = (key, label, min = 32, max = 8192, step = 32) => advanced.push(el("span", { text: label }),
@@ -1412,7 +1475,12 @@ class TimelineEditor {
             if (remake) advanced.push(el("div", { class: "full hint", text: "Remake 來源會填滿畫布並置中裁切；不使用參考影片短邊上限。" }));
             rows.push(this.details("render-advanced", "進階：精確尺寸與取樣", advanced));
         }
-        return this.details("render", r ? `解析度與放大 · ${r.width} × ${r.height}` : "解析度與放大 · 使用取樣器設定", rows);
+        // A closed section must not hide what will stop the run: its header carries the first of them. Open, the same
+        // sentence is the red line right below, so the header drops it again (CSS on the section's own open state).
+        const [first] = Object.values(issues);
+        const box = this.details("render", `${RENDER_SECTION} · ${r ? `${r.width} × ${r.height}` : "使用取樣器設定"}`, rows);
+        if (first) box.children[0].append(el("span", { class: "mf-tl-closed-only", text: ` · ⚠ ${first}` }));
+        return box;
     }
 
     sourceSettings(st) {
@@ -1429,10 +1497,23 @@ class TimelineEditor {
                 this.propose(next, "已更新來源用途；套用範圍已依來源長度與目前時間軸裁切。Guide 各段向下對齊合法幀數。");
             } catch (e) { this.notice = e.message; this.render(); }
         };
+        // Remake takes the source as its reference and the sound from the sampler's own switch. What it refuses (a guide,
+        // a lock) or ignores (an audio reference) is switched off here rather than left to fail in the queue; a saved
+        // value stays selected and marked until the user changes it, as SelfLift does in the section above.
+        const remake = this.remake();
+        const roleSelect = this.selectSetting({ reference: "參考影片", guide: remake ? "固定 Guide（Remake 不支援）" : "固定 Guide", preview: "僅預覽" },
+            role, (v) => apply(v, audio), "source-role");
+        const audioSelect = this.selectSetting({ none: "不用", reference: remake ? "音訊參考（Remake 不使用）" : "音訊參考（同時加入影片參考）",
+            original: remake ? "保留原音（Remake 不支援）" : "保留原音" }, audio, (v) => apply(role, v), "source-audio");
+        if (remake) {
+            for (const o of roleSelect.children) o.disabled = o.value === "guide";
+            for (const o of audioSelect.children) o.disabled = o.value !== "none";
+        }
         return [this.details("source-use", "來源影片用途", [
-            el("div", { class: "full hint", text: m ? `素材 ${m.name} · <@${m.name}>${role === "guide" ? "；Guide 本身沒有 Video 標籤" : ""}` : "此舊流程的來源尚未加入素材；選擇用途即可共用同一個檔案。" }),
-            el("span", { text: "畫面用途（重設此素材的編排）" }), this.selectSetting({ reference: "參考影片", guide: "固定 Guide", preview: "僅預覽" }, role, (v) => apply(v, audio), "source-role"),
-            el("span", { text: "來源聲音" }), this.selectSetting({ none: "不用", reference: "音訊參考（同時加入影片參考）", original: "保留原音" }, audio, (v) => apply(role, v), "source-audio"),
+            el("div", { class: "full hint", text: m ? `素材 ${m.name} · <@${m.name}>${role === "guide" ? "；Guide 本身沒有 Video 標籤" : ""}` : "這支來源影片還沒有加入素材庫；選擇用途就會用同一個檔案建立素材。" }),
+            ...(remake ? [el("div", { class: "full hint", text: "Remake 要用來源影片當參考影片：畫面用途請選「參考影片」。聲音由 🎭 Sample Remake Segments 的 keep_source_audio 決定（預設保留來源音軌），來源聲音維持「不用」。" })] : []),
+            el("span", { text: "畫面用途（重設此素材的編排）" }), roleSelect,
+            el("span", { text: "來源聲音" }), audioSelect,
             ...(!m ? [button("將來源加入參考素材", () => apply("reference", "none"), { class: "full" })] : []),
         ])];
     }
@@ -1450,6 +1531,28 @@ class TimelineEditor {
 
     number(value, onchange, attrs = {}) {
         return el("input", { type: "number", step: "1", value: String(value), onchange: (e) => onchange(Number(e.target.value)), ...attrs });
+    }
+
+    // Opens a section as a click on its header would and brings it to the top of the inspector. The scroll is the
+    // form's own: scrollIntoView() would also move the canvas containers above it.
+    openSection(key) {
+        const box = [...this.form.querySelectorAll("details")].find((d) => d.mfKey === key);
+        if (!box) return;
+        box.open = true;
+        this.view.open[key] = true;
+        const top = box.offsetTop - this.form.offsetTop;
+        if (Number.isFinite(top)) this.form.scrollTop = top;
+    }
+
+    // Brings a row of the inspector into view, moving it no further than needed. Only the classic renderer scrolls the
+    // inspector (in Nodes 2.0 the node grows instead), and there a segment's own lines sit below its prompt box.
+    revealRow(key) {
+        const row = [...this.form.querySelectorAll("[data-fk]")].find((e) => e.getAttribute("data-fk") === key);
+        if (!row) return;
+        const top = row.offsetTop - this.form.offsetTop, bottom = top + row.offsetHeight;
+        if (!Number.isFinite(bottom)) return;
+        if (top < this.form.scrollTop) this.form.scrollTop = top;
+        else if (bottom > this.form.scrollTop + this.form.clientHeight) this.form.scrollTop = bottom - this.form.clientHeight;
     }
 
     // A collapsible section. Its state lives in the view, so rebuilding the form never closes what the user opened;
@@ -1774,6 +1877,14 @@ class TimelineEditor {
         const out = [];
         if (!view.prompt.ok) out.push(el("div", { class: "full bad", text: this.problemText({ stage: "prompt", error: view.prompt.error, segment: i }) }));
         if (view.manifest.carry_conflicts?.length) out.push(el("div", { class: "full warn", text: S.lockCarry }));
+        // beside a Remake sampler: what it would refuse in this segment, with what to do about it
+        const need = this.remakeIssues?.[i];
+        if (need) {
+            // the way out of "no video reference" depends on what is already there: a bar to lengthen, a source to use, or nothing yet
+            const where = { placed: this.data.refs.some((r) => this.data.materials.find((m) => m.id === r.material)?.kind === "video"),
+                source: this.settings().hasSource };
+            out.push(el("div", { class: "full warn", "data-fk": "remake-need", text: S.remake.full(need, where) }));
+        }
         return out;
     }
 
@@ -2083,9 +2194,22 @@ class TimelineEditor {
         } else if (source) {
             className = this.sourceError ? "bad" : "warn";
             text = `${source} · ${summary()}`;
+        } else if (!this.check.verified) {
+            className = "warn";
+            text = `${S.unverified} · ${summary()}`;
         } else {
-            className = this.check.verified ? "good" : "warn";
-            text = `${this.check.verified ? S.valid : S.unverified} · ${summary()}`;
+            // The timeline itself passed. Green still waits for the settings the editor knows will stop the run:
+            // a check mark followed by a certain failure reassures about the wrong thing.
+            const [issue] = st.mode === "generate" ? Object.values(this.renderIssues()) : [];
+            // then what a Remake sampler would refuse in a segment: the first one, and how many more there are
+            const needs = issue ? [] : (this.remakeIssues ?? []).flatMap((p, index) => (p ? [{ p, index }] : []));
+            className = issue || needs.length ? "warn" : "good";
+            // each keeps the count and the total, as the other lines of this colour do: they are watched while editing
+            text = `${issue ? `⚠ ${RENDER_SECTION}：${issue.replace(/。$/, "")}`
+                : needs.length ? `⚠ ${S.remake.status(needs[0].index + 1, S.remake.short(needs[0].p), needs.length - 1)}`
+                    : S.valid} · ${summary()}`;
+            if (issue) this.statusTarget = { type: "section", key: "render" };
+            else if (needs.length) this.statusTarget = { type: "segment", index: needs[0].index, reveal: "remake-need" };
         }
         if (className === "bad" && !text.startsWith("⚠")) text = `⚠ ${text}`;
         if (this.sourceError && source && !text.includes(source)) text += ` · ${source}`;
@@ -2815,7 +2939,9 @@ class TimelineEditor {
         const show = (e, on) => {
             e.style.display = on ? "" : "none";
         };
-        this.previewEmpty.textContent = st.mode === "cut" ? S.noSourceCut : S.noSource;
+        // "text only is fine" is not true beside Remake, which needs a video reference in every segment
+        this.previewEmpty.textContent = st.mode === "cut" ? S.noSourceCut : !this.remake() ? S.noSource
+            : this.data.refs.some((r) => this.data.materials.find((x) => x.id === r.material)?.kind === "video") ? S.noSourceLibrary : S.noSourceRemake;
         show(this.previewEmpty, !m && !hasSource);
         show(this.video, !m && hasSource);
         show(this.previewLabel, !m);

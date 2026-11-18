@@ -18,6 +18,8 @@ export const S = {
     sourcePreview: "來源影片預覽",
     proxyPreview: "來源影片預覽（低解析度、無聲）",
     noSource: "沒有來源影片，可只用文字規劃生成",
+    noSourceRemake: "Remake 需要來源影片",
+    noSourceLibrary: "沒有選來源影片（參考影片在素材庫）",
     noSourceCut: "請先選擇來源影片",
     upload: "上傳來源影片",
     uploading: "上傳中…",
@@ -95,6 +97,42 @@ export const S = {
         ? "來源影片的參考長條沒有涵蓋到這段：尾段補幀開啟時不會生成，也不會出現在成片。要生成它，把參考長條拉長到這段（來源影片要夠長）"
         : "這段超出來源影片的結尾：尾段補幀開啟時不會生成，也不會出現在成片"),
     tailDroppedBar: "不生成",
+    // What a Sample Remake Segments node would refuse in a segment (remake_rules.js). `short` fits the status line;
+    // `full` continues it with what to do, for the segment's own form. The sampler's message stays the authority.
+    remake: {
+        short: (p) => ({
+            length: () => `Remake 每段要 90–345 幀（這段 ${p.frames} 幀）`,
+            source: () => (p.videos === 0 ? "Remake 需要一支涵蓋整段的影片參考"
+                : p.videos > 1 ? `Remake 每段只能有一支影片參考（這段 ${p.videos} 支）`
+                    : `影片參考只涵蓋這段的 ${p.covered}／${p.frames} 幀`),
+            pictures: () => `Remake 每段要 1–4 張圖片參考（這段 ${p.count} 張）`,
+            unsupported: () => `Remake 不支援${p.kinds.map((k) => ({ audios: "音訊參考", guides: "引導片段", locks: "保留原音" })[k]).join("、")}`,
+            audio_tag: () => "Remake 的 prompt 不能有音訊標籤",
+            sections: () => (p.missing.length === 6 ? "prompt 不是 Remake 的六段式格式"
+                : `prompt 缺少 Remake 六段式的 ${p.missing.length > 2 ? `${p.missing.length} 個段名` : p.missing.join("、")}`),
+            duplicate_picture: () => "同一個圖片檔案被加成兩張參考圖",
+            keyframe_not_reference: () => "關鍵畫面的圖片不是這段的圖片參考",
+            pins_uneven: () => "關鍵畫面要每張參考圖各一個，或全部不放",
+        })[p.code](),
+        // `where` says what is already there, for the one rule whose way out depends on it: {placed: a video reference
+        // is somewhere on the timeline, source: the node has a source video selected}
+        full: (p, where = {}) => S.remake.short(p) + ({
+            length: () => "：請調整段長，建議先用 107 或 124 幀。",
+            source: () => (p.videos > 1 ? "：請只留來源影片那一支。"
+                : p.videos === 1 || where.placed ? "：把「參考」軌道上的影片長條拉到涵蓋這一段。來源影片比時間軸短時，可以到「解析度與放大」勾選「Remake 尾段補幀並裁回來源」。"
+                    : where.source ? "：展開「來源影片用途」，把「畫面用途」設為「參考影片」。"
+                        : `：按「${S.upload}」（上傳後自動成為參考），或把素材庫的影片拖到「參考」軌道、涵蓋整段。`),
+            pictures: () => (p.count ? "：請移除多的圖片參考。" : "：按「參考素材」裡的圖片把它加進這段，或把圖片拖到「參考」軌道；素材庫還沒有圖片時先按「加入素材」。"),
+            unsupported: () => "：請從這段移除。Remake 的聲音由取樣器的 keep_source_audio 決定。",
+            audio_tag: () => "（<Audio N> 或 <@名稱:audio>）：請刪掉它，改在 overall_soundscape 描述聲音。",
+            sections: () => `${p.missing.length > 2 ? `：需要 ${p.missing.join("、")}` : ""}。Remake 用官方六段式 prompt，每段的時間戳從 00:00 開始。`,
+            duplicate_picture: () => "：請移除重複的素材，只留一個。",
+            keyframe_not_reference: () => "：把同一張圖也拖到「參考」軌道，或移除那個關鍵畫面。",
+            pins_uneven: () => "：這是官方節點的規則，請補齊或全部移除。",
+        })[p.code](),
+        // the count of the others stays inside the sentence: the status line ends with the timeline's own "N 段 · 總長"
+        status: (n, short, more) => `第 ${n} 段：${short}${more ? `（另有 ${more} 段也是）` : ""}`,
+    },
 
     // segment form
     segment: (n) => `第 ${n} 段`,
@@ -170,6 +208,7 @@ export const S = {
     materialRemoved: (name, refs, anchors, hasTags) => `已移除「${name}」${refs || anchors ? `及 ${refs} 個參考、${anchors} 個指定項目` : ""}（原始檔案保留，可復原）${hasTags ? `；prompt 仍有 <@${name}> 標籤，請修改或移除` : ""}`,
     library: "素材庫（可以拖到下方軌道）",
     emptyLibrary: "把圖片、影片、音檔拖到這裡，或按「加入素材」。只用文字生成可以跳過",
+    emptyLibraryRemake: "Remake 每段需要 1–4 張圖片參考：拖到這裡，或按「加入素材」",
     upTo: "把它用在",
     useInSegment: (n) => `＋ 用在第 ${n} 段`,
     useInSegmentTitle: "加入這段的參考，並在 prompt 插入標籤",

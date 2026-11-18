@@ -10,7 +10,7 @@ FFmpeg 驅動的 custom_nodes plugin：字幕燒入、影片循環、媒體 prob
 
 ## 亮點
 
-- 🎞️ **30 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）。另有 5 顆已註冊的內部節點，由 Sample Segments 執行時自己建立
+- 🎞️ **31 個節點** 分散在 6 個分類 — Subtitle / Video / Analysis / Audio（Phase 6 開張）/ Compose（含 audio chain）/ AI（Net / Image 規劃中）。另有 6 顆已註冊的內部節點，由 Sample Segments 與 Sample Remake Segments 執行時自己建立
 - 🔗 **Dual-input bridge** — file-consumer node 同時接受 `video_path` 字串 *或* in-memory 的 `IMAGE + AUDIO + tensor_fps` 三件套，VHS / AnimateDiff / 任意 IMAGE-pipeline plugin 都能直接 wire 進 MediaForge、不必 SaveVideoFrames 來回 round-trip
 - 🚀 **智慧 GPU codec 預設** — 偵測到 NVENC 自動用 `h264_nvenc`，沒 GPU 的機器自動 fallback `libx264`。不必手動切、不會在沒卡的環境壞掉
 - 📡 **API-ready 輸出** — 每個產出檔案的節點都同時 emit ComfyUI `ui.images` metadata，`/history/<prompt_id>` 直接看到輸出檔名，`/view?filename=X&subfolder=Y&type=output` 可下載（見 [Using via API](#using-via-api)）
@@ -211,6 +211,8 @@ Start 的 `audio` 輸出只有接線才解碼，`keep_source_audio` 關閉時也
 
 ComfyUI 會把 plugin 的 `example_workflows/` 資料夾列在範本瀏覽器。模型欄位是 `SELECT_*` 佔位值 —— 請選自己的檔案。codec 為 `h264 (libx264)`。
 
+每個範例在範本瀏覽器有自己的縮圖（同資料夾的 `<名稱>.jpg`；剛更新時瀏覽器可能還記著舊的結果，最多一小時，強制重新整理即可）。時間軸範例的寫法一致：說明節點在最左邊，中英並列（英文在前、`---` 之後是繁中），依序是標題、編號步驟、這份計畫的內容與限制；生成類範例的載入器在上、Edit Timeline 在它們下方、取樣與輸出在右，載入器到取樣器的連線不會被編輯器擋住。每個範例輸出到自己的檔名前綴。
+
 | 檔案 | 內容 |
 |---|---|
 | `timeline_h3_basic.json` | 純文字：3 段 MiniMax H3、每段 107 幀、重疊 22 / 39 → 260 幀。選好模型檔就能執行 |
@@ -221,7 +223,7 @@ ComfyUI 會把 plugin 的 `example_workflows/` 資料夾列在範本瀏覽器。
 
 Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看得到的三個原生 widget 顯示白話標籤（`來源影片（video）`、`每秒幀數（fps）`、`用途（mode）`，以及 `生成新影片（generate）` 這類選項），只改顯示：存檔與 API 用的名稱和值不變。第四個 `grid` 只剩一個值，維持隱藏。
 
-版面由上而下：預覽與素材庫、工具列、軌道（左欄標示分段 / 參考 / 指定畫面 / 保留原音，空軌道有用途提示）、狀態列、inspector。時間一律秒數在前，例如 `4.46 秒（107 幀）`。`？` 開啟名詞說明與快捷鍵。
+版面由上而下：預覽與素材庫、工具列、軌道（左欄標示分段 / 參考 / 指定畫面 / 保留原音，空軌道有用途提示）、狀態列、inspector。沒有來源影片、素材庫也是空的時候，預覽與素材庫那一列只留標題、按鈕和一行提示，把高度讓給下面的 inspector；選了來源影片或加入（含上傳中的）第一個素材就會展開。時間一律秒數在前，例如 `4.46 秒（107 幀）`。`？` 開啟名詞說明與快捷鍵。
 
 作用對象：點選或 Tab 到一段就是編輯對象；播放頭不在該段時會跳過去（`generate` 跳到扣除開頭重疊後的位置，`cut` 跳到來源區間起點）。之後點或拖曳尺規、方向鍵、播放都只移動播放頭，不會換編輯對象。按鈕會寫明作用在哪裡，例如 `＋ 用在第 2 段`、`＋ 在 3.54 秒指定畫面`。
 
@@ -250,7 +252,9 @@ Edit Timeline 以視覺化編輯器取代原始 `timeline_data` 文字框。看�
 
 **Viggle Remake** 沿用同一組控制，支援直接生成、Latent 模型放大與二階段生成；SelfLift 會明確拒絕。直接生成在目標尺寸取樣；Latent 放大先以基礎尺寸取樣再放大；二階段拆分實際使用的排程（未外接 sigmas 時為官方六步、高清 1–5 步），並在高清階段重新編碼來源與參考。來源影片會填滿畫布並置中裁切，原音在兩階段都保持乾淨。目標 928×1632、基礎 480×832 時，即使取樣器的舊 `short_edge` 仍為 480，最後仍輸出 928×1632。Remake 來源須匹配各階段畫布，不使用一般參考影片短邊上限。自訂畫布超出官方 480／736 短邊預設時，不代表該尺寸的畫質或效能已驗證。詳見 [Remake 操作說明](example_workflows/timeline_viggle_remake.md#解析度與放大)。
 
-**Remake 尾段補幀**：在「解析度與放大」勾選「Remake 尾段補幀並裁回來源」。來源需是一支從時間軸起點連續跟隨的影片；尾段重複最後一幀、音訊補靜音到合法長度，生成後裁回有效來源結尾，保留全部片尾。Remake 範例預設啟用；舊工作流需勾選。API 設 `timeline_data.remake_tail_policy: "pad_trim"`，省略或 `"strict"` 維持嚴格檢查。
+**Remake 尾段補幀**：在「解析度與放大」勾選「Remake 尾段補幀並裁回來源」。來源需是一支從時間軸起點連續跟隨的影片；尾段重複最後一幀、音訊補靜音到合法長度，生成後裁回有效來源結尾，保留全部片尾。Remake 範例預設啟用；舊工作流需勾選。API 設 `timeline_data.remake_tail_policy: "pad_trim"`，省略或 `"strict"` 維持嚴格檢查。🎛️ Sample Segments 不執行尾段補幀：接它時請取消勾選，否則狀態列會以橘色提醒，執行時的錯誤訊息也會指出這個勾選框的位置。
+
+**接上 Remake 時的編輯器**：`segment_plan` 追蹤到會執行的 🎭 Sample Remake Segments 時，編輯器改用 Remake 的規則。空白預覽不再寫「可只用文字規劃生成」，素材庫的空白提示改成每段需要 1–4 張圖片參考。「來源影片用途」的 固定 Guide 與 保留原音 會停用並標示「Remake 不支援」，音訊參考標示「Remake 不使用」：Remake 的聲音由取樣器的 `keep_source_audio` 決定。已存的值不會被改寫，仍會顯示並標示，由你改選。編輯器也會逐段比對 Remake 的需求：段長 90–345 幀、恰好一支涵蓋整段的影片參考、1–4 張圖片參考且不是同一個檔案加兩次、沒有音訊參考 / 引導片段 / 保留原音、prompt 沒有音訊標籤並包含六個段名、關鍵畫面的圖片也是該段的參考而且每張圖各一個或全部不放。不符合的段會在它自己的表單寫出原因與做法，狀態列以橘色指出第一個有問題的段（點一下選到那段）並說明另外還有幾段；開啟尾段補幀時比對的是實際規劃出來的段。這些是取樣器執行前檢查的一部分，不是全部：各段的畫布尺寸是否一致、官方節點是否已安裝、模型是否與 `mode` 相符，仍然要到執行時才知道，以取樣器的訊息為準。被 mute 或 bypass 的取樣器不算已連接：同一份時間軸接兩顆取樣器、輪流關掉其中一顆時，生成方式選單、尾段補幀、來源用途與狀態列都跟著目前會執行的那一顆，切換後立即更新（以 frontend 1.58.5 實測；不回報節點 mode 改變的前端，會在下一次操作編輯器時更新）。取樣器放在子圖裡、而被 mute 或 bypass 的是那個子圖節點時，編輯器仍把它當成會執行。
 
 
 0.14.1 改用 **畫面比例＋目標 MP** 選擇尺寸：
@@ -317,7 +321,7 @@ API 使用者可在 v2 `timeline_data` 加入可選的 `render`：
 
 狀態列：
 
-- 第一行是持續狀態。`✓ 時間軸檢查通過` 只代表時間軸本身（結構、分段、素材位置、每段的 prompt 與上限），不檢查下游接線或模型。有問題時顯示白話的對象與原因，點一下定位，`詳情` 內有原始位置與代碼。
+- 第一行是持續狀態，有三種顏色。**紅色**是時間軸本身的問題（結構、分段、素材位置、每段的 prompt 與上限），或某個素材／來源影片讀不到（例如範例的佔位檔還沒換成自己的檔案）：顯示白話的對象與原因，點一下定位，`詳情` 內有原始位置與代碼。**橘色**代表時間軸沒錯、但還不能放心執行：素材或來源尚未確認，或「解析度與放大」裡有已知會讓執行失敗的設定（沒選放大模型——範例的 `SELECT_*` 佔位名稱也算沒選、選的模型不在清單裡、選了 SelfLift 卻沒有安裝 TimelineDirector 的節點、接 Remake 卻選 SelfLift、Remake 官方六步排程下高清步數超出 1–5、尾段補幀開著卻接了 Sample Segments）；這類提醒點一下會展開該區塊，區塊收合時標題也會顯示 `⚠` 與原因。接了 🎭 Sample Remake Segments 而某一段不符合 Remake 的需求時也是橘色，見[解析度、Latent 放大與 SelfLift](#解析度latent-放大與-selflift014) 的「接上 Remake 時的編輯器」。**綠色** `✓ 時間軸檢查通過` 代表以上都沒有。它仍然不檢查模型檔能否載入、其他節點的接線（包括 SelfLift 需要的標準 Euler sampler）與記憶體；放大模型清單讀不到時不會因此變橘（無法確認不等於有問題），被 mute 或 bypass 的取樣器不算已連接。
 - 少數問題附修復按鈕：長度或重疊不符（例如手改的 JSON）→ `調整段長與重疊`（依序只修不合法的值，後面的段會跟著移，交叉淡化放不下時縮短，不是整體最佳化）；generate 的 fps 不是 24 → `改成 24 fps`；cut 缺來源 → `上傳來源影片`；cut 帶素材 → 見上。一個 undo 步驟，並說明總長變化。
 - 第二行是這次操作的通知：哪幾段送給模型的內容變了；參考換了段或編號標籤改指別的素材時會明確點名，因為這些變更全部合法、檢查仍會通過。狀態正常且本節點輸出還沒接線時，提示下一步（generate → 🎛️ Sample Segments，Viggle Remake 則是 🎭 Sample Remake Segments；cut → 把 ranges 與 video_path 接到 ✂️ Trim by Ranges）。
 
@@ -886,7 +890,7 @@ ComfyUI `VIDEO` → H.264 MP4，有音訊時編成 AAC。讀檔時的解碼器�
 
 | 輸出 | 型別 | 說明 |
 |---|---|---|
-| `segment_plan` | MF_SEGMENT_PLAN | `generate`：接到 Sample Segments |
+| `segment_plan` | MF_SEGMENT_PLAN | `generate`：接到 Sample Segments，Viggle Remake 則接 Sample Remake Segments |
 | `ranges` | SILENCE_RANGES | `cut`：選出的來源區間（秒，與 `MF_DetectScenes` 相同慣例）—— 接到 `MF_TrimByRanges`；`generate`：空 list |
 | `plan_json` | STRING | 驗證後的計畫 JSON，供檢視 —— 永遠不是 input |
 | `segment_count` | INT | 分段數 |
@@ -1471,16 +1475,61 @@ SRT 文字 → 翻譯後 SRT（時間戳保留）。走 `/v1/chat/completions`�
 
 ---
 
+#### 🎭 Sample Remake Segments (`MF_SampleRemakeSegments`)
+
+用一顆節點逐段執行 Viggle Remake 的時間軸：把一支來源影片依 1–4 張改繪後的圖片重繪。執行時逐段展開成一組節點 —— `🎞️ Encode Remake Segment`（呼叫已安裝的官方 `RemakeConditioning`）→ `🧬 Extend Latent` → 官方 `RemakeNoise` + core `BasicGuider` + `SamplerCustomAdvanced` → `➕ Append Segment` —— 模型先經官方 `RemakeKeyframeUntil` 包裝。需要另外安裝官方 ComfyUI-Viggle-Remake（缺少或版本不相容時在編碼前報錯）；模型與 LoRA 由你自己的節點載入。接線與參數建議見 [Remake 操作說明](example_workflows/timeline_viggle_remake.md)。
+
+**適用情境**：接在 ⏱️ Edit Timeline（`generate`、24 fps）與 🧵 Assemble Segments 之間。一般的 MiniMax H3 生成請用 🎛️ Sample Segments。
+
+| Widget | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `mode` | dropdown | `swap` | `swap` / `edit`。沒接 `sigmas` 時使用這個模式的官方六步排程；不會替你更換模型或 LoRA，必須與載入的模型相符 |
+| `noise_seed` | INT | `0`（+ `control_after_generate`） | 時間軸上沒有指定 seed 的段都用這個值 |
+| `short_edge` | dropdown | `480` | `480` / `736`：16:9 對應 832×480 / 1280×736，直式對調。時間軸管理解析度時隱藏，改用時間軸的目標 / 基礎尺寸（值仍保留） |
+| `keep_source_audio` | BOOLEAN | `True` | 把來源影片的音軌編進乾淨的 audio latent、整段不去噪，輸出經 audio VAE 重建。關閉時輸出靜音 |
+| `keyframe_until` | FLOAT | `0.9`（0–1，step 0.01） | 傳給官方 `RemakeKeyframeUntil` |
+
+**Socket**：
+
+| 輸入 | 型別 | 說明 |
+|---|---|---|
+| `model` | MODEL | fl2va + Viggle LoRA（Bypass Loader），或已合併的 Remake int8 / GGUF；必須與 `mode` 相符 |
+| `clip` | CLIP | 文字編碼器 |
+| `vae` | VAE | video VAE |
+| `audio_vae` | VAE | audio VAE（必接） |
+| `segment_plan` | MF_SEGMENT_PLAN | 來自 Edit Timeline |
+| `sampler` *(選用)* | SAMPLER | 例如 core `KSamplerSelect`；不接時用 Euler |
+| `sigmas` *(選用)* | SIGMAS | 例如 core `ManualSigmas`；不接時用官方六步。總步數由排程決定，二階段生成共用同一份排程、不額外增加步數 |
+
+**輸出**：`state`（MF_SEGMENT_STATE）→ Assemble Segments；`report` STRING（JSON：模式、實際使用的 sigmas 與 sampler 及其來源、總步數與低清 / 高清的步數分配、畫布尺寸、`keyframe_until`、音訊來源、尾段補幀政策，以及逐段的幀數、pins、輸出幀數、補幀數與有效 seed）。
+
+**每段的需求**。展開前逐段檢查，有一條不符就停止，訊息會指出是第幾段：
+
+- 段長 90–345 幀、且為 17n+5（建議先用 107 或 124）。
+- 恰好一支完整覆蓋該段的參考影片：把來源影片設為跟隨時間軸的參考。
+- 1–4 張圖片參考，同一個檔案不能加兩次。
+- 沒有音訊參考、固定 Guide、保留原音：聲音由 `keep_source_audio` 處理。
+- prompt 不含 `<Audio N>`，並包含官方六段式的六個段名：`subject_definitions`、`summary`、`retention_analysis`、`detailed_description`、`overall_soundscape`、`non_diegetic_music`。
+- 關鍵幀（官方稱 pins）的圖片必須也是該段的圖片參考；要嘛每張參考圖各一個關鍵幀，要嘛全部不設。
+- 各段的來源必須算出相同的畫布尺寸（影片方向與比例一致）。
+
+⏱️ Edit Timeline 接到這顆節點時，會在編輯當下就標出不符合前六條的段，不必等到執行；最後一條與模型、官方節點的檢查仍在執行時進行。
+
+**說明**：支援直接生成、Latent 模型放大與二階段生成，不支援 SelfLift；尾段補幀也在同一節說明，見[解析度、Latent 放大與 SelfLift](#解析度latent-放大與-selflift014)。內部節點出錯時顯示在這顆節點上。
+
+---
+
 #### 內部節點
 
-有五顆節點只因為 Sample Segments 要建立它們而存在。它們有註冊（graph expansion 需要）、被標成 deprecated 讓節點搜尋與節點庫略過，也從右鍵的 Add Node 選單拿掉。「deprecated」只是 ComfyUI 剛好提供的旗標，它們不會被淘汰。你會在兩個地方看到它們的名字：Sample Segments 內部報錯時的標籤，以及 API 的 `/object_info`。
+有六顆節點只因為 Sample Segments 與 Sample Remake Segments 要建立它們而存在。它們有註冊（graph expansion 需要）、被標成 deprecated 讓節點搜尋與節點庫略過，也從右鍵的 Add Node 選單拿掉。「deprecated」只是 ComfyUI 剛好提供的旗標，它們不會被淘汰。你會在兩個地方看到它們的名字：Sample Segments 內部報錯時的標籤，以及 API 的 `/object_info`。
 
 | 節點 | 對一段做的事 | 可能送出的訊息 |
 |---|---|---|
 | `🧩 Encode H3 Segment` (`MF_EncodeH3Segment`) | 依該段的 prompt 與素材建立 MiniMax H3 conditioning 與空的 AV latent：參考經 core `MiniMaxH3ReferenceToVideo`、關鍵幀與錨定片段依幀序經 core `MiniMaxH3AddGuide`，再把[鎖定原音](#保留原音)寫進 latent（`noise_mask` 與 `mf_lock` metadata）。素材只在這次呼叫內解碼 | `E_H3_NODES`、`E_SOURCE_CHANGED`、`E_SOURCE_SHORTFALL`、`W_AUDIO_PAD` |
 | `🧬 Extend Latent` (`MF_ExtendLatent`) | 把前一段取樣後的 latent 尾端複製到本段 latent 開頭，並設定 `noise_mask` 讓 sampler 保留（或部分重新生成）這個區域。只做 tensor 運算：不載入模型、不取樣。加上 Append 會檢查的 `mf_carry` 標記 | `E_TOKENS`、`E_AUDIO_CARRY`、`E_CARRY_SOURCE`、`E_MASK_CONFLICT`、`E_PROVENANCE`、`W_PROVENANCE`、`W_LOCK_CARRY` |
 | `➕ Append Segment` (`MF_AppendSegment`) | 用你的 VAE（與 audio VAE）解碼取樣後的 latent、去掉與前段的重疊、套用進場的 crossfade，把無損分段檔暫存到磁碟。回傳新的 state，不修改輸入的 state | `E_SEQUENCE`、`E_PLAN`、`E_PROVENANCE`、`W_PROVENANCE`、`E_CARRY_DRIFT`、`E_LOCK_DRIFT`、`E_RAM`、`E_DISK`、`E_AUDIO_LAYOUT`、`W_AUDIO_PAD` |
-| `MF_PrepareH3Upscale` | 解析度轉換時重建遮罩與原音鎖定，傳遞 SelfLift 原生低解析度上下文 | — |
+| `🎞️ Encode Remake Segment` (`MF_EncodeRemakeSegment`) | 解碼該段的來源影片與參考圖，交給已安裝的官方 `RemakeConditioning` 產生 conditioning 與 latent。尾段補幀時重複最後一幀、音訊補靜音 | 同 [🎭 Sample Remake Segments](#-sample-remake-segments-mf_sampleremakesegments) 每段的需求，訊息以 `[Sample Remake Segments]` 開頭 |
+| `MF_PrepareH3Upscale` | 解析度轉換時重建遮罩與原音鎖定，傳遞 SelfLift 原生低解析度上下文 | 一則沒有代碼的訊息：Remake 保留原音時，放大前後的原音 latent 形狀不符 |
 | `MF_CopyH3Provenance` | 在乾淨的低解析度續接內容上保留段落標記 | — |
 
 `audio_curve = auto` 的 crossfade：本段音訊是從前一段續接來的用 `linear`，否則用 `equal_power`。Extend Latent 不檢查 conditioning（prompt、關鍵幀、參考）；它的 report 永遠寫 `conditioning_check: "unavailable"`。

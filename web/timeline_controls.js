@@ -149,11 +149,22 @@ export function syncTimelineControls(graph) {
         if (!watchedGraphs.has(g)) {
             watchedGraphs.add(g);
             chain(g, "onConnectionChange", () => scheduleTimelineControls(g));
+            // A muted or bypassed sampler no longer decides what the editor offers, so a node's mode change refreshes
+            // it. The frontend sends that to the graph's event target and to graph.onTrigger. The event target is the
+            // one to use: the frontend's own error tracker wraps graph.onTrigger and, when it detaches, puts back the
+            // handler it found when it attached, which drops a hook chained in between. A frontend without the event
+            // target gets the chained hook; one that sends neither leaves the editor to catch up on its next rebuild.
+            const onMode = (property) => { if (property === "mode") scheduleTimelineControls(g); };
+            if (g.events?.addEventListener) g.events.addEventListener("node:property:changed", (e) => onMode(e?.detail?.property));
+            else chain(g, "onTrigger", (e) => { if (e?.type === "node:property:changed") onMode(e.property); });
         }
         for (const node of nodesOf(g)) applyResolution(node);
     }
     for (const node of graphsOf(graph).flatMap(nodesOf).filter((n) => n.type === "MF_EditTimeline")) {
-        const signature = timelineConsumers(node).map((n) => n.type).sort().join(",");
+        // everything the editor reads from a sampler: what it is, whether it will run, and for Remake whether it
+        // brings its own schedule (the six official steps limit the high-resolution step count)
+        const signature = timelineConsumers(node).map((n) => `${n.type}${n.mode === 2 || n.mode === 4 ? " off" : ""}${
+            n.type === "MF_SampleRemakeSegments" && n.inputs?.some((i) => i.name === "sigmas" && i.link != null) ? " sigmas" : ""}`).sort().join(",");
         if (profiles.get(node) !== signature) {
             profiles.set(node, signature);
             node.mfTimeline?.render();
