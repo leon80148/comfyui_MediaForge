@@ -26,7 +26,7 @@ class MF_PrepareH3Upscale:
             if preserve_audio:
                 original, original_nested = split_streams(template["samples"])
                 if not original_nested or original[1].shape != streams[1].shape:
-                    raise ValueError("[Prepare H3 Upscale] 原音 latent 形狀不符，無法保留 Remake 原音。")
+                    raise ValueError("[Prepare H3 Upscale] 原音 latent 形狀不符，無法保留 Remake 原音。請確認放大模型與 H3 相容；或在 Edit Timeline 的「解析度與放大」把生成方式改成「直接生成」。")
                 # Remake holds the entire source soundtrack clean at both resolutions.
                 out["samples"] = type(latent["samples"])((streams[0], original[1].to(streams[1]).clone()))
                 audio_mask.zero_()

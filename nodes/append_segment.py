@@ -113,7 +113,7 @@ class MF_AppendSegment:
         if "output_length" in segment:
             valid = segment["output_length"]
             if not segment["is_last"] or not segment["overlap_in"] < valid <= segment["length"]:
-                raise ValueError(f"[{LABEL}] 尾段有效長度不合法。")
+                raise ValueError(f"[{LABEL}] 尾段有效長度不合法：只有最後一段可以帶有效長度，而且必須大於與前一段的重疊、不超過段長。請重新執行 Edit Timeline 產生 segment_plan。")
             images = images[:valid]
             segment = {**segment, "length": valid, "end": segment["start"] + valid}
         new_state = segment_spill.append_segment(

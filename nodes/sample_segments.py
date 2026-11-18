@@ -128,7 +128,7 @@ class MF_SampleSegments:
                ref_video_short_edge=0, video_taper_tokens=2, audio_taper_tokens=2, on_conflict="error"):
         from comfy_execution.graph_utils import GraphBuilder
         if isinstance(segment_plan, dict) and segment_plan.get("remake_tail_policy") == "pad_trim":
-            raise ValueError(f"[{LABEL}] Remake 尾段補幀只適用於 Sample Remake Segments，請關閉該設定。")
+            raise ValueError(f"[{LABEL}] Remake 尾段補幀只適用於 Sample Remake Segments：請到 Edit Timeline 的「解析度與放大」取消勾選「Remake 尾段補幀並裁回來源」，或改接 Sample Remake Segments。")
         if not isinstance(segment_plan, dict) or segment_plan.get("type") != "MF_SEGMENT_PLAN" or segment_plan.get("version") != 2:
             raise ValueError(f"[{LABEL}] segment_plan 必須來自（新版）Edit Timeline，請重新執行 Edit Timeline。")
         if (segment_plan["mode"] != "generate" or segment_plan["effective_grid"] != H3_GRID

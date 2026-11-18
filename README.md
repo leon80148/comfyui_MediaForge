@@ -10,7 +10,7 @@ FFmpeg-driven custom_nodes plugin: subtitle burn-in, looped video, audio probe, 
 
 ## Highlights
 
-- 🎞️ **30 nodes** across 6 categories — Subtitle / Video / Analysis / Audio (Phase 6 kickoff) / Compose (now with audio chain) / AI (+ Net / Image planned). Five more are registered but internal: Sample Segments builds them when it runs
+- 🎞️ **31 nodes** across 6 categories — Subtitle / Video / Analysis / Audio (Phase 6 kickoff) / Compose (now with audio chain) / AI (+ Net / Image planned). Six more are registered but internal: Sample Segments and Sample Remake Segments build them when they run
 - 🔗 **Dual-input bridge** — file-consumer nodes accept *either* a `video_path` string *or* an in-memory `IMAGE + AUDIO + tensor_fps` triplet, so MediaForge chains with VHS / AnimateDiff / any IMAGE-pipeline plugin without a SaveVideoFrames round-trip
 - 🚀 **Smart GPU codec default** — `h264_nvenc` is auto-selected when NVENC is available, libx264 fallback on CPU-only systems. No per-workflow switching needed
 - 📡 **API-ready output** — every file-producing node emits ComfyUI `ui.images` metadata so `/history/<prompt_id>` exposes the output filename; download via `/view?filename=X&subfolder=Y&type=output` (see [Using via API](#using-via-api))
@@ -249,6 +249,8 @@ Source video: preview of the selected source; codecs the browser can't play get 
 Open **Edit Timeline → 解析度與放大**. New nodes manage resolution here by default; existing workflows retain their saved choice of **時間軸管理解析度**. The persisted `render` settings override Sample Segments' legacy width/height and reference-video short edge, or Sample Remake Segments' `short_edge` canvas selection. Existing workflows without `render` keep their previous behavior. When Timeline owns the resolution, the samplers collapse the overridden width/height, reference-video cap or Remake short-edge widgets and show the effective target instead. Disabling the checkbox restores the saved fallback controls. Widget values, order, API inputs and links are preserved. Direct connections, reroutes and unambiguous subgraph boundaries are recognized; unknown or shared ambiguous sources keep the controls visible. Cut mode does not consume render settings.
 
 **Viggle Remake** supports direct, latent and two-stage modes with these same controls; SelfLift is rejected. Direct samples at the target dimensions; latent samples at the base size before lifting; two-stage splits the active schedule (official six steps and 1–5 high-resolution steps when no external sigmas are connected) and re-encodes the source/references at the high size. The source covers the selected canvas with center cropping, and its audio stays clean through both stages. A 928×1632 target with a 480×832 base finishes at 928×1632 even when the sampler's legacy `short_edge` remains 480. Remake does not consume the general reference-video short-edge cap: its source must match each stage's canvas. Custom canvases extend the official 480/736 short-edge presets and do not imply target-resolution quality or performance validation. See the [Remake workflow guide](example_workflows/timeline_viggle_remake.md#解析度與放大).
+
+**Remake tail padding**: tick `Remake 尾段補幀並裁回來源` (pad the tail, then trim back to the source) in 解析度與放大. The source has to be one video that follows the timeline continuously from its start. The last window repeats the final frame and pads the audio with silence up to a legal length; after generation the result is trimmed back to the source's last valid frame, so the whole ending is kept. The Remake examples have it on; older workflows need the box ticked. Over the API set `timeline_data.remake_tail_policy: "pad_trim"`; leaving it out, or `"strict"`, keeps the strict check. 🎛️ Sample Segments does not run tail padding: untick the box when the plan goes to it, otherwise the status line warns in orange and the error raised at run time says where the box is.
 
 **The editor beside Remake**: when `segment_plan` reaches a 🎭 Sample Remake Segments node that will run, the editor follows Remake's rules. The empty preview no longer says that text alone is enough, and the empty library asks for the 1–4 picture references each segment needs. In 來源影片用途 (source use), 固定 Guide and 保留原音 are switched off and marked `Remake 不支援` (not supported), and 音訊參考 is marked `Remake 不使用` (not used): Remake takes its sound from the sampler's `keep_source_audio`. A saved value is never rewritten; it stays selected and marked until you change it. A muted or bypassed sampler does not count as connected: with one timeline feeding two samplers and one of them switched off, the generation-mode list, tail padding, source use and the status line all follow the sampler that will run, and update as soon as you switch.
 
@@ -885,7 +887,7 @@ Plans a long video as segments on one timeline, or marks the ranges to cut out o
 
 | Output | Type | Notes |
 |---|---|---|
-| `segment_plan` | MF_SEGMENT_PLAN | `generate`: wire to Sample Segments |
+| `segment_plan` | MF_SEGMENT_PLAN | `generate`: wire to Sample Segments, or to Sample Remake Segments for Viggle Remake |
 | `ranges` | SILENCE_RANGES | `cut`: the selected source ranges in seconds (same convention as `MF_DetectScenes`) — wire to `MF_TrimByRanges`; `generate`: empty list |
 | `plan_json` | STRING | The validated plan as JSON, for inspection — never an input |
 | `segment_count` | INT | Number of segments |
@@ -1470,15 +1472,58 @@ Generates a MiniMax H3 timeline one segment at a time, in one node. When it runs
 
 ---
 
+#### 🎭 Sample Remake Segments (`MF_SampleRemakeSegments`)
+
+Runs a Viggle Remake timeline one segment at a time, in one node: a source video is redrawn after 1–4 edited pictures. When it runs it expands into one group per segment — `🎞️ Encode Remake Segment` (which calls the installed official `RemakeConditioning`) → `🧬 Extend Latent` → the official `RemakeNoise` + core `BasicGuider` + `SamplerCustomAdvanced` → `➕ Append Segment` — with the model wrapped by the official `RemakeKeyframeUntil` first. It needs the official ComfyUI-Viggle-Remake nodes installed (a missing or incompatible version raises before anything is encoded); the model and LoRA come from your own loader nodes. Wiring and settings advice: the [Remake workflow guide](example_workflows/timeline_viggle_remake.md).
+
+**When to use**: between ⏱️ Edit Timeline (`generate`, 24 fps) and 🧵 Assemble Segments. For plain MiniMax H3 generation use 🎛️ Sample Segments.
+
+| Widget | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | dropdown | `swap` | `swap` / `edit`. Picks the official six-step schedule of that mode when `sigmas` is not wired; it does not change your model or LoRA and has to match the loaded model |
+| `noise_seed` | INT | `0` (+ `control_after_generate`) | Used by every segment that has no seed of its own on the timeline |
+| `short_edge` | dropdown | `480` | `480` / `736`: 16:9 gives 832×480 / 1280×736, portrait swaps them. Hidden while the timeline manages resolution, which uses the timeline's target / base size instead (the value is kept) |
+| `keep_source_audio` | BOOLEAN | `True` | Encodes the source video's soundtrack into a clean audio latent that is not denoised, and rebuilds it through the audio VAE. Off: silence |
+| `keyframe_until` | FLOAT | `0.9` (0–1, step 0.01) | Passed to the official `RemakeKeyframeUntil` |
+
+**Sockets**:
+
+| Input | Type | Notes |
+|---|---|---|
+| `model` | MODEL | fl2va + Viggle LoRA (Bypass Loader), or a merged Remake int8 / GGUF; has to match `mode` |
+| `clip` | CLIP | Text encoder |
+| `vae` | VAE | Video VAE |
+| `audio_vae` | VAE | Audio VAE (required) |
+| `segment_plan` | MF_SEGMENT_PLAN | From Edit Timeline |
+| `sampler` *(optional)* | SAMPLER | For example core `KSamplerSelect`; Euler when not wired |
+| `sigmas` *(optional)* | SIGMAS | For example core `ManualSigmas`; the official six steps when not wired. The schedule sets the total step count; two-stage generation shares it and adds no steps |
+
+**Outputs**: `state` (MF_SEGMENT_STATE) → Assemble Segments; `report` STRING (JSON: mode, the sigmas and sampler actually used and where they came from, total steps and the base / high-resolution split, canvas size, `keyframe_until`, the audio source, the tail policy, and per segment its frames, pins, output frames, padded frames and effective seed).
+
+**What each segment needs.** Checked for every segment before expanding; the first one that fails stops the run with a message naming the segment:
+
+- 90–345 frames long, on 17n+5 (start with 107 or 124).
+- Exactly one reference video that covers the whole segment: set the source video as a reference that follows the timeline.
+- 1–4 picture references, and no file added twice.
+- No audio reference, fixed guide or audio lock: the sound is handled by `keep_source_audio`.
+- A prompt without `<Audio N>` that contains the six official section names: `subject_definitions`, `summary`, `retention_analysis`, `detailed_description`, `overall_soundscape`, `non_diegetic_music`.
+- A keyframe's picture (a pin, in the official nodes' terms) also has to be one of the segment's picture references; either every picture reference has one keyframe, or none has.
+- The sources of all segments have to give the same canvas size (same orientation and aspect).
+
+**Notes**: direct, latent-upscale and two-stage generation are supported, SelfLift is not; tail padding is described in the same section, see [Resolution, latent upscale and SelfLift](#resolution-latent-upscale-and-selflift-014). An error inside the group shows on this node.
+
+---
+
 #### Internal nodes
 
-Five nodes exist only because Sample Segments builds them. They are registered (graph expansion needs that), flagged deprecated so that the node search and the node library skip them, and taken out of the right-click Add Node menu. "Deprecated" is just the flag ComfyUI offers for this; they are not going away. You meet their names in two places: as the label of an error raised inside Sample Segments, and in the API's `/object_info`.
+Six nodes exist only because Sample Segments and Sample Remake Segments build them. They are registered (graph expansion needs that), flagged deprecated so that the node search and the node library skip them, and taken out of the right-click Add Node menu. "Deprecated" is just the flag ComfyUI offers for this; they are not going away. You meet their names in two places: as the label of an error raised inside Sample Segments, and in the API's `/object_info`.
 
 | Node | What it does for one segment | Messages it can raise |
 |---|---|---|
 | `🧩 Encode H3 Segment` (`MF_EncodeH3Segment`) | Builds the MiniMax H3 conditioning and the empty AV latent from the segment's prompt and materials: references through core `MiniMaxH3ReferenceToVideo`, keyframes and guides through core `MiniMaxH3AddGuide` in frame order, then the [audio locks](#lock-audio) written into the latent (`noise_mask` and the `mf_lock` metadata). Materials are decoded here only for that call | `E_H3_NODES`, `E_SOURCE_CHANGED`, `E_SOURCE_SHORTFALL`, `W_AUDIO_PAD` |
 | `🧬 Extend Latent` (`MF_ExtendLatent`) | Copies the previous segment's sampled latent tail into the start of this segment's latent and sets `noise_mask` so the sampler keeps (or partly re-generates) that region. Tensor work only: no model is loaded and nothing is sampled. Adds the `mf_carry` marker Append checks | `E_TOKENS`, `E_AUDIO_CARRY`, `E_CARRY_SOURCE`, `E_MASK_CONFLICT`, `E_PROVENANCE`, `W_PROVENANCE`, `W_LOCK_CARRY` |
 | `➕ Append Segment` (`MF_AppendSegment`) | Decodes the sampled latent with your VAE (and audio VAE), removes the overlap with the previous segment, applies the incoming crossfade and spills lossless parts to disk. Returns a new state; the input state is not modified | `E_SEQUENCE`, `E_PLAN`, `E_PROVENANCE`, `W_PROVENANCE`, `E_CARRY_DRIFT`, `E_LOCK_DRIFT`, `E_RAM`, `E_DISK`, `E_AUDIO_LAYOUT`, `W_AUDIO_PAD` |
+| `🎞️ Encode Remake Segment` (`MF_EncodeRemakeSegment`) | Decodes the segment's source video and reference pictures and hands them to the installed official `RemakeConditioning` for the conditioning and latent. With tail padding it repeats the last frame and pads the audio with silence | The per-segment needs listed under [🎭 Sample Remake Segments](#-sample-remake-segments-mf_sampleremakesegments); the messages start with `[Sample Remake Segments]` |
 | `MF_PrepareH3Upscale` | Rebuilds resolution-transition masks and original-audio locks; forwards native SelfLift low context | — |
 | `MF_CopyH3Provenance` | Keeps the segment marker on the clean low-grid continuation | — |
 
