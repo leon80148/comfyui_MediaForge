@@ -149,11 +149,16 @@ export function syncTimelineControls(graph) {
         if (!watchedGraphs.has(g)) {
             watchedGraphs.add(g);
             chain(g, "onConnectionChange", () => scheduleTimelineControls(g));
+            // A muted or bypassed sampler no longer decides what the editor offers. The frontend reports the change
+            // as a graph event; one that never sends it leaves the editor to catch up on its next rebuild.
+            chain(g, "onTrigger", (e) => {
+                if (e?.type === "node:property:changed" && e.property === "mode") scheduleTimelineControls(g);
+            });
         }
         for (const node of nodesOf(g)) applyResolution(node);
     }
     for (const node of graphsOf(graph).flatMap(nodesOf).filter((n) => n.type === "MF_EditTimeline")) {
-        const signature = timelineConsumers(node).map((n) => n.type).sort().join(",");
+        const signature = timelineConsumers(node).map((n) => `${n.type}${n.mode === 2 || n.mode === 4 ? " off" : ""}`).sort().join(",");
         if (profiles.get(node) !== signature) {
             profiles.set(node, signature);
             node.mfTimeline?.render();

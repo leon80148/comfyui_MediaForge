@@ -376,6 +376,7 @@ class TimelineEditor {
         this.fixKey = "";
         this.gutterKey = "";
         this.tail = null;                // what Remake tail padding leaves out (timeline_edit.tailPlan), set by render()
+        this.running = [];               // the samplers this plan reaches that will run (samplers()), set by render()
         this.destroyed = false;
         this.boxHandles = [];            // the current form's prompt boxes: their @ lists and size observers
         this.lastPick = null;            // the prompt box whose last change was an @ pick (Ctrl+Z undoes the pick)
@@ -873,6 +874,7 @@ class TimelineEditor {
         this.result = validate(this.data, st.mode, st.fpsKey, st.grid, st.sourceFrames, st.hasSource);
         this.check = timelineProblems(this.data, this.ctx);
         this.tail = tailPlan(this.data, this.ctx);
+        this.running = this.samplers();
         this.addButton.disabled = this.fillButton.disabled = this.importButton.disabled = this.materialButton.disabled = false;
         this.addButton.textContent = generate ? S.add : S.addCut;
         this.deleteButton.disabled = this.data.segments.length <= 1;
@@ -1034,7 +1036,7 @@ class TimelineEditor {
             ]);
         });
         const empty = generate && !cards.length && !pending.length
-            ? [el("span", { class: "mf-tl-label", text: S.emptyLibrary })] : [];
+            ? [el("span", { class: "mf-tl-label", text: this.remake() ? S.emptyLibraryRemake : S.emptyLibrary })] : [];
         this.rebuild(this.lib, [...cards, ...pending, ...empty]);
         // With no source to preview and no card to hold, the row keeps its titles, buttons and one line of hint and
         // leaves the rest of its height to the form. It changes here, together with the cards, so a rebuild that is
@@ -1277,16 +1279,25 @@ class TimelineEditor {
         return input;
     }
 
+    // The samplers this plan reaches that will run. A muted or bypassed one takes no part in the queue, so it does not
+    // decide what the editor offers or warns about either: one timeline feeding two samplers with one switched off
+    // is how the two get compared.
+    samplers() {
+        return timelineConsumers(this.node).filter((n) => n.mode !== 2 && n.mode !== 4);
+    }
+
+    remake() {
+        return this.running.some((n) => n.type === "MF_SampleRemakeSegments");
+    }
+
     // What in 解析度與放大 is known to stop the run, in the order the section shows it. The section's red lines, its
     // header while closed and the status line all read this one list, so none of them can say less than another.
-    // Only what is certain counts: a model list that could not be read proves nothing, and a muted or bypassed
-    // sampler will not run.
-    renderIssues(consumers = timelineConsumers(this.node)) {
+    // Only what is certain counts: a model list that could not be read proves nothing.
+    renderIssues() {
         const r = this.data.render;
-        const running = consumers.filter((n) => n.mode !== 2 && n.mode !== 4);
-        const remakes = running.filter((n) => n.type === "MF_SampleRemakeSegments");
+        const remakes = this.running.filter((n) => n.type === "MF_SampleRemakeSegments");
         const out = {};
-        if (this.data.remake_tail_policy === "pad_trim" && running.some((n) => n.type === "MF_SampleSegments")) {
+        if (this.data.remake_tail_policy === "pad_trim" && this.running.some((n) => n.type === "MF_SampleSegments")) {
             out.tail = "目前連接的 Sample Segments 無法執行尾段補幀（只適用於 Sample Remake Segments）：請取消勾選，或改接 Sample Remake Segments。";
         }
         if (!r) return out;
@@ -1302,10 +1313,10 @@ class TimelineEditor {
 
     renderSettings() {
         const r = this.data.render;
-        const consumers = timelineConsumers(this.node);
-        const issues = this.renderIssues(consumers);
+        const consumers = this.running;
+        const issues = this.renderIssues();
         const issue = (key) => (issues[key] ? [el("div", { class: "full bad", text: issues[key] })] : []);
-        const remake = consumers.some((n) => n.type === "MF_SampleRemakeSegments");
+        const remake = this.remake();
         const remakeOnly = remake && consumers.every((n) => n.type === "MF_SampleRemakeSegments");
         // Keep six-step guidance only when a Remake consumer still uses its built-in schedule.
         const officialRemake = consumers.some((n) => n.type === "MF_SampleRemakeSegments"
@@ -1461,10 +1472,23 @@ class TimelineEditor {
                 this.propose(next, "已更新來源用途；套用範圍已依來源長度與目前時間軸裁切。Guide 各段向下對齊合法幀數。");
             } catch (e) { this.notice = e.message; this.render(); }
         };
+        // Remake takes the source as its reference and the sound from the sampler's own switch. What it refuses (a guide,
+        // a lock) or ignores (an audio reference) is switched off here rather than left to fail in the queue; a saved
+        // value stays selected and marked until the user changes it, as SelfLift does in the section above.
+        const remake = this.remake();
+        const roleSelect = this.selectSetting({ reference: "參考影片", guide: remake ? "固定 Guide（Remake 不支援）" : "固定 Guide", preview: "僅預覽" },
+            role, (v) => apply(v, audio), "source-role");
+        const audioSelect = this.selectSetting({ none: "不用", reference: remake ? "音訊參考（Remake 不使用）" : "音訊參考（同時加入影片參考）",
+            original: remake ? "保留原音（Remake 不支援）" : "保留原音" }, audio, (v) => apply(role, v), "source-audio");
+        if (remake) {
+            for (const o of roleSelect.children) o.disabled = o.value === "guide";
+            for (const o of audioSelect.children) o.disabled = o.value !== "none";
+        }
         return [this.details("source-use", "來源影片用途", [
             el("div", { class: "full hint", text: m ? `素材 ${m.name} · <@${m.name}>${role === "guide" ? "；Guide 本身沒有 Video 標籤" : ""}` : "此舊流程的來源尚未加入素材；選擇用途即可共用同一個檔案。" }),
-            el("span", { text: "畫面用途（重設此素材的編排）" }), this.selectSetting({ reference: "參考影片", guide: "固定 Guide", preview: "僅預覽" }, role, (v) => apply(v, audio), "source-role"),
-            el("span", { text: "來源聲音" }), this.selectSetting({ none: "不用", reference: "音訊參考（同時加入影片參考）", original: "保留原音" }, audio, (v) => apply(role, v), "source-audio"),
+            ...(remake ? [el("div", { class: "full hint", text: "Remake 把來源影片當參考影片；聲音由 🎭 Sample Remake Segments 的 keep_source_audio 決定（預設保留來源音軌），這裡維持「不用」。" })] : []),
+            el("span", { text: "畫面用途（重設此素材的編排）" }), roleSelect,
+            el("span", { text: "來源聲音" }), audioSelect,
             ...(!m ? [button("將來源加入參考素材", () => apply("reference", "none"), { class: "full" })] : []),
         ])];
     }
@@ -2865,7 +2889,9 @@ class TimelineEditor {
         const show = (e, on) => {
             e.style.display = on ? "" : "none";
         };
-        this.previewEmpty.textContent = st.mode === "cut" ? S.noSourceCut : S.noSource;
+        // "text only is fine" is not true beside Remake, which needs a video reference in every segment
+        this.previewEmpty.textContent = st.mode === "cut" ? S.noSourceCut : !this.remake() ? S.noSource
+            : this.data.refs.some((r) => this.data.materials.find((x) => x.id === r.material)?.kind === "video") ? S.noSourceLibrary : S.noSourceRemake;
         show(this.previewEmpty, !m && !hasSource);
         show(this.video, !m && hasSource);
         show(this.previewLabel, !m);
