@@ -83,6 +83,7 @@ const AUDIO_EXT = /\.(wav|mp3|flac|ogg|aac|m4a|opus)$/i;
 const VIDEO_EXT = /\.(mp4|mov|mkv|webm|avi|m4v|ts|mpg|mpeg)$/i;
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i;
 const FOCUSABLE = "button, input, select, textarea, summary, .mf-tl-card";
+const RENDER_SECTION = "解析度與放大";   // the section's name, as its header and the status line say it
 
 function chainCallback(object, property, callback) {
     if (object == undefined) return;
@@ -812,6 +813,7 @@ class TimelineEditor {
         this.statusText.addEventListener("click", () => {
             const target = this.statusTarget;
             if (!target || this.gesture) return;
+            if (target.type === "section") return this.openSection(target.key);
             if (target.type === "segment") this.selectSegment(target.index);
             else this.select(target);
             this.render();
@@ -1270,9 +1272,34 @@ class TimelineEditor {
         return input;
     }
 
+    // What in 解析度與放大 is known to stop the run, in the order the section shows it. The section's red lines, its
+    // header while closed and the status line all read this one list, so none of them can say less than another.
+    // Only what is certain counts: a model list that could not be read proves nothing, and a muted or bypassed
+    // sampler will not run.
+    renderIssues(consumers = timelineConsumers(this.node)) {
+        const r = this.data.render;
+        const running = consumers.filter((n) => n.mode !== 2 && n.mode !== 4);
+        const remakes = running.filter((n) => n.type === "MF_SampleRemakeSegments");
+        const out = {};
+        if (this.data.remake_tail_policy === "pad_trim" && running.some((n) => n.type === "MF_SampleSegments")) {
+            out.tail = "目前連接的 Sample Segments 無法執行尾段補幀（只適用於 Sample Remake Segments）：請取消勾選，或改接 Sample Remake Segments。";
+        }
+        if (!r) return out;
+        if (remakes.length && r.mode === "selflift") out.selflift = "目前連接 Remake，無法執行 SelfLift；原設定保留，請改選生成方式。";
+        const sixSteps = remakes.some((n) => !n.inputs?.some((input) => input.name === "sigmas" && input.link != null));
+        if (sixSteps && r.mode === "two_stage" && (r.high_steps < 1 || r.high_steps > 5)) {
+            out.steps = "儲存的高清步數超過官方六步排程範圍，請到進階設定調整為 1–5，或外接較長排程。";
+        }
+        const listed = this.renderModels && !this.renderModelsError ? this.renderModels.includes(r.model) : null;
+        if (r.mode !== "direct" && (!r.model || listed === false)) out.model = "請選擇存在且相容的 H3 放大模型後再執行。";
+        return out;
+    }
+
     renderSettings() {
         const r = this.data.render;
         const consumers = timelineConsumers(this.node);
+        const issues = this.renderIssues(consumers);
+        const issue = (key) => (issues[key] ? [el("div", { class: "full bad", text: issues[key] })] : []);
         const remake = consumers.some((n) => n.type === "MF_SampleRemakeSegments");
         const remakeOnly = remake && consumers.every((n) => n.type === "MF_SampleRemakeSegments");
         // Keep six-step guidance only when a Remake consumer still uses its built-in schedule.
@@ -1307,8 +1334,7 @@ class TimelineEditor {
             rows.push(el("span", { text: "Remake 尾段補幀並裁回來源" }), tail,
                 el("div", { class: "full hint", text: "不足一段時重複最後一幀，生成後裁回來源結尾，保留全部有效片尾。舊工作流需勾選啟用。" }));
             // a traced plain sampler refuses a plan that carries tail padding, also when a Remake sampler shares the plan
-            if (tailOn && consumers.some((n) => n.type === "MF_SampleSegments")) rows.push(el("div", { class: "full bad",
-                text: "目前連接的 Sample Segments 無法執行尾段補幀（只適用於 Sample Remake Segments）：請取消勾選，或改接 Sample Remake Segments。" }));
+            rows.push(...issue("tail"));
         }
         if (r) {
             // The form may be held while a field commits. Read the current data on each action.
@@ -1354,17 +1380,15 @@ class TimelineEditor {
             if (remake) delete modes.selflift;
             if (remake && r.mode === "selflift") modes.selflift = "SelfLift（Remake 不支援，請改選）";
             const modeSelect = this.selectSetting(modes, r.mode, (mode) => update((current) => renderModePatch(current, mode)), "render-mode", "生成方式");
-            if (remake && r.mode === "selflift") {
-                [...modeSelect.children].find((o) => o.value === "selflift").disabled = true;
-                rows.push(el("div", { class: "full bad", text: "目前連接 Remake，無法執行 SelfLift；原設定保留，請改選生成方式。" }));
-            }
+            if (remake && r.mode === "selflift") [...modeSelect.children].find((o) => o.value === "selflift").disabled = true;
+            rows.push(...issue("selflift"));
             rows.push(el("span", { text: "生成方式" }), modeSelect);
             if (remake) rows.push(el("div", { class: "full hint", text: officialRemake
                 ? "未外接 sigmas：使用官方六步排程。進階使用可在 Sample Remake Segments 接 sampler／sigmas。"
                 : "已外接 sigmas：總步數依外接排程；實際步數與高清分配會寫入取樣報告。" }));
             if (r.mode === "two_stage") rows.push(el("div", { class: "full hint", text: "先低清取樣，放大後用剩餘步數完成高清，不額外增加總步數。可先試 1.5× 放大、高清 2 步，再比較畫質。" }));
             if (r.mode === "latent") rows.push(el("div", { class: "full hint", text: "低清完成全部取樣後直接放大，不再高清取樣。需要更多高清細節時，改選二階段生成。" }));
-            if (badRemakeSteps) rows.push(el("div", { class: "full bad", text: "儲存的高清步數超過官方六步排程範圍，請到進階設定調整為 1–5，或外接較長排程。" }));
+            rows.push(...issue("steps"));
             const staged = ["latent", "two_stage"].includes(r.mode);
             if (staged) rows.push(el("span", { text: "放大倍率" }), this.selectSetting({ ...UPSCALE_FACTORS, custom: "自訂基礎尺寸…" }, currentFactor(r), (v) => {
                 if (v === "custom") { openAdvanced(); return; }
@@ -1382,12 +1406,13 @@ class TimelineEditor {
             if (r.mode !== "direct") {
                 if (this.renderModels === null && !this.renderModelsLoading) this.loadRenderModels();
                 const choices = { "": "請選擇 H3 latent 放大模型", ...Object.fromEntries((this.renderModels ?? []).map((m) => [m, m])) };
-                if (r.model && !choices[r.model]) choices[r.model] = `${r.model}（未找到或不相容）`;
+                // a list that could not be read cannot say the saved model is missing
+                if (r.model && !choices[r.model]) choices[r.model] = this.renderModelsError ? `${r.model}（清單讀取失敗，無法確認）` : `${r.model}（未找到或不相容）`;
                 rows.push(el("span", { text: "H3 放大模型" }), el("div", { class: "mf-tl-resolution-controls" }, [
                     this.selectSetting(choices, r.model, (model) => update({ model }), "render-model", "H3 放大模型"),
                     button("重新讀取", () => this.loadRenderModels(), { title: "重新讀取 H3 放大模型清單" }),
                 ]));
-                if (!r.model || this.renderModels && !this.renderModels.includes(r.model)) rows.push(el("div", { class: "full bad", text: "請選擇存在且相容的 H3 放大模型後再執行。" }));
+                rows.push(...issue("model"));
             }
             if (r.mode === "selflift") rows.push(el("div", { class: "full hint", text: `${this.hasSelfLift ? "已偵測到" : "尚未偵測到"} TimelineDirector SelfLift；只支援標準 Euler，低解析度固定為 50%。目標尺寸需為 64 的倍數。` }));
             if (this.renderModelsError) rows.push(el("div", { class: "full bad", text: this.renderModelsError }));
@@ -1412,7 +1437,9 @@ class TimelineEditor {
             if (remake) advanced.push(el("div", { class: "full hint", text: "Remake 來源會填滿畫布並置中裁切；不使用參考影片短邊上限。" }));
             rows.push(this.details("render-advanced", "進階：精確尺寸與取樣", advanced));
         }
-        return this.details("render", r ? `解析度與放大 · ${r.width} × ${r.height}` : "解析度與放大 · 使用取樣器設定", rows);
+        // a closed section must not hide what will stop the run: the header carries the first of them
+        const [first] = Object.values(issues);
+        return this.details("render", `${RENDER_SECTION} · ${r ? `${r.width} × ${r.height}` : "使用取樣器設定"}${first ? ` · ⚠ ${first}` : ""}`, rows);
     }
 
     sourceSettings(st) {
@@ -1450,6 +1477,17 @@ class TimelineEditor {
 
     number(value, onchange, attrs = {}) {
         return el("input", { type: "number", step: "1", value: String(value), onchange: (e) => onchange(Number(e.target.value)), ...attrs });
+    }
+
+    // Opens a section as a click on its header would and brings it to the top of the inspector. The scroll is the
+    // form's own: scrollIntoView() would also move the canvas containers above it.
+    openSection(key) {
+        const box = [...this.form.querySelectorAll("details")].find((d) => d.mfKey === key);
+        if (!box) return;
+        box.open = true;
+        this.view.open[key] = true;
+        const top = box.offsetTop - this.form.offsetTop;
+        if (Number.isFinite(top)) this.form.scrollTop = top;
     }
 
     // A collapsible section. Its state lives in the view, so rebuilding the form never closes what the user opened;
@@ -2083,9 +2121,16 @@ class TimelineEditor {
         } else if (source) {
             className = this.sourceError ? "bad" : "warn";
             text = `${source} · ${summary()}`;
+        } else if (!this.check.verified) {
+            className = "warn";
+            text = `${S.unverified} · ${summary()}`;
         } else {
-            className = this.check.verified ? "good" : "warn";
-            text = `${this.check.verified ? S.valid : S.unverified} · ${summary()}`;
+            // The timeline itself passed. Green still waits for the settings the editor knows will stop the run:
+            // a check mark followed by a certain failure reassures about the wrong thing.
+            const [issue] = st.mode === "generate" ? Object.values(this.renderIssues()) : [];
+            className = issue ? "warn" : "good";
+            text = issue ? `⚠ ${RENDER_SECTION}：${issue}` : `${S.valid} · ${summary()}`;
+            if (issue) this.statusTarget = { type: "section", key: "render" };
         }
         if (className === "bad" && !text.startsWith("⚠")) text = `⚠ ${text}`;
         if (this.sourceError && source && !text.includes(source)) text += ` · ${source}`;
